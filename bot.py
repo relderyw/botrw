@@ -28,7 +28,7 @@ RECENT_MATCHES_URL = "https://app3.caveiratips.com.br/app3/api/matches/recent/"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
-AUTH_HEADER = "Bearer aeb42dcc7f15a3b06d478ef0d4465ed8a4e21c6d52b526285222a49d628ead94"
+AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
 
 MANAUS_TZ = timezone(timedelta(hours=-4))
 
