@@ -623,7 +623,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
     # =========================================================================
     # ESTRATÉGIAS FT (00:00:30 - 00:04:25) -> 30s a 265s
     # =========================================================================
-    if 30 <= time_seconds <= 265:
+    if 90 <= time_seconds <= 265:
         
         # +1.5 GOLS FT
         if (home_goals == 0 and away_goals == 0 and
