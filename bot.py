@@ -419,9 +419,9 @@ def check_strategies_8mins(event, home_stats, away_stats):
             strategies.append("⚽ BTTS HT")
 
     # =========================================================================
-    # ESTRATÉGIAS FT (00:01:00 - 00:05:00) -> 60s a 300s
+    # ESTRATÉGIAS FT (00:03:00 - 00:06:00) -> 180s a 360s
     # =========================================================================
-    if 60 <= time_seconds <= 300:
+    if 180 <= time_seconds <= 360:
         
         # +1.5 GOLS FT
         if (home_goals == 0 and away_goals == 0 and
@@ -444,6 +444,8 @@ def check_strategies_8mins(event, home_stats, away_stats):
                 avg_btts >= 80):
                 strategies.append("⚽ +3.5 GOLS FT")
                 
+    if 90 <= time_seconds <= 360:
+
         # ESTRATÉGIAS DE JOGADOR (PLAYER 1 = HOME)
         # +1.5 Gols Player 1
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
@@ -485,6 +487,7 @@ def check_strategies_8mins(event, home_stats, away_stats):
                 away_stats['ft_scored_25_pct'] >= 90 and
                 away_stats['ft_scored_35_pct'] >= 80):
                 strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
+        
     
     return strategies
 
@@ -552,9 +555,9 @@ def check_strategies_12mins(event, home_stats, away_stats):
             strategies.append("⚽ BTTS HT")
 
     # =========================================================================
-    # ESTRATÉGIAS FT (00:01:30 - 00:08:30) -> 90s a 510s
+    # ESTRATÉGIAS FT (00:04:30 - 00:08:30) -> 260s a 510s
     # =========================================================================
-    if 90 <= time_seconds <= 510:
+    if 260 <= time_seconds <= 510:
         
         # +1.5 GOLS FT
         if (home_goals == 0 and away_goals == 0 and
@@ -577,6 +580,7 @@ def check_strategies_12mins(event, home_stats, away_stats):
                 avg_btts >= 80):
                 strategies.append("⚽ +3.5 GOLS FT")
                 
+    if 90 <= time_seconds <= 510:
         # ESTRATÉGIAS DE JOGADOR (PLAYER 1 = HOME)
         # +1.5 Gols Player 1
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
@@ -618,6 +622,7 @@ def check_strategies_12mins(event, home_stats, away_stats):
                 away_stats['ft_scored_25_pct'] >= 90 and
                 away_stats['ft_scored_35_pct'] >= 80):
                 strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
+        
     
     return strategies
 
@@ -685,9 +690,9 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
             strategies.append("⚽ BTTS HT")
 
     # =========================================================================
-    # ESTRATÉGIAS FT (00:00:30 - 00:04:25) -> 30s a 265s
+    # ESTRATÉGIAS FT (00:02:30 - 00:04:25) -> 150s a 265s
     # =========================================================================
-    if 90 <= time_seconds <= 265:
+    if 150 <= time_seconds <= 265:
         
         # +1.5 GOLS FT
         if (home_goals == 0 and away_goals == 0 and
@@ -710,6 +715,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
                 avg_btts >= 80):
                 strategies.append("⚽ +3.5 GOLS FT")
                 
+    if 30 <= time_seconds <= 265:
         # ESTRATÉGIAS DE JOGADOR (PLAYER 1 = HOME)
         # +1.5 Gols Player 1
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
