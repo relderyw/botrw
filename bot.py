@@ -24,7 +24,7 @@ CHAT_ID = "-1001981134607"
 
 # APIs
 LIVE_API_URL = "https://app3.caveiratips.com.br/api/live-events/"
-RECENT_MATCHES_URL = "https://app3.caveiratips.com.br/app3/api/matches/recent/"
+RECENT_MATCHES_URL = "https://api.caveiratips.com/api/v1/historico/partidas"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
@@ -71,18 +71,48 @@ def fetch_live_matches():
     return []
 
 def fetch_recent_matches(page=1, page_size=100):
-    """Busca partidas recentes finalizadas"""
+    """Busca partidas recentes finalizadas - Nova API"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            params = {'page': page, 'page_size': page_size}
+            # Nova API usa 'limit' em vez de 'page_size'
+            params = {'page': page, 'limit': page_size}
+            # Manter auth se necessário, mas o exemplo parecia não usar.
+            # Vou manter por precaução, ou usar vazio se falhar.
+            # O user não especificou auth, mas é CaveiraTips, pode precisar.
+            # Vou testar COM auth primeiro (padrão conservador).
             headers = {'Authorization': AUTH_HEADER}
+            
             response = requests.get(RECENT_MATCHES_URL, headers=headers, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
-            matches = data.get('results', [])
-            print(f"[INFO] {len(matches)} partidas recentes carregadas")
-            return matches
+            
+            # Normalizar dados (chaves diferentes na nova API)
+            raw_matches = data.get('partidas', [])
+            normalized_matches = []
+            
+            for match in raw_matches:
+                normalized_matches.append({
+                    'id': match.get('id'),
+                    'league_name': match.get('league_name'),
+                    'home_player': match.get('home_player'),
+                    'away_player': match.get('away_player'),
+                    'home_team': match.get('home_team'),
+                    'away_team': match.get('away_team'),
+                    'data_realizacao': match.get('data_realizacao'),
+                    
+                    # Normalização de placares (HT e FT)
+                    # Nova API: halftime_score_home / score_home
+                    # Velha API/Bot espera: home_score_ht / home_score_ft
+                    'home_score_ht': match.get('halftime_score_home'),
+                    'away_score_ht': match.get('halftime_score_away'),
+                    'home_score_ft': match.get('score_home'),
+                    'away_score_ft': match.get('score_away')
+                })
+            
+            print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas")
+            return normalized_matches
+            
         except requests.exceptions.Timeout:
             print(f"[WARN] Timeout ao buscar partidas recentes (tentativa {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
@@ -94,7 +124,7 @@ def fetch_recent_matches(page=1, page_size=100):
     return []
 
 def fetch_player_individual_stats(player_name, use_cache=True):
-    """Busca estatísticas individuais de um jogador (últimos jogos)"""
+    """Busca estatísticas individuais de um jogador (últimos jogos) - Nova API"""
     
     # Verificar cache
     if use_cache and player_name in player_stats_cache:
@@ -106,20 +136,54 @@ def fetch_player_individual_stats(player_name, use_cache=True):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            params = {'player1': player_name, 'interval': '9999'}
-            headers = {'Authorization': AUTH_HEADER}
-            response = requests.get(PLAYER_STATS_URL, headers=headers, params=params, timeout=15)
+            # Nova URL e parâmetros
+            url = "https://rwtips-r943.onrender.com/api/v1/historico/partidas-assincrono"
+            params = {'jogador': player_name, 'limit': 20, 'page': 1}
+                        
+            response = requests.get(url, params=params, timeout=15)
             response.raise_for_status()
-            data = response.json()
+            data_raw = response.json()
+            
+            # Normalizar dados para o formato antigo esperado pelo bot
+            # Formato antigo parecia ser: {'matches': [...], 'total_count': ...}
+            # Novo formato: {'partidas': [...], 'paginacao': {'total_partidas': ...}}
+            
+            normalized_matches = []
+            for match in data_raw.get('partidas', []):
+                # Normalizar chaves para compatibilidade com analyze_last_5_games
+                normalized_match = {
+                    'id': match.get('id'),
+                    'league_name': match.get('league_name'),
+                    'home_player': match.get('home_player'),
+                    'away_player': match.get('away_player'),
+                    'home_team': match.get('home_team'),
+                    'away_team': match.get('away_team'),
+                    'data_realizacao': match.get('data_realizacao'),
+                    
+                    # Mapeamento de Placar HT
+                    'home_score_ht': match.get('halftime_score_home'),
+                    'away_score_ht': match.get('halftime_score_away'),
+                    
+                    # Mapeamento de Placar FT
+                    'home_score_ft': match.get('score_home'),
+                    'away_score_ft': match.get('score_away')
+                }
+                normalized_matches.append(normalized_match)
+                
+            final_data = {
+                'matches': normalized_matches,
+                'total_count': data_raw.get('paginacao', {}).get('total_partidas', 0)
+            }
             
             # Salvar no cache
             player_stats_cache[player_name] = {
-                'stats': data,
+                'stats': final_data,
                 'timestamp': time.time()
             }
             
-            print(f"[INFO] Stats de {player_name} carregadas ({data.get('total_count', 0)} jogos)")
-            return data
+            print(f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
+            return final_data
+            
         except requests.exceptions.Timeout:
             print(f"[WARN] Timeout ao buscar stats de {player_name} (tentativa {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
@@ -708,6 +772,26 @@ def check_strategies_dominant_player(event, home_stats, away_stats):
 def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     """Formata mensagem da dica"""
     league = event.get('leagueName', 'Desconhecida')
+    
+    # Mapeamento de nomes de ligas
+    league_mapping = {
+        'Esoccer GT Leagues – 12 mins play': 'GT LEAGUE 12 MIN',
+        'Esoccer GT Leagues - 12 mins play': 'GT LEAGUE 12 MIN',
+        'Esoccer Battle Volta - 6 mins play': 'VOLTA 6 MIN',
+        'Esoccer H2H GG League - 8 mins play': 'H2H 8 MIN',
+        'Esoccer Battle - 8 mins play': 'BATTLE 8 MIN'
+    }
+    
+    # Tenta mapear, se não encontrar usa o nome original
+    # Usar startswith para pegar variações ou apenas get direto?
+    # O user passou strings exatas, mas vamos garantir
+    
+    clean_league = league
+    for key, value in league_mapping.items():
+        if key in league:
+            clean_league = value
+            break
+            
     home_player = event.get('homePlayer', '?')
     away_player = event.get('awayPlayer', '?')
     bet365_event_id = event.get('bet365EventId', '')
@@ -717,7 +801,7 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     
     scoreboard = event.get('scoreboard', '0-0')
     
-    msg = f"\n\n<b>🏆 {league}</b>\n\n"
+    msg = f"\n\n<b>🏆 {clean_league}</b>\n\n"
     msg += f"<b>🎯 {strategy}</b>\n\n"
     msg += f"⏳ Tempo: {time_str}\n\n"
     msg += f"🎮 {home_player} vs {away_player}\n"
@@ -726,25 +810,29 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     # Estatísticas resumidas
     if home_stats_summary and away_stats_summary:
         msg += f"<b>📊 Últimos 5 jogos:</b>\n"
-        msg += f"🏠 {home_player}:\n"
-        msg += f"   HT O0.5: {home_stats_summary['ht_over_05_pct']:.0f}% | O1.5: {home_stats_summary['ht_over_15_pct']:.0f}%\n"
-        msg += f"   FT Média: {home_stats_summary['avg_goals_scored_ft']:.1f} gols | Consistência +3: {home_stats_summary['consistency_ft_3_plus_pct']:.0f}%\n\n"
+        msg += f"🏠 {home_player}:\n\n"
+        msg += f"💠HT +0.5: {home_stats_summary['ht_over_05_pct']:.0f}% | +1.5: {home_stats_summary['ht_over_15_pct']:.0f}%\n"
+        msg += f"♦️FT Média: {home_stats_summary['avg_goals_scored_ft']:.1f} gols | 📈 +3 Gols: {home_stats_summary['consistency_ft_3_plus_pct']:.0f}%\n\n"
         
-        msg += f"✈️ {away_player}:\n"
-        msg += f"   HT O0.5: {away_stats_summary['ht_over_05_pct']:.0f}% | O1.5: {away_stats_summary['ht_over_15_pct']:.0f}%\n"
-        msg += f"   FT Média: {away_stats_summary['avg_goals_scored_ft']:.1f} gols | Consistência +3: {away_stats_summary['consistency_ft_3_plus_pct']:.0f}%\n"
+        msg += f"✈️ {away_player}:\n\n"
+        msg += f"💠HT +0.5: {away_stats_summary['ht_over_05_pct']:.0f}% | +1.5: {away_stats_summary['ht_over_15_pct']:.0f}%\n"
+        msg += f"♦️FT Média: {away_stats_summary['avg_goals_scored_ft']:.1f} gols | 📈 +3 Gols: {away_stats_summary['consistency_ft_3_plus_pct']:.0f}%\n"
     
     # Link Bet365 com o formato correto
     if bet365_event_id:
         bet365_link = f"https://www.bet365.bet.br/?#/IP/EV{bet365_event_id}"
-        msg += f"\n🌐 <a href='{bet365_link}'>🔗Bet365</a>\n\n"
+        msg += f"\n<a href='{bet365_link}'>🔗Bet365</a>\n\n"
     
     return msg
 
-def format_thermometer(perc):
+def format_thermometer(perc, inverse=False):
     """Formata termômetro visual"""
     bars = 10
-    green_count = round(perc / 10)
+    
+    effective_perc = 100 - perc if inverse else perc
+    green_count = int(round(effective_perc / 10))
+    green_count = max(0, min(bars, green_count))
+    
     bar = '🟩' * green_count + '🟥' * (bars - green_count)
     return f"{bar} {perc:.0f}%"
 
@@ -927,6 +1015,16 @@ async def check_results(bot):
     except Exception as e:
         print(f"[ERROR] check_results: {e}")
 
+
+def get_trend_emoji(perc, inverse=False):
+    """Retorna emoji baseado na porcentagem"""
+    adjusted = 100 - perc if inverse else perc
+    
+    if adjusted >= 80: return "🟢"
+    if adjusted >= 60: return "🟡"
+    if adjusted >= 40: return "🟠"
+    return "🔴"
+
 async def update_league_stats(bot, recent_matches):
     """Atualiza e envia resumo das estatísticas das ligas"""
     global last_league_summary, last_league_message_id, league_stats
@@ -935,24 +1033,31 @@ async def update_league_stats(bot, recent_matches):
         # Agrupar por liga usando os dados REAIS da API
         league_games = defaultdict(list)
         
+        # Mapeamento de nomes de ligas
+        league_mapping = {
+            'Esoccer GT Leagues – 12 mins play': 'GT LEAGUE 12 MIN',
+            'Esoccer GT Leagues - 12 mins play': 'GT LEAGUE 12 MIN',
+            'Esoccer Battle Volta - 6 mins play': 'VOLTA 6 MIN',
+            'Esoccer H2H GG League - 8 mins play': 'H2H 8 MIN',
+            'Esoccer Battle - 8 mins play': 'BATTLE 8 MIN'
+        }
+        
         for match in recent_matches[:200]:  # Últimos 200 jogos
-            # Extrair nome da liga da API de jogos finalizados
-            # A API pode ter diferentes formatos, vamos tentar todos
-            league = None
+            # Extrair nome da liga
+            league_raw = None
+            if 'league_name' in match: league_raw = match['league_name']
+            elif 'tournamentName' in match: league_raw = match['tournamentName']
+            elif 'leagueName' in match: league_raw = match['leagueName']
+            elif 'competition' in match and isinstance(match['competition'], dict): league_raw = match['competition'].get('name')
             
-            # Tentar diferentes campos que podem conter o nome da liga
-            if 'league_name' in match:
-                league = match['league_name']
-            elif 'tournamentName' in match:
-                league = match['tournamentName']
-            elif 'leagueName' in match:
-                league = match['leagueName']
-            elif 'competition' in match and isinstance(match['competition'], dict):
-                league = match['competition'].get('name')
+            if not league_raw or league_raw == 'Unknown': continue
             
-            # Se não encontrou liga, pular
-            if not league or league == 'Unknown':
-                continue
+            # Limpar nome da liga
+            league = league_raw
+            for key, value in league_mapping.items():
+                if key in league_raw:
+                    league = value
+                    break
             
             ht_home = match.get('home_score_ht', 0) or 0
             ht_away = match.get('away_score_ht', 0) or 0
@@ -961,94 +1066,70 @@ async def update_league_stats(bot, recent_matches):
             
             league_games[league].append({
                 'ht_goals': ht_home + ht_away,
-                'ft_goals': ft_home + ft_away
+                'ft_goals': ft_home + ft_away,
+                'ht_btts': 1 if ht_home > 0 and ht_away > 0 else 0,
+                'ft_btts': 1 if ft_home > 0 and ft_away > 0 else 0
             })
         
-        # Calcular estatísticas apenas para ligas com dados suficientes
+        # Calcular estatísticas
         stats = {}
         for league, games in league_games.items():
-            if len(games) < 20:  # Mínimo de 20 jogos para ter estatística válida
-                continue
+            if len(games) < 10: continue
             
-            # Pegar últimos 20 jogos (mais recentes)
-            last_20 = games[:20]
+            last_n = games[:10]
+            total = len(last_n)
             
-            ht_over = {
-                '0.5': sum(1 for g in last_20 if g['ht_goals'] > 0) / len(last_20) * 100,
-                '1.5': sum(1 for g in last_20 if g['ht_goals'] > 1) / len(last_20) * 100,
-                '2.5': sum(1 for g in last_20 if g['ht_goals'] > 2) / len(last_20) * 100,
+            stats[league] = {
+                'ht': {
+                    'o05': sum(1 for g in last_n if g['ht_goals'] > 0) / total * 100,
+                    'o15': sum(1 for g in last_n if g['ht_goals'] > 1) / total * 100,
+                    'btts': sum(1 for g in last_n if g['ht_btts']) / total * 100,
+                    '0x0': sum(1 for g in last_n if g['ht_goals'] == 0) / total * 100
+                },
+                'ft': {
+                    'o15': sum(1 for g in last_n if g['ft_goals'] > 1) / total * 100,
+                    'o25': sum(1 for g in last_n if g['ft_goals'] > 2) / total * 100,
+                    'btts': sum(1 for g in last_n if g['ft_btts']) / total * 100,
+                    '0x0': sum(1 for g in last_n if g['ft_goals'] == 0) / total * 100
+                },
+                'count': total
             }
-            
-            ft_over = {
-                '0.5': sum(1 for g in last_20 if g['ft_goals'] > 0) / len(last_20) * 100,
-                '1.5': sum(1 for g in last_20 if g['ft_goals'] > 1) / len(last_20) * 100,
-                '2.5': sum(1 for g in last_20 if g['ft_goals'] > 2) / len(last_20) * 100,
-                '3.5': sum(1 for g in last_20 if g['ft_goals'] > 3) / len(last_20) * 100,
-                '4.5': sum(1 for g in last_20 if g['ft_goals'] > 4) / len(last_20) * 100,
-            }
-            
-            stats[league] = {'ht': ht_over, 'ft': ft_over, 'games_count': len(last_20)}
         
-        # Verificar se houve mudança significativa
-        if league_stats == stats:
-            print("[INFO] Estatísticas das ligas sem alterações")
-            return
-        
+        if not stats: return
+        if league_stats and league_stats == stats: return
         league_stats = stats
         
-        if not stats:
-            print("[INFO] Sem dados suficientes para estatísticas de ligas")
-            return
+        # Construir mensagem compacta
+        summary = "\n<b>📊 Resumo das Ligas (últimos 10 jogos)</b>\n\n"
         
-        # Construir mensagem apenas se houver pelo menos uma liga
-        if len(stats) == 0:
-            return
-        
-        summary = "<b>📊 Resumo das Ligas (últimos 20 jogos)</b>\n\n"
-        
-        # Ordenar ligas por nome
         for league in sorted(stats.keys()):
             s = stats[league]
-            summary += f"<b>{league}</b> ({s['games_count']} jogos)\n"
+            h = s['ht']
+            f = s['ft']
             
-            # Mostrar apenas HT (mais relevante para nossas estratégias)
-            summary += f"<b>1º Tempo (HT):</b>\n"
-            for line in ['0.5', '1.5', '2.5']:
-                p = s['ht'][line]
-                thermo = format_thermometer(p)
-                summary += f"O{line}: {thermo}\n"
+            summary += f"🏆 <b>{league}</b>\n"
             
-            summary += "\n"
+            # HT Lines
+            summary += f"<code>HT +0.5:{h['o05']:>4.0f}%{get_trend_emoji(h['o05'])} | +1.5:{h['o15']:>4.0f}%{get_trend_emoji(h['o15'])}</code>\n"
+            summary += f"<code>   BTTS:{h['btts']:>4.0f}%{get_trend_emoji(h['btts'])} | 0x0 :{h['0x0']:>4.0f}%{get_trend_emoji(h['0x0'], True)}</code>\n"
+            
+            # FT Lines
+            summary += f"<code>FT +1.5:{f['o15']:>4.0f}%{get_trend_emoji(f['o15'])} | +2.5:{f['o25']:>4.0f}%{get_trend_emoji(f['o25'])}</code>\n"
+            summary += f"<code>   BTTS:{f['btts']:>4.0f}%{get_trend_emoji(f['btts'])} | 0x0 :{f['0x0']:>4.0f}%{get_trend_emoji(f['0x0'], True)}</code>\n\n"
+            
         
-        # Destacar melhor e pior liga APENAS se houver mais de uma
-        if len(stats) > 1:
-            # Calcular média HT para cada liga
-            league_ht_avg = {}
-            for league, s in stats.items():
-                avg = sum(s['ht'].values()) / len(s['ht'])
-                league_ht_avg[league] = avg
-            
-            best_league = max(league_ht_avg.items(), key=lambda x: x[1])
-            worst_league = min(league_ht_avg.items(), key=lambda x: x[1])
-            
-            summary += f"<b>🏆 Mais produtiva: {best_league[0]}</b> (Média HT: {best_league[1]:.1f}%)\n"
-            summary += f"<b>🚫 Menos produtiva: {worst_league[0]}</b> (Média HT: {worst_league[1]:.1f}%)\n"
-        
-        # Enviar ou atualizar mensagem
+        # Enviar ou atualizar
         if summary != last_league_summary:
             if last_league_message_id:
                 try:
                     await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_message_id)
-                    print("[INFO] Mensagem anterior de resumo das ligas deletada")
-                except Exception as e:
-                    print(f"[WARN] Não foi possível deletar mensagem anterior: {e}")
+                except: pass
             
             msg = await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
             last_league_summary = summary
             last_league_message_id = msg.message_id
-            print("[✓] Resumo das ligas atualizado e enviado")
-        else:
-            print("[INFO] Resumo das ligas sem mudanças significativas")
+            print("[✓] Resumo das ligas atualizado (formato compacto)")
+
     
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
