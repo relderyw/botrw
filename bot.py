@@ -950,7 +950,7 @@ async def update_league_stats(bot, recent_matches):
         if league_stats and league_stats == stats: return
         league_stats = stats
         
-        summary += "📊 <b>ANÁLISE DE LIGAS</b>\n"
+        summary = "📊 <b>ANÁLISE DE LIGAS</b>\n"
         summary += "<i>Baseado nos últimos 10 jogos</i>\n\n"
         
         for league in sorted(stats.keys()):
