@@ -220,7 +220,7 @@ def analyze_last_5_games(matches, player_name):
     
     total_goals_scored = total_goals_conceded = 0
     total_goals_scored_ht = total_goals_conceded_ht = 0
-    games_scored_3_plus = btts_count = 0
+    games_scored_3_plus = btts_count = ht_btts_count = 0
     
     for match in last_5:
         is_home = match.get('home_player', '').upper() == player_name.upper()
@@ -246,6 +246,7 @@ def analyze_last_5_games(matches, player_name):
         
         if player_ft_goals >= 3: games_scored_3_plus += 1
         if ft_home > 0 and ft_away > 0: btts_count += 1
+        if ht_home > 0 and ht_away > 0: ht_btts_count += 1
         
         # HT Overs
         if ht_total > 0: ht_over_05 += 1
@@ -295,7 +296,8 @@ def analyze_last_5_games(matches, player_name):
         'avg_goals_scored_ht': total_goals_scored_ht / 5,
         'avg_goals_conceded_ht': total_goals_conceded_ht / 5,
         'consistency_ft_3_plus_pct': (games_scored_3_plus / 5) * 100,
-        'btts_pct': (btts_count / 5) * 100
+        'btts_pct': (btts_count / 5) * 100,
+        'ht_btts_pct': (ht_btts_count / 5) * 100
     }
 
 # =============================================================================
@@ -324,33 +326,33 @@ def check_strategies_8mins(event, home_stats, away_stats):
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 0.7 and
             away_stats['avg_goals_scored_ft'] >= 0.7 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 45 and
+            home_stats['ht_over_05_pct'] >= 90 and
+            away_stats['ht_over_05_pct'] >= 90 ):
             strategies.append("⚽ +0.5 GOL HT")
             
         if (home_goals == 0 and away_goals == 0 and
-            home_stats['avg_goals_scored_ft'] >= 1.3 and
-            away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_15_pct'] >= 90 and
-            away_stats['ht_scored_15_pct'] >= 90):
+            home_stats['avg_goals_scored_ft'] >= 1.0 and
+            away_stats['avg_goals_scored_ft'] >= 1.0 and
+            avg_btts >= 45 and
+            home_stats['ht_over_15_pct'] >= 80 and
+            away_stats['ht_over_15_pct'] >= 80):
             strategies.append("⚽ +1.5 GOLS HT")
             
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
-            if (home_stats['avg_goals_scored_ft'] >= 1.7 and
-                away_stats['avg_goals_scored_ft'] >= 1.7 and
+            if (home_stats['avg_goals_scored_ft'] >= 1.5 and
+                away_stats['avg_goals_scored_ft'] >= 1.5 and
                 avg_btts >= 75 and
-                home_stats['ht_scored_25_pct'] >= 75 and
-                away_stats['ht_scored_25_pct'] >= 75):
+                home_stats['ht_over_15_pct'] == 100 and
+                away_stats['ht_over_15_pct'] == 100):
                 strategies.append("⚽ +2.5 GOLS HT")
                 
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 1.3 and
             away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts >= 88 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 85 and
+            home_stats['ht_over_05_pct'] == 100 and
+            away_stats['ht_over_05_pct'] == 100):
             strategies.append("⚽ BTTS HT")
 
     # FT (180s - 360s)
@@ -376,28 +378,28 @@ def check_strategies_8mins(event, home_stats, away_stats):
     # Estratégias de jogador (90s - 360s)
     if 90 <= time_seconds <= 360:
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-            if (home_stats['avg_goals_scored_ft'] >= 2.5 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
-                avg_btts <= 60 and
-                home_stats['ft_scored_15_pct'] == 100 and
-                home_stats['ft_scored_25_pct'] >= 90):
+            if (home_stats['avg_goals_scored_ft'] >= 2.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.5 and
+                avg_btts <= 70 and
+                home_stats['ft_scored_15_pct'] >= 80 and
+                home_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
                 
         valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
         if (home_goals, away_goals) in valid_scores_p1:
-            if (home_stats['avg_goals_scored_ft'] >= 3.4 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
+            if (home_stats['avg_goals_scored_ft'] >= 3.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.0 and
                 avg_btts <= 60 and
-                home_stats['ft_scored_25_pct'] >= 90 and
-                home_stats['ft_scored_35_pct'] >= 80):
+                home_stats['ft_scored_25_pct'] >= 80 and
+                home_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
                 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 2.5 and
-                avg_btts <= 60 and
-                away_stats['ft_scored_15_pct'] == 100 and
-                away_stats['ft_scored_25_pct'] >= 90):
+                avg_btts <= 70 and
+                away_stats['ft_scored_15_pct'] >= 80 and
+                away_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
                 
         valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
@@ -405,8 +407,8 @@ def check_strategies_8mins(event, home_stats, away_stats):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 3.4 and
                 avg_btts <= 60 and
-                away_stats['ft_scored_25_pct'] >= 90 and
-                away_stats['ft_scored_35_pct'] >= 80):
+                away_stats['ft_scored_25_pct'] >= 80 and
+                away_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
     
     return strategies
@@ -433,33 +435,33 @@ def check_strategies_12mins(event, home_stats, away_stats):
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 0.7 and
             away_stats['avg_goals_scored_ft'] >= 0.7 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 45 and
+            home_stats['ht_over_05_pct'] >= 90 and
+            away_stats['ht_over_05_pct'] >= 90):
             strategies.append("⚽ +0.5 GOL HT")
             
         if (home_goals == 0 and away_goals == 0 and
-            home_stats['avg_goals_scored_ft'] >= 1.3 and
-            away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_15_pct'] >= 90 and
-            away_stats['ht_scored_15_pct'] >= 90):
+            home_stats['avg_goals_scored_ft'] >= 1.0 and
+            away_stats['avg_goals_scored_ft'] >= 1.0 and
+            avg_btts >= 45 and
+            home_stats['ht_over_15_pct'] >= 90 and
+            away_stats['ht_over_15_pct'] >= 90):
             strategies.append("⚽ +1.5 GOLS HT")
             
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
-            if (home_stats['avg_goals_scored_ft'] >= 1.7 and
-                away_stats['avg_goals_scored_ft'] >= 1.7 and
+            if (home_stats['avg_goals_scored_ft'] >= 1.5 and
+                away_stats['avg_goals_scored_ft'] >= 1.5 and
                 avg_btts >= 75 and
-                home_stats['ht_scored_25_pct'] >= 75 and
-                away_stats['ht_scored_25_pct'] >= 75):
+                home_stats['ht_over_15_pct'] == 100 and
+                away_stats['ht_over_15_pct'] == 100):
                 strategies.append("⚽ +2.5 GOLS HT")
                 
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 1.3 and
             away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts >= 88 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 85 and
+            home_stats['ht_over_05_pct'] == 100 and
+            away_stats['ht_over_05_pct'] == 100):
             strategies.append("⚽ BTTS HT")
 
     # FT (260s - 510s)
@@ -485,28 +487,28 @@ def check_strategies_12mins(event, home_stats, away_stats):
     # Estratégias de jogador (90s - 510s)
     if 90 <= time_seconds <= 510:
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-            if (home_stats['avg_goals_scored_ft'] >= 2.5 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
-                avg_btts <= 60 and
-                home_stats['ft_scored_15_pct'] == 100 and
-                home_stats['ft_scored_25_pct'] >= 90):
+            if (home_stats['avg_goals_scored_ft'] >= 2.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.5 and
+                avg_btts <= 70 and
+                home_stats['ft_scored_15_pct'] >= 80 and
+                home_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
                 
         valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
         if (home_goals, away_goals) in valid_scores_p1:
-            if (home_stats['avg_goals_scored_ft'] >= 3.4 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
+            if (home_stats['avg_goals_scored_ft'] >= 3.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.0 and
                 avg_btts <= 60 and
-                home_stats['ft_scored_25_pct'] >= 90 and
-                home_stats['ft_scored_35_pct'] >= 80):
+                home_stats['ft_scored_25_pct'] >= 80 and
+                home_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
                 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 2.5 and
-                avg_btts <= 60 and
-                away_stats['ft_scored_15_pct'] == 100 and
-                away_stats['ft_scored_25_pct'] >= 90):
+                avg_btts <= 70 and
+                away_stats['ft_scored_15_pct'] >= 80 and
+                away_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
                 
         valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
@@ -514,8 +516,8 @@ def check_strategies_12mins(event, home_stats, away_stats):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 3.4 and
                 avg_btts <= 60 and
-                away_stats['ft_scored_25_pct'] >= 90 and
-                away_stats['ft_scored_35_pct'] >= 80):
+                away_stats['ft_scored_25_pct'] >= 80 and
+                away_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
     
     return strategies
@@ -542,33 +544,33 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 0.7 and
             away_stats['avg_goals_scored_ft'] >= 0.7 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 45 and
+            home_stats['ht_over_05_pct'] >= 90 and
+            away_stats['ht_over_05_pct'] >= 90):
             strategies.append("⚽ +0.5 GOL HT")
             
         if (home_goals == 0 and away_goals == 0 and
-            home_stats['avg_goals_scored_ft'] >= 1.3 and
-            away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts <= 60 and
-            home_stats['ht_scored_15_pct'] >= 90 and
-            away_stats['ht_scored_15_pct'] >= 90):
+            home_stats['avg_goals_scored_ft'] >= 1.0 and
+            away_stats['avg_goals_scored_ft'] >= 1.0 and
+            avg_btts >= 45 and
+            home_stats['ht_over_15_pct'] >= 90 and
+            away_stats['ht_over_15_pct'] >= 90):
             strategies.append("⚽ +1.5 GOLS HT")
             
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
-            if (home_stats['avg_goals_scored_ft'] >= 1.7 and
-                away_stats['avg_goals_scored_ft'] >= 1.7 and
+            if (home_stats['avg_goals_scored_ft'] >= 1.5 and
+                away_stats['avg_goals_scored_ft'] >= 1.5 and
                 avg_btts >= 75 and
-                home_stats['ht_scored_25_pct'] >= 75 and
-                away_stats['ht_scored_25_pct'] >= 75):
+                home_stats['ht_over_15_pct'] == 100 and
+                away_stats['ht_over_15_pct'] == 100):
                 strategies.append("⚽ +2.5 GOLS HT")
                 
         if (home_goals == 0 and away_goals == 0 and
             home_stats['avg_goals_scored_ft'] >= 1.3 and
             away_stats['avg_goals_scored_ft'] >= 1.3 and
-            avg_btts >= 88 and
-            home_stats['ht_scored_05_pct'] == 100 and
-            away_stats['ht_scored_05_pct'] == 100):
+            avg_btts >= 85 and
+            home_stats['ht_over_05_pct'] == 100 and
+            away_stats['ht_over_05_pct'] == 100):
             strategies.append("⚽ BTTS HT")
 
     # FT (150s - 265s)
@@ -594,28 +596,28 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
     # Estratégias de jogador (30s - 265s)
     if 30 <= time_seconds <= 265:
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-            if (home_stats['avg_goals_scored_ft'] >= 2.5 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
-                avg_btts <= 60 and
-                home_stats['ft_scored_15_pct'] == 100 and
-                home_stats['ft_scored_25_pct'] >= 90):
+            if (home_stats['avg_goals_scored_ft'] >= 2.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.5 and
+                avg_btts <= 70 and
+                home_stats['ft_scored_15_pct'] >= 80 and
+                home_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
                 
         valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
         if (home_goals, away_goals) in valid_scores_p1:
-            if (home_stats['avg_goals_scored_ft'] >= 3.4 and
-                away_stats['avg_goals_scored_ft'] <= 0.8 and
+            if (home_stats['avg_goals_scored_ft'] >= 3.0 and
+                away_stats['avg_goals_scored_ft'] <= 1.0 and
                 avg_btts <= 60 and
-                home_stats['ft_scored_25_pct'] >= 90 and
-                home_stats['ft_scored_35_pct'] >= 80):
+                home_stats['ft_scored_25_pct'] >= 80 and
+                home_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
                 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 2.5 and
-                avg_btts <= 60 and
-                away_stats['ft_scored_15_pct'] == 100 and
-                away_stats['ft_scored_25_pct'] >= 90):
+                avg_btts <= 70 and
+                away_stats['ft_scored_15_pct'] >= 80 and
+                away_stats['ft_scored_25_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
                 
         valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
@@ -623,8 +625,8 @@ def check_strategies_volta_6mins(event, home_stats, away_stats):
             if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                 away_stats['avg_goals_scored_ft'] <= 3.4 and
                 avg_btts <= 60 and
-                away_stats['ft_scored_25_pct'] >= 90 and
-                away_stats['ft_scored_35_pct'] >= 80):
+                away_stats['ft_scored_25_pct'] >= 80 and
+                away_stats['ft_scored_35_pct'] >= 60):
                 strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
     
     return strategies
@@ -885,6 +887,9 @@ async def update_league_stats(bot, recent_matches):
     global last_league_summary, last_league_message_id, league_stats
     
     try:
+        # Ordenar partidas para garantir estabilidade nos cálculos
+        recent_matches.sort(key=lambda x: (x.get('data_realizacao', ''), x.get('id', 0)), reverse=True)
+
         league_games = defaultdict(list)
         
         league_mapping = {
@@ -925,54 +930,50 @@ async def update_league_stats(bot, recent_matches):
         
         stats = {}
         for league, games in league_games.items():
-            if len(games) < 10: continue
+            if len(games) < 5: continue
             
-            last_n = games[:10]
+            last_n = games[:]
             total = len(last_n)
             
+            # Helper para calcular porcentagem inteira
+            def calc_pct(count):
+                return int((count / total) * 100)
+
             stats[league] = {
                 'ht': {
-                    'o05': sum(1 for g in last_n if g['ht_goals'] > 0) / total * 100,
-                    'o15': sum(1 for g in last_n if g['ht_goals'] > 1) / total * 100,
-                    'btts': sum(1 for g in last_n if g['ht_btts']) / total * 100,
-                    '0x0': sum(1 for g in last_n if g['ht_goals'] == 0) / total * 100
+                    'o05': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 0)),
+                    'o15': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 1)),
+                    'btts': calc_pct(sum(1 for g in last_n if g['ht_btts'])),
+                    '0x0': calc_pct(sum(1 for g in last_n if g['ht_goals'] == 0))
                 },
                 'ft': {
-                    'o15': sum(1 for g in last_n if g['ft_goals'] > 1) / total * 100,
-                    'o25': sum(1 for g in last_n if g['ft_goals'] > 2) / total * 100,
-                    'btts': sum(1 for g in last_n if g['ft_btts']) / total * 100,
-                    '0x0': sum(1 for g in last_n if g['ft_goals'] == 0) / total * 100
+                    'o15': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 1)),
+                    'o25': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 2)),
+                    'btts': calc_pct(sum(1 for g in last_n if g['ft_btts'])),
+                    '0x0': calc_pct(sum(1 for g in last_n if g['ft_goals'] == 0))
                 },
                 'count': total
             }
         
         if not stats: return
-        if league_stats and league_stats == stats: return
+        
+        # Comparação exata dos dicionários (agora com inteiros estáveis)
+        if league_stats and league_stats == stats:
+            print(f"[INFO] Resumo de ligas idêntico ao anterior. Ignorando envio.")
+            return
+            
         league_stats = stats
         
-        summary = "📊 <b>ANÁLISE DE LIGAS</b>\n"
-        summary += "<i>Baseado nos últimos 10 jogos</i>\n\n"
+        summary = "📊 <b>RESUMO DE LIGAS (Últimos 5 Jogos)</b>\n\n"
         
         for league in sorted(stats.keys()):
             s = stats[league]
             h = s['ht']
             f = s['ft']
             
-
             summary += f"🏆 <b>{league}</b>\n"
-      
-            
-            summary += "⏰ <b>PRIMEIRO TEMPO (HT)</b>\n"
-            summary += f"├+0.5: <code>{h['o05']:5.0f}%</code> {get_trend_emoji(h['o05'])}\n"
-            summary += f"├+1.5: <code>{h['o15']:5.0f}%</code> {get_trend_emoji(h['o15'])}\n"
-            summary += f"├BTTS: <code>{h['btts']:5.0f}%</code> {get_trend_emoji(h['btts'])}\n"
-            summary += f"└0x0: <code>{h['0x0']:5.0f}%</code> {get_trend_emoji(h['0x0'], True)}\n\n"
-            
-            summary += "⚽ <b>TEMPO FINAL (FT)</b>\n"
-            summary += f"├+1.5: <code>{f['o15']:5.0f}%</code> {get_trend_emoji(f['o15'])}\n"
-            summary += f"├+2.5: <code>{f['o25']:5.0f}%</code> {get_trend_emoji(f['o25'])}\n"
-            summary += f"├BTTS: <code>{f['btts']:5.0f}%</code> {get_trend_emoji(f['btts'])}\n"
-            summary += f"└0x0: <code>{f['0x0']:5.0f}%</code> {get_trend_emoji(f['0x0'], True)}\n\n"
+            summary += f"HT: 02.5 <b>{h['o05']}%</b>{get_trend_emoji(h['o05'])} | 1.5 <b>{h['o15']}%</b>{get_trend_emoji(h['o15'])} | BTTS <b>{h['btts']}%</b>{get_trend_emoji(h['btts'])} | 0x0 <b>{h['0x0']}%</b>{get_trend_emoji(h['0x0'], True)}\n"
+            summary += f"FT: 1.5 <b>{f['o15']}%</b>{get_trend_emoji(f['o15'])} | 2.5 <b>{f['o25']}%</b>{get_trend_emoji(f['o25'])} | BTTS <b>{f['btts']}%</b>{get_trend_emoji(f['btts'])} | 0x0 <b>{f['0x0']}%</b>{get_trend_emoji(f['0x0'], True)}\n\n"
         
         summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         summary += "<i>🟢 Forte | 🟡 Médio | 🟠 Fraco | 🔴 Baixo</i>\n"
@@ -986,7 +987,7 @@ async def update_league_stats(bot, recent_matches):
             msg = await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
             last_league_summary = summary
             last_league_message_id = msg.message_id
-            print("[✓] Resumo das ligas atualizado com design profissional")
+            print("[✓] Resumo das ligas atualizado com novo layout compacto")
     
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
