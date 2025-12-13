@@ -1003,7 +1003,6 @@ async def update_league_stats(bot, recent_matches):
             last_n = games[:5]
             total = len(last_n)
             
-            # Helper para calcular porcentagem inteira
             def calc_pct(count):
                 return int((count / total) * 100)
 
@@ -1027,27 +1026,57 @@ async def update_league_stats(bot, recent_matches):
         
         if not stats: return
         
-        # Comparação exata dos dicionários (agora com inteiros estáveis)
+        # Comparação exata dos dicionários
         if league_stats and league_stats == stats:
             print(f"[INFO] Resumo de ligas idêntico ao anterior. Ignorando envio.")
             return
             
         league_stats = stats
         
-        summary = "📊 <b>RESUMO DE LIGAS (Últimos 5 Jogos)</b>\n\n"
+        # Nova formatação: limpa, organizada e fácil de ler
+        summary = "📊 <b>RESUMO DE LIGAS</b> (Últimos 5 jogos)\n"
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        def get_emoji(pct):
+            """Retorna emoji baseado na porcentagem"""
+            if pct >= 95: return "🟢"
+            elif pct >= 75: return "🟡"
+            elif pct >= 55: return "🟠"
+            else: return "🔴"
+        
+        def format_stat(label, pct):
+            """Formata uma estatística com alinhamento"""
+            emoji = get_emoji(pct)
+            return f"{label}: {pct:>3}% {emoji}"
         
         for league in sorted(stats.keys()):
             s = stats[league]
             h = s['ht']
             f = s['ft']
             
-            summary += f"🏆 <b>{league}</b>\n"
-            summary += f"<b>HT:</b> 0.5 {h['o05']}%{get_trend_emoji(h['o05'])}  1.5 {h['o15']}%{get_trend_emoji(h['o15'])}  BTTS {h['btts']}%{get_trend_emoji(h['btts'])}\n"
-            summary += f"<b>FT:</b> 1.5 {f['o15']}%{get_trend_emoji(f['o15'])}  2.5 {f['o25']}%{get_trend_emoji(f['o25'])}  BTTS {f['btts']}%{get_trend_emoji(f['btts'])}\n"
-            summary += f"🛡️ <b>0x0:</b> HT {h['0x0']}%{get_trend_emoji(h['0x0'], True)} | FT {f['0x0']}%{get_trend_emoji(f['0x0'], True)}\n\n"
+            # Cabeçalho da liga
+            summary += f"🏆 <b>{league}</b>\n\n"
+            
+            # Estatísticas HT
+            summary += "⏱ <b>PRIMEIRO TEMPO (HT)</b>\n"
+            summary += f"  {format_stat('Over 0.5', h['o05'])}\n"
+            summary += f"  {format_stat('Over 1.5', h['o15'])}\n"
+            summary += f"  {format_stat('BTTS    ', h['btts'])}\n"
+            summary += f"  {format_stat('0x0     ', h['0x0'])}\n\n"
+            
+            # Estatísticas FT
+            summary += "⏰ <b>TEMPO COMPLETO (FT)</b>\n"
+            summary += f"  {format_stat('Over 1.5', f['o15'])}\n"
+            summary += f"  {format_stat('Over 2.5', f['o25'])}\n"
+            summary += f"  {format_stat('BTTS    ', f['btts'])}\n"
+            summary += f"  {format_stat('0x0     ', f['0x0'])}\n\n"
+            
+            summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        summary += "<i>🟢 Forte | 🟡 Médio | 🟠 Fraco | 🔴 Baixo</i>\n"
+        # Legenda no final
+        summary += "<i>Legenda:</i>\n"
+        summary += "🟢 Forte (95%+) | 🟡 Médio (75-94%)\n"
+        summary += "🟠 Fraco (55-74%) | 🔴 Baixo (<55%)\n"
         
         if summary != last_league_summary:
             if last_league_message_id:
@@ -1058,7 +1087,7 @@ async def update_league_stats(bot, recent_matches):
             msg = await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
             last_league_summary = summary
             last_league_message_id = msg.message_id
-            print("[✓] Resumo das ligas atualizado com novo layout compacto")
+            print("[✓] Resumo das ligas atualizado com layout melhorado")
     
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
