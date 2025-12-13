@@ -1096,11 +1096,11 @@ def create_league_stats_image(stats):
     draw = ImageDraw.Draw(img)
     
     # Tamanhos das fontes
-    size_title = 54
-    size_header = 25
+    size_title = 44
+    size_header = 30
     size_cell = 35
-    size_league = 30
-    size_brand = 40  # Para RW TIPS
+    size_league = 25
+    size_brand = 35  # Para RW TIPS
     
     # Lista de fontes para tentar (Windows e Linux)
     font_paths = [
@@ -1154,7 +1154,7 @@ def create_league_stats_image(stats):
             font_brand = ImageFont.load_default()
     
     # ===== LOGO E BRANDING =====
-    logo_size = 60
+    logo_size = 50
     brand_text = "RW TIPS"
     
     # Tentar carregar a logo
