@@ -8,6 +8,9 @@ from telegram import Bot
 from telegram.request import HTTPXRequest
 import re
 import logging
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
+
 
 # Configurar logging
 logging.basicConfig(
@@ -951,7 +954,7 @@ async def check_results(bot):
         print(f"[ERROR] check_results: {e}")
 
 async def update_league_stats(bot, recent_matches):
-    """Atualiza e envia resumo das estatísticas das ligas"""
+    """Atualiza e envia resumo das estatísticas das ligas com imagem"""
     global last_league_summary, last_league_message_id, league_stats
     
     try:
@@ -1010,14 +1013,13 @@ async def update_league_stats(bot, recent_matches):
                 'ht': {
                     'o05': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 0)),
                     'o15': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 1)),
+                    'o25': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 2)),
                     'btts': calc_pct(sum(1 for g in last_n if g['ht_btts'])),
-                    '0x0': calc_pct(sum(1 for g in last_n if g['ht_goals'] == 0))
                 },
                 'ft': {
                     'o15': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 1)),
                     'o25': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 2)),
                     'btts': calc_pct(sum(1 for g in last_n if g['ft_btts'])),
-                    '0x0': calc_pct(sum(1 for g in last_n if g['ft_goals'] == 0))
                 },
                 'count': total
             }
@@ -1031,66 +1033,231 @@ async def update_league_stats(bot, recent_matches):
             
         league_stats = stats
         
-        def get_bar(pct):
-            """Cria barra de termômetro visual com gradiente"""
-            # Barra de 10 blocos
-            filled = int(pct / 10)
-            
-            # Cores do gradiente: vermelho -> laranja -> amarelo -> verde
-            colors = []
-            for i in range(10):
-                if i < 3:  # 0-30% vermelho
-                    colors.append('🔴')
-                elif i < 5:  # 30-50% laranja
-                    colors.append('🟠')
-                elif i < 7:  # 50-70% amarelo
-                    colors.append('🟡')
-                else:  # 70-100% verde
-                    colors.append('🟢')
-            
-            # Monta a barra
-            bar = ""
-            for i in range(10):
-                if i < filled:
-                    bar += colors[i]
-                else:
-                    bar += "⚪"
-            
-            return f"{bar} {pct}%"
+        # ============ GERAR IMAGEM ============
+        img = create_league_stats_image(stats)
         
-        # Mensagem compacta com termômetros
-        summary = "📊 <b>ANÁLISE DE LIGAS</b> (5 jogos)\n\n"
+        # Converter para BytesIO
+        bio = BytesIO()
+        img.save(bio, 'PNG')
+        bio.seek(0)
         
-        for league in sorted(stats.keys()):
-            s = stats[league]
-            h = s['ht']
-            f = s['ft']
-            
-            summary += f"🏆 <b>{league}</b>\n"
-            summary += f"HT 0.5+ {get_bar(h['o05'])}\n"
-            summary += f"HT 1.5+ {get_bar(h['o15'])}\n"
-            summary += f"HT BTTS {get_bar(h['btts'])}\n"
-            summary += f"FT 1.5+ {get_bar(f['o15'])}\n"
-            summary += f"FT 2.5+ {get_bar(f['o25'])}\n"
-            summary += f"FT BTTS {get_bar(f['btts'])}\n\n"
+        # Enviar imagem
+        if last_league_message_id:
+            try:
+                await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_message_id)
+            except: pass
         
-        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        summary += "<i>🔴0-30 🟠30-50 🟡50-70 🟢70-100</i>"
+        msg = await bot.send_photo(
+            chat_id=CHAT_ID,
+            photo=bio,
+            caption="📊 <b>ANÁLISE DE LIGAS</b> (Últimos 5 jogos)\n<i>🔴&lt;40% 🟠40-59% 🟡60-79% 🟢80%+</i>",
+            parse_mode="HTML"
+        )
         
-        if summary != last_league_summary:
-            if last_league_message_id:
-                try:
-                    await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_message_id)
-                except: pass
-            
-            msg = await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
-            last_league_summary = summary
-            last_league_message_id = msg.message_id
-            print("[✓] Resumo das ligas atualizado com termômetros")
+        last_league_message_id = msg.message_id
+        print("[✓] Resumo das ligas atualizado com imagem")
     
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
+        import traceback
+        traceback.print_exc()
 
+
+def create_league_stats_image(stats):
+    """Cria imagem com heatmap das estatísticas"""
+    
+    # Cores
+    bg_color = (26, 26, 46)  # #1a1a2e
+    card_bg = (15, 52, 96)   # #0f3460
+    header_bg = (22, 33, 62)  # #16213e
+    text_color = (255, 255, 255)
+    header_color = (78, 205, 196)  # #4ecdc4
+    gold_color = (255, 215, 0)
+    
+    # Configurações
+    sorted_leagues = sorted(stats.keys())
+    num_leagues = len(sorted_leagues)
+    
+    # Dimensões MAIORES para melhor visualização
+    cell_width = 120
+    cell_height = 65
+    label_width = 220
+    header_height = 80
+    padding = 25
+    
+    total_width = label_width + (6 * cell_width) + (2 * padding)
+    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 60
+    
+    # Criar imagem
+    img = Image.new('RGB', (total_width, total_height), bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # Tentar carregar fontes do Windows
+    font_title = None
+    font_header = None
+    font_cell = None
+    font_league = None
+    
+    # Lista de fontes Windows para tentar
+    windows_fonts = [
+        "C:/Windows/Fonts/arialbd.ttf",  # Arial Bold
+        "C:/Windows/Fonts/arial.ttf",     # Arial
+        "C:/Windows/Fonts/segoeui.ttf",   # Segoe UI
+        "C:/Windows/Fonts/calibri.ttf",   # Calibri
+    ]
+    
+    for font_path in windows_fonts:
+        try:
+            font_title = ImageFont.truetype(font_path, 32)
+            font_header = ImageFont.truetype(font_path, 18)
+            font_cell = ImageFont.truetype(font_path, 24)
+            font_league = ImageFont.truetype(font_path, 18)
+            break
+        except:
+            continue
+    
+    # Fallback para fonte padrão
+    if font_title is None:
+        font_title = ImageFont.load_default()
+        font_header = ImageFont.load_default()
+        font_cell = ImageFont.load_default()
+        font_league = ImageFont.load_default()
+    
+    # Título (sem emoji)
+    title = "ANALISE DE LIGAS (5 jogos)"
+    title_bbox = draw.textbbox((0, 0), title, font=font_title)
+    title_width = title_bbox[2] - title_bbox[0]
+    draw.text(((total_width - title_width) // 2, padding), title, fill=header_color, font=font_title)
+    
+    # Headers das colunas
+    headers = ["HT 0.5+", "HT 1.5+", "HT BTTS", "FT 1.5+", "FT 2.5+", "FT BTTS"]
+    y_pos = header_height + padding
+    
+    for i, header in enumerate(headers):
+        x_pos = label_width + (i * cell_width) + padding
+        
+        # Background do header
+        draw.rectangle(
+            [x_pos, y_pos - 35, x_pos + cell_width, y_pos - 5],
+            fill=header_bg,
+            outline=card_bg,
+            width=2
+        )
+        
+        # Texto do header
+        header_bbox = draw.textbbox((0, 0), header, font=font_header)
+        header_w = header_bbox[2] - header_bbox[0]
+        draw.text(
+            (x_pos + (cell_width - header_w) // 2, y_pos - 28),
+            header,
+            fill=header_color,
+            font=font_header
+        )
+    
+    # Função para obter cor baseada na porcentagem (novos limites)
+    def get_heat_color(pct):
+        if pct >= 95:
+            return (0, 255, 136)  # Verde
+        elif pct >= 78:
+            return (255, 238, 68)  # Amarelo
+        elif pct >= 48:
+            return (255, 136, 68)  # Laranja
+        else:
+            return (255, 68, 68)  # Vermelho
+    
+    # Desenhar linhas de ligas
+    for idx, league in enumerate(sorted_leagues):
+        s = stats[league]
+        row_y = y_pos + (idx * cell_height)
+        
+        # Nome da liga
+        draw.rectangle(
+            [padding, row_y, label_width + padding - 10, row_y + cell_height],
+            fill=header_bg,
+            outline=card_bg,
+            width=2
+        )
+        
+        league_text = f"{league}"
+        draw.text(
+            (padding + 10, row_y + 15),
+            league_text,
+            fill=gold_color,
+            font=font_league
+        )
+        
+        # Células de dados
+        values = [
+            s['ht']['o05'],
+            s['ht']['o15'],
+            s['ht']['btts'],
+            s['ft']['o15'],
+            s['ft']['o25'],
+            s['ft']['btts']
+        ]
+        
+        for i, val in enumerate(values):
+            x_pos = label_width + (i * cell_width) + padding
+            
+            # Background com cor baseada no valor
+            color = get_heat_color(val)
+            draw.rectangle(
+                [x_pos, row_y, x_pos + cell_width, row_y + cell_height],
+                fill=color,
+                outline=card_bg,
+                width=2
+            )
+            
+            # Texto da porcentagem
+            text = f"{val}%"
+            text_bbox = draw.textbbox((0, 0), text, font=font_cell)
+            text_w = text_bbox[2] - text_bbox[0]
+            
+            # Cor do texto (branco para escuro, preto para claro)
+            text_color_cell = (0, 0, 0) if val >= 60 else (255, 255, 255)
+            
+            draw.text(
+                (x_pos + (cell_width - text_w) // 2, row_y + 15),
+                text,
+                fill=text_color_cell,
+                font=font_cell
+            )
+    
+    # Calcular qual liga é melhor para OVER e UNDER
+    league_scores = {}
+    for league in sorted_leagues:
+        s = stats[league]
+        avg_over = (s['ht']['o05'] + s['ht']['o15'] + s['ft']['o15'] + s['ft']['o25']) / 4
+        league_scores[league] = avg_over
+    
+    best_over = max(league_scores, key=league_scores.get)
+    best_under = min(league_scores, key=league_scores.get)
+    
+    # Linha de destaque para OVER (sem emoji)
+    highlight_y = y_pos + (num_leagues * cell_height) + 15
+    over_text = f">> MELHOR OVER: {best_over} ({league_scores[best_over]:.0f}% media)"
+    over_bbox = draw.textbbox((0, 0), over_text, font=font_header)
+    over_w = over_bbox[2] - over_bbox[0]
+    draw.text(
+        ((total_width - over_w) // 2, highlight_y),
+        over_text,
+        fill=(0, 255, 136),  # Verde
+        font=font_header
+    )
+    
+    # Linha de destaque para UNDER (sem emoji) - VERMELHO
+    under_y = highlight_y + 28
+    under_text = f">> LIGA UNDER: {best_under} ({league_scores[best_under]:.0f}% media)"
+    under_bbox = draw.textbbox((0, 0), under_text, font=font_header)
+    under_w = under_bbox[2] - under_bbox[0]
+    draw.text(
+        ((total_width - under_w) // 2, under_y),
+        under_text,
+        fill=(255, 68, 68),  # Vermelho
+        font=font_header
+    )
+    
+    return img
 # =============================================================================
 # LOOP PRINCIPAL
 # =============================================================================
