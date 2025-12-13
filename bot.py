@@ -1079,14 +1079,14 @@ def create_league_stats_image(stats):
     num_leagues = len(sorted_leagues)
     
     # Dimensões MAIORES para melhor visualização
-    cell_width = 120
-    cell_height = 65
-    label_width = 220
-    header_height = 80
-    padding = 25
+    cell_width = 140
+    cell_height = 75
+    label_width = 260
+    header_height = 100
+    padding = 30
     
     total_width = label_width + (6 * cell_width) + (2 * padding)
-    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 60
+    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 80
     
     # Criar imagem
     img = Image.new('RGB', (total_width, total_height), bg_color)
@@ -1108,10 +1108,10 @@ def create_league_stats_image(stats):
     
     for font_path in windows_fonts:
         try:
-            font_title = ImageFont.truetype(font_path, 32)
-            font_header = ImageFont.truetype(font_path, 18)
-            font_cell = ImageFont.truetype(font_path, 24)
-            font_league = ImageFont.truetype(font_path, 18)
+            font_title = ImageFont.truetype(font_path, 42)
+            font_header = ImageFont.truetype(font_path, 22)
+            font_cell = ImageFont.truetype(font_path, 30)
+            font_league = ImageFont.truetype(font_path, 22)
             break
         except:
             continue
