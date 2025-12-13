@@ -1193,11 +1193,12 @@ def create_league_stats_image(stats):
     title = "ANALISE DE LIGAS (5 jogos)"
     title_bbox = draw.textbbox((0, 0), title, font=font_title)
     title_width = title_bbox[2] - title_bbox[0]
-    draw.text(((total_width - title_width) // 2, padding + logo_size + 10), title, fill=header_color, font=font_title)
+    title_y = padding + logo_size + 10
+    draw.text(((total_width - title_width) // 2, title_y), title, fill=header_color, font=font_title)
     
     # Headers das colunas
     headers = ["HT 0.5+", "HT 1.5+", "HT BTTS", "FT 1.5+", "FT 2.5+", "FT BTTS"]
-    y_pos = header_height + padding
+    y_pos = title_y + 80  # Espaço após o título
     
     for i, header in enumerate(headers):
         x_pos = label_width + (i * cell_width) + padding
