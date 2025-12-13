@@ -1198,7 +1198,7 @@ def create_league_stats_image(stats):
     
     # Headers das colunas
     headers = ["HT 0.5+", "HT 1.5+", "HT BTTS", "FT 1.5+", "FT 2.5+", "FT BTTS"]
-    y_pos = title_y + 80  # Espaço após o título
+    y_pos = title_y + 100  # Espaço maior após o título
     
     for i, header in enumerate(headers):
         x_pos = label_width + (i * cell_width) + padding
