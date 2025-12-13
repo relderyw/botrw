@@ -1092,35 +1092,54 @@ def create_league_stats_image(stats):
     img = Image.new('RGB', (total_width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # Tentar carregar fontes do Windows - MAIS MODERNAS E MAIORES
+    # Tentar carregar fontes do Windows - FONTES BEM GRANDES
     font_title = None
     font_header = None
     font_cell = None
     font_league = None
     
-    # Lista de fontes Windows para tentar (priorizando Segoe UI Bold)
-    windows_fonts_bold = [
-        "C:/Windows/Fonts/segoeuib.ttf",  # Segoe UI Bold
-        "C:/Windows/Fonts/arialbd.ttf",   # Arial Bold
-        "C:/Windows/Fonts/calibrib.ttf",  # Calibri Bold
+    # Tamanhos das fontes (levemente reduzidos)
+    size_title = 54
+    size_header = 25
+    size_cell = 35
+    size_league = 30
+    
+    # Lista de fontes Windows para tentar
+    font_paths = [
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "arial.ttf",
+        "arialbd.ttf",
     ]
     
-    for font_path in windows_fonts_bold:
+    font_loaded = False
+    for font_path in font_paths:
         try:
-            font_title = ImageFont.truetype(font_path, 52)
-            font_header = ImageFont.truetype(font_path, 28)
-            font_cell = ImageFont.truetype(font_path, 38)
-            font_league = ImageFont.truetype(font_path, 26)
+            font_title = ImageFont.truetype(font_path, size_title)
+            font_header = ImageFont.truetype(font_path, size_header)
+            font_cell = ImageFont.truetype(font_path, size_cell)
+            font_league = ImageFont.truetype(font_path, size_league)
+            font_loaded = True
+            print(f"[INFO] Fonte carregada: {font_path}")
             break
-        except:
+        except Exception as e:
+            print(f"[WARN] Não foi possível carregar {font_path}: {e}")
             continue
     
-    # Fallback para fonte padrão
-    if font_title is None:
-        font_title = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_cell = ImageFont.load_default()
-        font_league = ImageFont.load_default()
+    # Fallback para fonte padrão com tamanho customizado
+    if not font_loaded:
+        print("[WARN] Usando fonte padrão do sistema")
+        try:
+            # Pillow 10+ tem load_default com size
+            font_title = ImageFont.load_default(size=size_title)
+            font_header = ImageFont.load_default(size=size_header)
+            font_cell = ImageFont.load_default(size=size_cell)
+            font_league = ImageFont.load_default(size=size_league)
+        except:
+            font_title = ImageFont.load_default()
+            font_header = ImageFont.load_default()
+            font_cell = ImageFont.load_default()
+            font_league = ImageFont.load_default()
     
     # Título (sem emoji)
     title = "ANALISE DE LIGAS (5 jogos)"
