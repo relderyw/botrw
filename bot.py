@@ -1050,7 +1050,7 @@ async def update_league_stats(bot, recent_matches):
         msg = await bot.send_photo(
             chat_id=CHAT_ID,
             photo=bio,
-            caption="📊 <b>ANÁLISE DE LIGAS</b> (Últimos 5 jogos)\n<i>🔴&lt;40% 🟠40-59% 🟡60-79% 🟢80%+</i>",
+            caption="📊 <b>ANÁLISE DE LIGAS</b> (Últimos 5 jogos)\n<i>🔴&lt;48% 🟠48-77% 🟡78-94% 🟢95%+</i>",
             parse_mode="HTML"
         )
         
