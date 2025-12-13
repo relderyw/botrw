@@ -1065,6 +1065,7 @@ async def update_league_stats(bot, recent_matches):
 
 def create_league_stats_image(stats):
     """Cria imagem com heatmap das estatísticas"""
+    import os
     
     # Cores - FUNDO PRETO
     bg_color = (0, 0, 0)  # Preto puro
@@ -1073,6 +1074,7 @@ def create_league_stats_image(stats):
     text_color = (255, 255, 255)
     header_color = (0, 255, 200)  # Cyan/Verde
     gold_color = (255, 200, 50)  # Dourado
+    brand_color = (0, 255, 100)  # Verde para RW TIPS
     
     # Configurações
     sorted_leagues = sorted(stats.keys())
@@ -1082,7 +1084,8 @@ def create_league_stats_image(stats):
     cell_width = 160
     cell_height = 90
     label_width = 300
-    header_height = 120
+    logo_height = 80  # Altura para logo + branding
+    header_height = 140  # Aumentado para caber logo
     padding = 40
     
     total_width = label_width + (6 * cell_width) + (2 * padding)
@@ -1092,60 +1095,105 @@ def create_league_stats_image(stats):
     img = Image.new('RGB', (total_width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # Tentar carregar fontes do Windows - FONTES BEM GRANDES
-    font_title = None
-    font_header = None
-    font_cell = None
-    font_league = None
-    
-    # Tamanhos das fontes (levemente reduzidos)
+    # Tamanhos das fontes
     size_title = 54
     size_header = 25
     size_cell = 35
     size_league = 30
+    size_brand = 40  # Para RW TIPS
     
-    # Lista de fontes Windows para tentar
+    # Lista de fontes para tentar (Windows e Linux)
     font_paths = [
+        # Windows
         "C:\\Windows\\Fonts\\arialbd.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
+        # Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        # Genéricos
         "arial.ttf",
-        "arialbd.ttf",
+        "DejaVuSans-Bold.ttf",
     ]
     
+    font_title = None
+    font_header = None
+    font_cell = None
+    font_league = None
+    font_brand = None
     font_loaded = False
+    
     for font_path in font_paths:
         try:
             font_title = ImageFont.truetype(font_path, size_title)
             font_header = ImageFont.truetype(font_path, size_header)
             font_cell = ImageFont.truetype(font_path, size_cell)
             font_league = ImageFont.truetype(font_path, size_league)
+            font_brand = ImageFont.truetype(font_path, size_brand)
             font_loaded = True
             print(f"[INFO] Fonte carregada: {font_path}")
             break
         except Exception as e:
-            print(f"[WARN] Não foi possível carregar {font_path}: {e}")
             continue
     
     # Fallback para fonte padrão com tamanho customizado
     if not font_loaded:
         print("[WARN] Usando fonte padrão do sistema")
         try:
-            # Pillow 10+ tem load_default com size
             font_title = ImageFont.load_default(size=size_title)
             font_header = ImageFont.load_default(size=size_header)
             font_cell = ImageFont.load_default(size=size_cell)
             font_league = ImageFont.load_default(size=size_league)
+            font_brand = ImageFont.load_default(size=size_brand)
         except:
             font_title = ImageFont.load_default()
             font_header = ImageFont.load_default()
             font_cell = ImageFont.load_default()
             font_league = ImageFont.load_default()
+            font_brand = ImageFont.load_default()
     
-    # Título (sem emoji)
+    # ===== LOGO E BRANDING =====
+    logo_size = 60
+    brand_text = "RW TIPS"
+    
+    # Tentar carregar a logo
+    logo_path = os.path.join(os.path.dirname(__file__), "app_icon.png")
+    logo_loaded = False
+    
+    try:
+        logo = Image.open(logo_path).convert("RGBA")
+        logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+        logo_loaded = True
+        print(f"[INFO] Logo carregada: {logo_path}")
+    except Exception as e:
+        print(f"[WARN] Não foi possível carregar logo: {e}")
+    
+    # Calcular posição centralizada para logo + texto
+    brand_bbox = draw.textbbox((0, 0), brand_text, font=font_brand)
+    brand_w = brand_bbox[2] - brand_bbox[0]
+    
+    if logo_loaded:
+        total_brand_width = logo_size + 15 + brand_w
+        start_x = (total_width - total_brand_width) // 2
+        
+        # Colar logo
+        logo_y = padding
+        img.paste(logo, (start_x, logo_y), logo)
+        
+        # Texto RW TIPS
+        text_x = start_x + logo_size + 15
+        text_y = padding + (logo_size - size_brand) // 2
+        draw.text((text_x, text_y), brand_text, fill=brand_color, font=font_brand)
+    else:
+        # Só texto se não tiver logo
+        draw.text(((total_width - brand_w) // 2, padding), brand_text, fill=brand_color, font=font_brand)
+    
+    # Título secundário
     title = "ANALISE DE LIGAS (5 jogos)"
     title_bbox = draw.textbbox((0, 0), title, font=font_title)
     title_width = title_bbox[2] - title_bbox[0]
-    draw.text(((total_width - title_width) // 2, padding), title, fill=header_color, font=font_title)
+    draw.text(((total_width - title_width) // 2, padding + logo_size + 10), title, fill=header_color, font=font_title)
     
     # Headers das colunas
     headers = ["HT 0.5+", "HT 1.5+", "HT BTTS", "FT 1.5+", "FT 2.5+", "FT BTTS"]
