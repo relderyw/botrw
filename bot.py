@@ -1066,52 +1066,51 @@ async def update_league_stats(bot, recent_matches):
 def create_league_stats_image(stats):
     """Cria imagem com heatmap das estatísticas"""
     
-    # Cores
-    bg_color = (26, 26, 46)  # #1a1a2e
-    card_bg = (15, 52, 96)   # #0f3460
-    header_bg = (22, 33, 62)  # #16213e
+    # Cores - FUNDO PRETO
+    bg_color = (0, 0, 0)  # Preto puro
+    card_bg = (20, 20, 20)  # Cinza muito escuro
+    header_bg = (30, 30, 30)  # Cinza escuro
     text_color = (255, 255, 255)
-    header_color = (78, 205, 196)  # #4ecdc4
-    gold_color = (255, 215, 0)
+    header_color = (0, 255, 200)  # Cyan/Verde
+    gold_color = (255, 200, 50)  # Dourado
     
     # Configurações
     sorted_leagues = sorted(stats.keys())
     num_leagues = len(sorted_leagues)
     
-    # Dimensões MAIORES para melhor visualização
-    cell_width = 140
-    cell_height = 75
-    label_width = 260
-    header_height = 100
-    padding = 30
+    # Dimensões GRANDES
+    cell_width = 160
+    cell_height = 90
+    label_width = 300
+    header_height = 120
+    padding = 40
     
     total_width = label_width + (6 * cell_width) + (2 * padding)
-    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 80
+    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 120
     
     # Criar imagem
     img = Image.new('RGB', (total_width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # Tentar carregar fontes do Windows
+    # Tentar carregar fontes do Windows - MAIS MODERNAS E MAIORES
     font_title = None
     font_header = None
     font_cell = None
     font_league = None
     
-    # Lista de fontes Windows para tentar
-    windows_fonts = [
-        "C:/Windows/Fonts/arialbd.ttf",  # Arial Bold
-        "C:/Windows/Fonts/arial.ttf",     # Arial
-        "C:/Windows/Fonts/segoeui.ttf",   # Segoe UI
-        "C:/Windows/Fonts/calibri.ttf",   # Calibri
+    # Lista de fontes Windows para tentar (priorizando Segoe UI Bold)
+    windows_fonts_bold = [
+        "C:/Windows/Fonts/segoeuib.ttf",  # Segoe UI Bold
+        "C:/Windows/Fonts/arialbd.ttf",   # Arial Bold
+        "C:/Windows/Fonts/calibrib.ttf",  # Calibri Bold
     ]
     
-    for font_path in windows_fonts:
+    for font_path in windows_fonts_bold:
         try:
-            font_title = ImageFont.truetype(font_path, 42)
-            font_header = ImageFont.truetype(font_path, 22)
-            font_cell = ImageFont.truetype(font_path, 30)
-            font_league = ImageFont.truetype(font_path, 22)
+            font_title = ImageFont.truetype(font_path, 52)
+            font_header = ImageFont.truetype(font_path, 28)
+            font_cell = ImageFont.truetype(font_path, 38)
+            font_league = ImageFont.truetype(font_path, 26)
             break
         except:
             continue
