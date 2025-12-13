@@ -1010,12 +1010,10 @@ async def update_league_stats(bot, recent_matches):
                 'ht': {
                     'o05': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 0)),
                     'o15': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 1)),
-                    'o25': calc_pct(sum(1 for g in last_n if g['ht_goals'] > 2)),
                     'btts': calc_pct(sum(1 for g in last_n if g['ht_btts'])),
                     '0x0': calc_pct(sum(1 for g in last_n if g['ht_goals'] == 0))
                 },
                 'ft': {
-                    'o05': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 0)),
                     'o15': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 1)),
                     'o25': calc_pct(sum(1 for g in last_n if g['ft_goals'] > 2)),
                     'btts': calc_pct(sum(1 for g in last_n if g['ft_btts'])),
@@ -1033,50 +1031,51 @@ async def update_league_stats(bot, recent_matches):
             
         league_stats = stats
         
-        # Nova formatação: limpa, organizada e fácil de ler
-        summary = "📊 <b>RESUMO DE LIGAS</b> (Últimos 5 jogos)\n"
-        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        def get_bar(pct):
+            """Cria barra de termômetro visual com gradiente"""
+            # Barra de 10 blocos
+            filled = int(pct / 10)
+            
+            # Cores do gradiente: vermelho -> laranja -> amarelo -> verde
+            colors = []
+            for i in range(10):
+                if i < 3:  # 0-30% vermelho
+                    colors.append('🔴')
+                elif i < 5:  # 30-50% laranja
+                    colors.append('🟠')
+                elif i < 7:  # 50-70% amarelo
+                    colors.append('🟡')
+                else:  # 70-100% verde
+                    colors.append('🟢')
+            
+            # Monta a barra
+            bar = ""
+            for i in range(10):
+                if i < filled:
+                    bar += colors[i]
+                else:
+                    bar += "⚪"
+            
+            return f"{bar} {pct}%"
         
-        def get_emoji(pct):
-            """Retorna emoji baseado na porcentagem"""
-            if pct >= 95: return "🟢"
-            elif pct >= 75: return "🟡"
-            elif pct >= 55: return "🟠"
-            else: return "🔴"
-        
-        def format_stat(label, pct):
-            """Formata uma estatística com alinhamento"""
-            emoji = get_emoji(pct)
-            return f"{label}: {pct:>3}% {emoji}"
+        # Mensagem compacta com termômetros
+        summary = "📊 <b>ANÁLISE DE LIGAS</b> (5 jogos)\n\n"
         
         for league in sorted(stats.keys()):
             s = stats[league]
             h = s['ht']
             f = s['ft']
             
-            # Cabeçalho da liga
-            summary += f"🏆 <b>{league}</b>\n\n"
-            
-            # Estatísticas HT
-            summary += "⏱ <b>PRIMEIRO TEMPO (HT)</b>\n"
-            summary += f"  {format_stat('Over 0.5', h['o05'])}\n"
-            summary += f"  {format_stat('Over 1.5', h['o15'])}\n"
-            summary += f"  {format_stat('BTTS    ', h['btts'])}\n"
-            summary += f"  {format_stat('0x0     ', h['0x0'])}\n\n"
-            
-            # Estatísticas FT
-            summary += "⏰ <b>TEMPO COMPLETO (FT)</b>\n"
-            summary += f"  {format_stat('Over 1.5', f['o15'])}\n"
-            summary += f"  {format_stat('Over 2.5', f['o25'])}\n"
-            summary += f"  {format_stat('BTTS    ', f['btts'])}\n"
-            summary += f"  {format_stat('0x0     ', f['0x0'])}\n\n"
-            
-            summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            summary += f"🏆 <b>{league}</b>\n"
+            summary += f"HT 0.5+ {get_bar(h['o05'])}\n"
+            summary += f"HT 1.5+ {get_bar(h['o15'])}\n"
+            summary += f"HT BTTS {get_bar(h['btts'])}\n"
+            summary += f"FT 1.5+ {get_bar(f['o15'])}\n"
+            summary += f"FT 2.5+ {get_bar(f['o25'])}\n"
+            summary += f"FT BTTS {get_bar(f['btts'])}\n\n"
         
-        # Legenda no final
-        summary += "<i>Legenda:</i>\n"
-        summary += "🟢 Forte (95%+) | 🟡 Médio (75-94%)\n"
-        summary += "🟠 Fraco (55-74%) | 🔴 Baixo (<55%)\n"
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        summary += "<i>🔴0-30 🟠30-50 🟡50-70 🟢70-100</i>"
         
         if summary != last_league_summary:
             if last_league_message_id:
@@ -1087,7 +1086,7 @@ async def update_league_stats(bot, recent_matches):
             msg = await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
             last_league_summary = summary
             last_league_message_id = msg.message_id
-            print("[✓] Resumo das ligas atualizado com layout melhorado")
+            print("[✓] Resumo das ligas atualizado com termômetros")
     
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
