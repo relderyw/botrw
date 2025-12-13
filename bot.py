@@ -1096,8 +1096,8 @@ def create_league_stats_image(stats):
     draw = ImageDraw.Draw(img)
     
     # Tamanhos das fontes
-    size_title = 44
-    size_header = 30
+    size_title = 30
+    size_header = 25
     size_cell = 35
     size_league = 25
     size_brand = 35  # Para RW TIPS
