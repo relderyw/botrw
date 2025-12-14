@@ -840,12 +840,13 @@ async def check_results(bot):
     try:
         recent = fetch_recent_matches(page=1, page_size=50)
         
-        finished_matches = {}
+        # Agrupar partidas por jogadores, mantendo múltiplas partidas
+        finished_matches = defaultdict(list)
         for match in recent:
             home = match.get('home_player', '').upper()
             away = match.get('away_player', '').upper()
             key = f"{home}_{away}"
-            finished_matches[key] = match
+            finished_matches[key].append(match)
         
         today = datetime.now(MANAUS_TZ).date()
         greens = reds = refunds = 0
@@ -859,74 +860,107 @@ async def check_results(bot):
                 away = (tip.get('away_player') or '').upper()
                 key = f"{home}_{away}"
                 
-                match = finished_matches.get(key)
-                if match:
-                    ht_home = match.get('home_score_ht', 0) or 0
-                    ht_away = match.get('away_score_ht', 0) or 0
-                    ht_total = ht_home + ht_away
-                    
-                    ft_home = match.get('home_score_ft', 0) or 0
-                    ft_away = match.get('away_score_ft', 0) or 0
-                    ft_total = ft_home + ft_away
-                    
-                    strategy = tip['strategy']
-                    
-                    result = None
-                    if '+0.5 GOL HT' in strategy:
-                        result = 'green' if ht_total >= 1 else 'red'
-                    elif '+1.5 GOLS HT' in strategy:
-                        result = 'green' if ht_total >= 2 else 'red'
-                    elif '+2.5 GOLS HT' in strategy:
-                        result = 'green' if ht_total >= 3 else 'red'
-                    elif 'BTTS HT' in strategy:
-                        result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
-                    elif '+1.5 GOLS FT' in strategy:
-                        result = 'green' if ft_total >= 2 else 'red'
-                    elif '+2.5 GOLS FT' in strategy:
-                        if "⚽ Player" in strategy or "⚽ " in strategy and "GOLS FT" in strategy and not strategy.startswith("⚽ +2.5 GOLS FT"):
-                             try:
-                                player_name = strategy.replace("⚽ ", "").replace(" +2.5 GOLS FT", "").strip().upper()
-                                if player_name == home:
-                                    result = 'green' if ft_home >= 3 else 'red'
-                                elif player_name == away:
-                                    result = 'green' if ft_away >= 3 else 'red'
-                             except:
-                                 pass
-                        else:
-                            result = 'green' if ft_total >= 3 else 'red'
-                            
-                    elif '+3.5 GOLS FT' in strategy:
-                        result = 'green' if ft_total >= 4 else 'red'
-                    elif '+4.5 GOLS FT' in strategy:
-                        result = 'green' if ft_total >= 5 else 'red'
-                    
-                    elif '+1.5 GOLS FT' in strategy and ("⚽ Player" in strategy or "⚽ " in strategy and not strategy.startswith("⚽ +1.5 GOLS FT")):
-                         try:
-                            player_name = strategy.replace("⚽ ", "").replace(" +1.5 GOLS FT", "").strip().upper()
-                            if player_name == home:
-                                result = 'green' if ft_home >= 2 else 'red'
-                            elif player_name == away:
-                                result = 'green' if ft_away >= 2 else 'red'
-                         except:
-                             pass
-                    
-                    if result:
-                        tip['status'] = result
-                        
-                        emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
-                        new_text = tip['message_text'] + f"\n{emoji}"
-                        
+                # Buscar a partida correta baseada no horário
+                matches_for_players = finished_matches.get(key, [])
+                match = None
+                
+                for m in matches_for_players:
+                    match_time_str = m.get('data_realizacao', '')
+                    if match_time_str:
                         try:
-                            await bot.edit_message_text(
-                                chat_id=CHAT_ID,
-                                message_id=tip['message_id'],
-                                text=new_text,
-                                parse_mode="HTML",
-                                disable_web_page_preview=True
-                            )
-                            print(f"[✓] Resultado atualizado: {tip['event_id']} - {result}")
+                            # Parse da data da partida
+                            match_time = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
+                            
+                            # Converter para timezone de Manaus
+                            if match_time.tzinfo is None:
+                                match_time = match_time.replace(tzinfo=timezone.utc)
+                            match_time_local = match_time.astimezone(MANAUS_TZ)
+                            
+                            tip_time = tip['sent_time']
+                            
+                            # A partida deve ter sido realizada DEPOIS do envio da tip
+                            # Margem: 5 min antes (tolerância) até 30 min depois do envio
+                            time_diff = (match_time_local - tip_time).total_seconds()
+                            
+                            # Partida ocorreu entre 5 min antes e 30 min depois do envio
+                            if -300 <= time_diff <= 1800:
+                                match = m
+                                print(f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
+                                break
                         except Exception as e:
-                            print(f"[ERROR] edit_message: {e}")
+                            print(f"[WARN] Erro ao parsear data da partida: {e}")
+                            continue
+                
+                # Se não encontrou pelo horário, NÃO usar partida antiga
+                if not match:
+                    continue
+                
+                ht_home = match.get('home_score_ht', 0) or 0
+                ht_away = match.get('away_score_ht', 0) or 0
+                ht_total = ht_home + ht_away
+                
+                ft_home = match.get('home_score_ft', 0) or 0
+                ft_away = match.get('away_score_ft', 0) or 0
+                ft_total = ft_home + ft_away
+                
+                strategy = tip['strategy']
+                
+                result = None
+                if '+0.5 GOL HT' in strategy:
+                    result = 'green' if ht_total >= 1 else 'red'
+                elif '+1.5 GOLS HT' in strategy:
+                    result = 'green' if ht_total >= 2 else 'red'
+                elif '+2.5 GOLS HT' in strategy:
+                    result = 'green' if ht_total >= 3 else 'red'
+                elif 'BTTS HT' in strategy:
+                    result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
+                elif '+1.5 GOLS FT' in strategy:
+                    result = 'green' if ft_total >= 2 else 'red'
+                elif '+2.5 GOLS FT' in strategy:
+                    if "⚽ Player" in strategy or "⚽ " in strategy and "GOLS FT" in strategy and not strategy.startswith("⚽ +2.5 GOLS FT"):
+                        try:
+                            player_name = strategy.replace("⚽ ", "").replace(" +2.5 GOLS FT", "").strip().upper()
+                            if player_name == home:
+                                result = 'green' if ft_home >= 3 else 'red'
+                            elif player_name == away:
+                                result = 'green' if ft_away >= 3 else 'red'
+                        except:
+                            pass
+                    else:
+                        result = 'green' if ft_total >= 3 else 'red'
+                        
+                elif '+3.5 GOLS FT' in strategy:
+                    result = 'green' if ft_total >= 4 else 'red'
+                elif '+4.5 GOLS FT' in strategy:
+                    result = 'green' if ft_total >= 5 else 'red'
+                
+                elif '+1.5 GOLS FT' in strategy and ("⚽ Player" in strategy or "⚽ " in strategy and not strategy.startswith("⚽ +1.5 GOLS FT")):
+                    try:
+                        player_name = strategy.replace("⚽ ", "").replace(" +1.5 GOLS FT", "").strip().upper()
+                        if player_name == home:
+                            result = 'green' if ft_home >= 2 else 'red'
+                        elif player_name == away:
+                            result = 'green' if ft_away >= 2 else 'red'
+                    except:
+                        pass
+                
+                if result:
+                    tip['status'] = result
+                    
+                    emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
+                    new_text = tip['message_text'] + f"\n{emoji}"
+                    
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=CHAT_ID,
+                            message_id=tip['message_id'],
+                            text=new_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True
+                        )
+                        print(f"[✓] Resultado atualizado: {tip['event_id']} - {result}")
+                    except Exception as e:
+                        print(f"[ERROR] edit_message: {e}")
             
             if tip['status'] == 'green': greens += 1
             if tip['status'] == 'red': reds += 1
@@ -1294,7 +1328,8 @@ def create_league_stats_image(stats):
     league_scores = {}
     for league in sorted_leagues:
         s = stats[league]
-        avg_over = (s['ht']['o05'] + s['ht']['o15'] + s['ft']['o15'] + s['ft']['o25']) / 4
+        # Média de todos os 6 valores (HT 0.5+, HT 1.5+, HT BTTS, FT 1.5+, FT 2.5+, FT BTTS)
+        avg_over = (s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] + s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']) / 6
         league_scores[league] = avg_over
     
     best_over = max(league_scores, key=league_scores.get)
