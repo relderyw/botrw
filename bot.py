@@ -787,6 +787,33 @@ def get_trend_emoji(perc, inverse=False):
 # =============================================================================
 # ENVIO DE MENSAGENS
 # =============================================================================
+def calculate_tip_averages(home_stats, away_stats):
+    """Calcula as médias HT e Geral para filtragem"""
+    if not home_stats or not away_stats:
+        return 0, 0
+
+    # Métricas HT: +0.5, +1.5, +2.5 e BTTS HT
+    ht_metrics = [
+        home_stats.get('ht_over_05_pct', 0), home_stats.get('ht_over_15_pct', 0),
+        home_stats.get('ht_over_25_pct', 0), home_stats.get('ht_btts_pct', 0),
+        away_stats.get('ht_over_05_pct', 0), away_stats.get('ht_over_15_pct', 0),
+        away_stats.get('ht_over_25_pct', 0), away_stats.get('ht_btts_pct', 0)
+    ]
+    
+    # Métricas FT: +1.5, +2.5 e BTTS FT
+    ft_metrics = [
+        home_stats.get('ft_over_15_pct', 0), home_stats.get('ft_over_25_pct', 0),
+        home_stats.get('btts_pct', 0),
+        away_stats.get('ft_over_15_pct', 0), away_stats.get('ft_over_25_pct', 0),
+        away_stats.get('btts_pct', 0)
+    ]
+
+    avg_ht = sum(ht_metrics) / len(ht_metrics) if ht_metrics else 0
+    all_metrics = ht_metrics + ft_metrics
+    avg_total = sum(all_metrics) / len(all_metrics) if all_metrics else 0
+
+    return avg_ht, avg_total
+
 
 async def send_tip(bot, event, strategy, home_stats, away_stats):
     """Envia uma dica para o Telegram"""
@@ -794,7 +821,21 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
     
     if event_id in sent_match_ids:
         return
+
+    # Verificação de Médias (Novo Ajuste)
+    avg_ht, avg_total = calculate_tip_averages(home_stats, away_stats)
     
+    # Logs para depuração
+    print(f"[DEBUG] {event.get('homePlayer')} vs {event.get('awayPlayer')} | Média HT: {avg_ht:.1f}% | Média Geral: {avg_total:.1f}%")
+
+    if avg_ht < 85:
+        print(f"[INFO] Dica ignorada: Média HT ({avg_ht:.1f}%) abaixo de 85%")
+        return
+    
+    if avg_total < 92:
+        print(f"[INFO] Dica ignorada: Média Geral ({avg_total:.1f}%) abaixo de 92%")
+        return
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -816,8 +857,23 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'message_id': message_obj.message_id,
                 'message_text': msg,
                 'home_player': event.get('homePlayer'),
-                'away_player': event.get('awayPlayer')
+                'away_player': event.get('awayPlayer'),
+                'league': event.get('leagueName', 'Outros')
             })
+            
+            # Normalizar nome da liga na tip recém enviada
+            league_mapping = {
+                'Esoccer GT Leagues – 12 mins play': 'GT LEAGUE 12 MIN',
+                'Esoccer GT Leagues - 12 mins play': 'GT LEAGUE 12 MIN',
+                'Esoccer Battle Volta - 6 mins play': 'VOLTA 6 MIN',
+                'Esoccer H2H GG League - 8 mins play': 'H2H 8 MIN',
+                'Esoccer Battle - 8 mins play': 'BATTLE 8 MIN'
+            }
+            raw_league = sent_tips[-1]['league']
+            for key, value in league_mapping.items():
+                if key in raw_league:
+                    sent_tips[-1]['league'] = value
+                    break
             
             print(f"[✓] Dica enviada: {event_id} - {strategy}")
             break
@@ -1455,6 +1511,68 @@ async def results_checker(bot):
             print(f"[ERROR] results_checker: {e}")
             await asyncio.sleep(180)
 
+async def send_hourly_summary(bot):
+    """Loop para enviar resumo por liga a cada 1 hora"""
+    print("[INFO] Iniciando enviador de resumo horário por liga...")
+    
+    while True:
+        try:
+            # Esperar até o próximo início de hora
+            now = datetime.now(MANAUS_TZ)
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            wait_seconds = (next_hour - now).total_seconds()
+            
+            print(f"[INFO] Resumo horário agendado para {next_hour.strftime('%H:%M:%S')}")
+            await asyncio.sleep(wait_seconds)
+            
+            # Gerar resumo
+            today = datetime.now(MANAUS_TZ).date()
+            league_stats_summary = defaultdict(lambda: {'green': 0, 'red': 0, 'total': 0})
+            
+            for tip in sent_tips:
+                if tip['sent_time'].date() != today:
+                    continue
+                
+                league = tip.get('league', 'OUTROS')
+                status = tip.get('status')
+                
+                if status in ['green', 'red']:
+                    league_stats_summary[league][status] += 1
+                    league_stats_summary[league]['total'] += 1
+            
+            if not league_stats_summary:
+                print("[INFO] Nenhum resultado para o resumo horário")
+                continue
+                
+            msg = "📊 <b>RESUMO POR LIGA (HOJE)</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            has_data = False
+            for league, stats in sorted(league_stats_summary.items()):
+                total = stats['total']
+                if total == 0: continue
+                
+                has_data = True
+                greens = stats['green']
+                reds = stats['red']
+                perc = (greens / total) * 100
+                
+                msg += f"🏆 <b>LIGA: {league}</b>\n"
+                msg += f"💠 TOTAL: {total} TIPS\n"
+                msg += f"✅ GREEN: {greens} ({perc:.0f}%)\n"
+                msg += f"❌ RED: {reds}\n\n"
+            
+            if not has_data:
+                continue
+                
+            msg += "━━━━━━━━━━━━━━━━━━━━"
+            
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
+            print("[✓] Resumo horário por liga enviado")
+            
+        except Exception as e:
+            print(f"[ERROR] send_hourly_summary: {e}")
+            await asyncio.sleep(60)
+
 # =============================================================================
 # INICIALIZAÇÃO
 # =============================================================================
@@ -1502,7 +1620,8 @@ async def main():
     
     await asyncio.gather(
         main_loop(bot),
-        results_checker(bot)
+        results_checker(bot),
+        send_hourly_summary(bot)
     )
 
 if __name__ == "__main__":
