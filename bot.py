@@ -283,23 +283,19 @@ def analyze_player_adaptive(matches, player_name):
         print(f"[ALERT] Bloqueando análise para evitar tips perigosas")
         return None  # VETO! Não analisa jogador que esfriou
     
-    # 2. Usar até 10 jogos (não 15)
-    actual_n = min(len(matches), 10)
+    # 2. Usar até 5 jogos (conforme solicitado pelo usuário, foco total em recente)
+    actual_n = min(len(matches), 5)
     last_n = matches[:actual_n]
     
-    # 3. PESOS ADAPTATIVOS - AGGRESSIVAMENTE focados em momento
+    # 3. PESOS ADAPTATIVOS - Foco em momento (5 jogos)
     # Últimos 3 jogos = ~75% do peso total
-    # Jogos 4-10 = ~25% do peso total
-    if actual_n >= 5:
-        # Decay MUITO agressivo após os primeiros 3 jogos
-        weights = [
-            1.0, 0.95, 0.85,  # Jogos 1-3: peso total ~2.8 (70%)
-            0.40, 0.30,       # Jogos 4-5: peso total ~0.7 (18%)
-            0.20, 0.12, 0.08, 0.05, 0.03  # Jogos 6-10: peso total ~0.48 (12%)
-        ][:actual_n]
-    else:
-        # Se tem só 5 jogos, peso mais distribuído
-        weights = [1.0, 0.90, 0.75, 0.50, 0.35][:actual_n]
+    # Jogos 4-5 = ~25% do peso total
+    
+    # Pesos para 5 jogos
+    weights = [
+        1.0, 0.95, 0.85,  # Jogos 1-3: peso total ~2.8 (74%)
+        0.50, 0.50        # Jogos 4-5: peso total ~1.0 (26%)
+    ][:actual_n]
     
     total_weight = sum(weights)
     
@@ -481,6 +477,19 @@ def calculate_confidence(home_stats, away_stats, league_stats, h2h_data, strateg
             league_metric = (l_stats['ft']['o15'] + l_stats['ft']['o25']) / 2
         
         confidence += (league_metric / 100) * 30
+        
+        # ========== PENALIDADE: LIGA FRACA (Base Rate Fallacy) ==========
+        # Se a média da liga é baixa (< 65%), exige performance EXCEPCIONAL dos players
+        # Penaliza confidence para evitar entradas "médias" em ligas "ruins"
+        if league_metric < 65:
+            penalty = 15  # Penalidade severa
+            # Se for muito baixa (< 55%), penaliza mais ainda
+            if league_metric < 55:
+                penalty = 25
+            
+            print(f"[WARN] Liga com desempenho baixo ({league_metric}%) - Penalidade de -{penalty} no confidence")
+            confidence -= penalty
+
     else:
         # Se não tiver dados da liga, penalizar levemente
         confidence += 15  # 50% do máximo possível
@@ -1821,11 +1830,12 @@ async def send_hourly_summary(bot):
             next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
             wait_seconds = (next_hour - now).total_seconds()
             
-            print(f"[INFO] Resumo horário agendado para {next_hour.strftime('%H:%M:%S')}")
+            print(f"[INFO] Resumo horário agendado para {next_hour.strftime('%H:%M:%S')} (Aguardando {wait_seconds:.0f}s)")
             await asyncio.sleep(wait_seconds)
             
             # Gerar resumo
             today = datetime.now(MANAUS_TZ).date()
+            print(f"[DEBUG] Executando resumo horário. Tips em memória: {len(sent_tips)}")
             league_stats_summary = defaultdict(lambda: {'green': 0, 'red': 0, 'total': 0})
             
             for tip in sent_tips:
