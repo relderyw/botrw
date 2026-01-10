@@ -26,7 +26,7 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
-LIVE_API_URL = "https://app3.caveiratips.com.br/api/live-events/"
+LIVE_API_URL = "https://rwtips-r943.onrender.com/api/matches/live"
 RECENT_MATCHES_URL = "https://api.caveiratips.com/api/v1/historico/partidas"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
@@ -52,17 +52,88 @@ league_stats = {}
 # FUNÇÕES DE REQUISIÇÃO
 # =============================================================================
 
+def extract_player_name(full_name_str):
+    """
+    Extrai o nome do jogador do formato 'Time (Jogador)' ou retorna a string original.
+    Ex: 'River Plate (Sheva)' -> 'Sheva'
+    Ex: 'Sheva' -> 'Sheva'
+    """
+    if not full_name_str:
+        return ""
+    
+    match = re.search(r'\((.*?)\)', full_name_str)
+    if match:
+        return match.group(1).strip()
+    return full_name_str.strip()
+
 def fetch_live_matches():
-    """Busca partidas ao vivo da nova API"""
+    """Busca partidas ao vivo da nova API e adapta para o formato esperado"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
             response = requests.get(LIVE_API_URL, timeout=15)
             response.raise_for_status()
             data = response.json()
-            events = data.get('events', [])
-            print(f"[INFO] {len(events)} partidas ao vivo encontradas")
-            return events
+            
+            # Nova estrutura: a lista está em 'data'
+            raw_events = data.get('data') or []
+            
+            normalized_events = []
+            
+            for item in raw_events:
+                if not item:
+                    continue
+                    
+                # Extrair dados básicos
+                # Extrair dados básicos
+                event_id = item.get('id')
+                league_info = item.get('league') or {}
+                league_name = league_info.get('name', '')
+                
+                # Extrair e limpar nomes dos jogadores
+                home_info = item.get('home') or {}
+                away_info = item.get('away') or {}
+                
+                home_raw_name = home_info.get('name', '')
+                away_raw_name = away_info.get('name', '')
+                
+                home_player = extract_player_name(home_raw_name)
+                away_player = extract_player_name(away_raw_name)
+                
+                # Extrair placar
+                # ss: "3-1"
+                ss = item.get('ss', '0-0')
+                try:
+                    home_goals, away_goals = map(int, ss.split('-'))
+                except:
+                    home_goals, away_goals = 0, 0
+                
+                # Extrair tempo
+                timer = item.get('timer') or {}
+                tm = timer.get('tm', 0) # Minutos
+                ts = timer.get('ts', 0) # Segundos
+                
+                # Construir objeto evento normalizado (compatível com o resto do código)
+                event = {
+                    'id': event_id,
+                    'leagueName': league_name,
+                    'homePlayer': home_player,
+                    'awayPlayer': away_player,
+                    'bet365EventId': event_id, # Usando o mesmo ID por enquanto
+                    'score': {
+                        'home': home_goals,
+                        'away': away_goals
+                    },
+                    'timer': {
+                        'minute': tm,
+                        'second': ts
+                    }
+                }
+                normalized_events.append(event)
+                
+            print(f"[INFO] {len(normalized_events)} partidas ao vivo encontradas (Nova API)")
+            return normalized_events
+            
         except requests.exceptions.Timeout:
             print(f"[WARN] Timeout ao buscar partidas ao vivo (tentativa {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
