@@ -1093,8 +1093,8 @@ async def send_tip(bot, event, strategy_dict, home_stats, away_stats):
     confidence = strategy_dict.get('confidence', 0)
     
     # Filtro de confidence mínimo
-    if confidence > 0 and confidence < 70:
-        print(f"[INFO] Dica ignorada: Confidence ({confidence:.1f}%) abaixo de 70%")
+    if confidence > 0 and confidence < 80:
+        print(f"[INFO] Dica ignorada: Confidence ({confidence:.1f}%) abaixo de 80%")
         return
 
     # Verificação de Médias (Filtro legado - mantido como backup)
@@ -1106,8 +1106,8 @@ async def send_tip(bot, event, strategy_dict, home_stats, away_stats):
     # Se tiver confidence, priorizar ele; senão usar filtro legado
     if confidence > 0:
         # Sistema novo: usa confidence
-        if confidence < 70:
-            print(f"[INFO] Dica ignorada: Confidence ({confidence:.1f}%) abaixo de 70%")
+        if confidence < 80:
+            print(f"[INFO] Dica ignorada: Confidence ({confidence:.1f}%) abaixo de 80%")
             return
     else:
         # Sistema legado: usa médias antigas
