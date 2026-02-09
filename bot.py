@@ -41,6 +41,13 @@ MANAUS_TZ = timezone(timedelta(hours=-4))
 player_stats_cache = {}  # {player_name: {stats, timestamp}}
 CACHE_TTL = 300  # 5 minutos
 
+# Cache global de partidas (já que a API retorna tudo de uma vez)
+global_matches_cache = {
+    'data': [],
+    'timestamp': 0
+}
+GLOBAL_CACHE_TTL = 300 # 5 minutos
+
 sent_tips = []
 sent_match_ids = set()
 last_summary = None
@@ -73,141 +80,139 @@ def fetch_live_matches():
                 time.sleep(2)
     return []
 
+def get_all_matches_cached():
+    """Retorna todas as partidas cacheadas ou busca da API"""
+    now = time.time()
+    if global_matches_cache['data'] and (now - global_matches_cache['timestamp'] < GLOBAL_CACHE_TTL):
+        return global_matches_cache['data']
+    
+    # Busca nova
+    try:
+        print("[INFO] Buscando todas as partidas da API (Global Cache)...")
+        # Usando a URL que retorna tudo
+        url = "https://rwtips-r943.onrender.com/api/rw-matches"
+        response = requests.get(url, timeout=45) # Timeout maior pois é pesado
+        response.raise_for_status()
+        data = response.json()
+        
+        raw_matches = data if isinstance(data, list) else data.get('partidas', [])
+        
+        # Normalização única para todos
+        normalized_matches = []
+        for match in raw_matches:
+            normalized_matches.append({
+                'id': match.get('id'),
+                'league_name': match.get('league'),
+                'home_player': match.get('homeTeam'),
+                'away_player': match.get('awayTeam'),
+                'home_team': match.get('homeClub'),
+                'away_team': match.get('awayClub'),
+                'data_realizacao': match.get('matchTime'),
+                'home_score_ht': match.get('homeHT'),
+                'away_score_ht': match.get('awayHT'),
+                'home_score_ft': match.get('homeFT'),
+                'away_score_ft': match.get('awayFT')
+            })
+            
+        global_matches_cache['data'] = normalized_matches
+        global_matches_cache['timestamp'] = now
+        print(f"[INFO] Cache global atualizado: {len(normalized_matches)} partidas")
+        return normalized_matches
+        
+    except Exception as e:
+        print(f"[ERROR] Erro ao atualizar cache global: {e}")
+        return global_matches_cache['data'] # Retorna o que tiver (mesmo vazio/velho)
+
 def fetch_recent_matches(page=1, page_size=100):
-    """Busca partidas recentes finalizadas - Nova API"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            params = {'page': page, 'limit': page_size}
-            headers = {'Authorization': AUTH_HEADER}
-            
-            response = requests.get(RECENT_MATCHES_URL, headers=headers, params=params, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            
-            raw_matches = data if isinstance(data, list) else data.get('partidas', [])
-            # Otimização: API ignora limit, então cortamos manualmente
-            if len(raw_matches) > page_size:
-                raw_matches = raw_matches[:page_size]
-            normalized_matches = []
-            
-            for match in raw_matches:
-                normalized_matches.append({
-                    'id': match.get('id'),
-                    'league_name': match.get('league'),
-                    'home_player': match.get('homeTeam'),
-                    'away_player': match.get('awayTeam'),
-                    'home_team': match.get('homeClub'),
-                    'away_team': match.get('awayClub'),
-                    'data_realizacao': match.get('matchTime'),
-                    'home_score_ht': match.get('homeHT'),
-                    'away_score_ht': match.get('awayHT'),
-                    'home_score_ft': match.get('homeFT'),
-                    'away_score_ft': match.get('awayFT')
-                })
-            
-            print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas")
-            return normalized_matches
-            
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar partidas recentes (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_recent_matches: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return []
+    """Busca partidas recentes finalizadas - Usa Cache Global"""
+    all_matches = get_all_matches_cached()
+    
+    # Paginação manual
+    start = (page - 1) * page_size
+    end = start + page_size
+    
+    if start >= len(all_matches):
+        return []
+        
+    return all_matches[start:end]
 
 def fetch_player_individual_stats(player_name, use_cache=True):
-    """Busca estatísticas individuais de um jogador (últimos jogos) - Nova API"""
-    
+    """Busca estatísticas individuais de um jogador - Filtragem Local"""
     if use_cache and player_name in player_stats_cache:
         cached = player_stats_cache[player_name]
         if time.time() - cached['timestamp'] < CACHE_TTL:
-            print(f"[CACHE] Stats de {player_name} do cache")
             return cached['stats']
-    
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = "https://rwtips-r943.onrender.com/api/rw-matches"
-            params = {'jogador': player_name, 'limit': 20, 'page': 1}
-                        
-            response = requests.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            data_raw = response.json()
-            
-            normalized_matches = []
-            raw_matches = data_raw if isinstance(data_raw, list) else data_raw.get('partidas', [])
-            # Otimização: API ignora limit (retorna 80k+), cortar manualmente
-            if len(raw_matches) > 20:
-                raw_matches = raw_matches[:20]
-            
-            normalized_matches = []
-            for match in raw_matches:
-                normalized_match = {
-                    'id': match.get('id'),
-                    'league_name': match.get('league'),
-                    'home_player': match.get('homeTeam'),
-                    'away_player': match.get('awayTeam'),
-                    'home_team': match.get('homeClub'),
-                    'away_team': match.get('awayClub'),
-                    'data_realizacao': match.get('matchTime'),
-                    'home_score_ht': match.get('homeHT'),
-                    'away_score_ht': match.get('awayHT'),
-                    'home_score_ft': match.get('homeFT'),
-                    'away_score_ft': match.get('awayFT')
-                }
-                normalized_matches.append(normalized_match)
-                
-            total_count = len(raw_matches)
-            if isinstance(data_raw, dict):
-                 total_count = data_raw.get('paginacao', {}).get('total_partidas', total_count)
 
-            final_data = {
-                'matches': normalized_matches,
-                'total_count': total_count
-            }
+    all_matches = get_all_matches_cached()
+    
+    # Filtrar partidas do jogador (Case Insensitive)
+    player_matches = []
+    p_upper = player_name.upper()
+    
+    for m in all_matches:
+        h = m.get('home_player', '').upper()
+        a = m.get('away_player', '').upper()
+        if h == p_upper or a == p_upper:
+            player_matches.append(m)
             
-            player_stats_cache[player_name] = {
-                'stats': final_data,
-                'timestamp': time.time()
-            }
-            
-            print(f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
-            return final_data
-            
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar stats de {player_name} (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_player_individual_stats {player_name}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return None
+    # Limitar a 20 jogos mais recentes (assumindo que a API retorna ordenado por data desc)
+    # Se não tiver ordenado, deveríamos ordenar por 'data_realizacao' aqui.
+    # Assumindo ordem da API para manter performance.
+    recent_matches = player_matches[:20]
+    
+    final_data = {
+        'matches': recent_matches,
+        'total_count': len(player_matches)
+    }
+    
+    player_stats_cache[player_name] = {
+        'stats': final_data,
+        'timestamp': time.time()
+    }
+    
+    print(f"[INFO] Stats de {player_name}: {len(recent_matches)} recentes de {len(player_matches)} totais")
+    return final_data
 
 def fetch_h2h_data(player1, player2):
-    """Busca dados H2H entre dois jogadores"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = H2H_API_URL.format(player1=player1, player2=player2)
-            response = requests.get(url, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            print(f"[INFO] H2H {player1} vs {player2}: {data.get('total_matches', 0)} jogos")
-            return data
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar H2H (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_h2h_data {player1} vs {player2}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return None
+    """Busca dados H2H entre dois jogadores - Filtragem Local"""
+    all_matches = get_all_matches_cached()
+    
+    p1 = player1.upper()
+    p2 = player2.upper()
+    
+    h2h_matches = []
+    
+    for m in all_matches:
+        h = m.get('home_player', '').upper()
+        a = m.get('away_player', '').upper()
+        
+        # Verifica se o jogo é entre p1 e p2 (em qualquer ordem)
+        if (h == p1 and a == p2) or (h == p2 and a == p1):
+            h2h_matches.append(m)
+            
+    # Calcular estatísticas básicas H2H
+    total = len(h2h_matches)
+    if total == 0:
+        return {'total_matches': 0}
+        
+    btts = 0
+    total_goals = 0
+    
+    for m in h2h_matches:
+        ft_home = m.get('home_score_ft', 0)
+        ft_away = m.get('away_score_ft', 0)
+        total_goals += (ft_home + ft_away)
+        if ft_home > 0 and ft_away > 0:
+            btts += 1
+            
+    print(f"[INFO] H2H {player1} vs {player2}: {total} jogos encontrados")
+    
+    return {
+        'total_matches': total,
+        'avg_total_goals': total_goals / total if total > 0 else 0,
+        'btts_pct': (btts / total) * 100 if total > 0 else 0,
+        'matches': h2h_matches
+    }
 
 # =============================================================================
 # ANÁLISE DE ESTATÍSTICAS
