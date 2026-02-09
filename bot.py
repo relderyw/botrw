@@ -26,10 +26,10 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
-LIVE_API_URL = "https://app3.caveiratips.com.br/api/live-events/"
-RECENT_MATCHES_URL = "https://api.caveiratips.com/api/v1/historico/partidas"
+LIVE_API_URL = "https://rwtips-r943.onrender.com/api/app3/live-events/"
+RECENT_MATCHES_URL = "https://rwtips-r943.onrender.com/api/rw-matches"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
-H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
+H2H_API_URL = "https://sensorfifa.com.br/api/matches/h2h/{player1}/{player2}" # Placeholder for consistency
 
 AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
 
@@ -128,7 +128,7 @@ def fetch_player_individual_stats(player_name, use_cache=True):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            url = "https://rwtips-r943.onrender.com/api/v1/historico/partidas-assincrono"
+            url = "https://rwtips-r943.onrender.com/api/rw-matches"
             params = {'jogador': player_name, 'limit': 20, 'page': 1}
                         
             response = requests.get(url, params=params, timeout=15)
