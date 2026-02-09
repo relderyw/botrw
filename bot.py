@@ -85,22 +85,25 @@ def fetch_recent_matches(page=1, page_size=100):
             response.raise_for_status()
             data = response.json()
             
-            raw_matches = data.get('partidas', [])
+            raw_matches = data if isinstance(data, list) else data.get('partidas', [])
+            # Otimização: API ignora limit, então cortamos manualmente
+            if len(raw_matches) > page_size:
+                raw_matches = raw_matches[:page_size]
             normalized_matches = []
             
             for match in raw_matches:
                 normalized_matches.append({
                     'id': match.get('id'),
-                    'league_name': match.get('league_name'),
-                    'home_player': match.get('home_player'),
-                    'away_player': match.get('away_player'),
-                    'home_team': match.get('home_team'),
-                    'away_team': match.get('away_team'),
-                    'data_realizacao': match.get('data_realizacao'),
-                    'home_score_ht': match.get('halftime_score_home'),
-                    'away_score_ht': match.get('halftime_score_away'),
-                    'home_score_ft': match.get('score_home'),
-                    'away_score_ft': match.get('score_away')
+                    'league_name': match.get('league'),
+                    'home_player': match.get('homeTeam'),
+                    'away_player': match.get('awayTeam'),
+                    'home_team': match.get('homeClub'),
+                    'away_team': match.get('awayClub'),
+                    'data_realizacao': match.get('matchTime'),
+                    'home_score_ht': match.get('homeHT'),
+                    'away_score_ht': match.get('awayHT'),
+                    'home_score_ft': match.get('homeFT'),
+                    'away_score_ft': match.get('awayFT')
                 })
             
             print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas")
@@ -136,25 +139,35 @@ def fetch_player_individual_stats(player_name, use_cache=True):
             data_raw = response.json()
             
             normalized_matches = []
-            for match in data_raw.get('partidas', []):
+            raw_matches = data_raw if isinstance(data_raw, list) else data_raw.get('partidas', [])
+            # Otimização: API ignora limit (retorna 80k+), cortar manualmente
+            if len(raw_matches) > 20:
+                raw_matches = raw_matches[:20]
+            
+            normalized_matches = []
+            for match in raw_matches:
                 normalized_match = {
                     'id': match.get('id'),
-                    'league_name': match.get('league_name'),
-                    'home_player': match.get('home_player'),
-                    'away_player': match.get('away_player'),
-                    'home_team': match.get('home_team'),
-                    'away_team': match.get('away_team'),
-                    'data_realizacao': match.get('data_realizacao'),
-                    'home_score_ht': match.get('halftime_score_home'),
-                    'away_score_ht': match.get('halftime_score_away'),
-                    'home_score_ft': match.get('score_home'),
-                    'away_score_ft': match.get('score_away')
+                    'league_name': match.get('league'),
+                    'home_player': match.get('homeTeam'),
+                    'away_player': match.get('awayTeam'),
+                    'home_team': match.get('homeClub'),
+                    'away_team': match.get('awayClub'),
+                    'data_realizacao': match.get('matchTime'),
+                    'home_score_ht': match.get('homeHT'),
+                    'away_score_ht': match.get('awayHT'),
+                    'home_score_ft': match.get('homeFT'),
+                    'away_score_ft': match.get('awayFT')
                 }
                 normalized_matches.append(normalized_match)
                 
+            total_count = len(raw_matches)
+            if isinstance(data_raw, dict):
+                 total_count = data_raw.get('paginacao', {}).get('total_partidas', total_count)
+
             final_data = {
                 'matches': normalized_matches,
-                'total_count': data_raw.get('paginacao', {}).get('total_partidas', 0)
+                'total_count': total_count
             }
             
             player_stats_cache[player_name] = {
