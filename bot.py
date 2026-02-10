@@ -345,8 +345,9 @@ def analyze_player_adaptive(matches, player_name):
     
     if regime['regime_change'] and regime['action'] == 'AVOID':
         print(f"[ALERT] {player_name}: REGIME CHANGE DETECTADO - {regime['reason']}")
-        print(f"[ALERT] Bloqueando análise para evitar tips perigosas")
-        return None  # VETO! Não analisa jogador que esfriou
+        print(f"[WARN] Penalidade será aplicada no Confidence (não mais bloqueio total)")
+        # NÃO RETORNA MAIS NONE - DEIXA PASSAR COM PENALIDADE
+        # return None
     
     # 2. Usar até 5 jogos (conforme solicitado pelo usuário, foco total em recente)
     actual_n = min(len(matches), 5)
@@ -501,6 +502,11 @@ def calculate_confidence(home_stats, away_stats, league_stats, h2h_data, strateg
     if home_stats.get('regime_direction') == 'HEATING' or away_stats.get('regime_direction') == 'HEATING':
         print(f"[INFO] Hot streak detectado - Bonus de +10 pontos no confidence")
         confidence += 10  # Recompensa
+    
+    # ========== VERIFICAÇÃO: COOLING / REGIME CHANGE NEGATIVO ==========
+    if home_stats.get('regime_direction') == 'COOLING' or away_stats.get('regime_direction') == 'COOLING':
+        print(f"[WARN] Regime Change COOLING detectado - Penalidade de -20 pontos no confidence")
+        confidence -= 20  # Penalidade Severa (mas não bloqueio total)
     
     # ========== FATOR 1: Consistência dos Jogadores (40 pontos) ==========
     # Quanto mais consistentes as estatísticas, maior a confiança
