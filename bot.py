@@ -136,16 +136,36 @@ def fetch_recent_matches(page=1, page_size=100):
         
     return all_matches[start:end]
 
-def fetch_player_individual_stats(player_name, use_cache=True):
-    """Busca estatísticas individuais de um jogador - Filtragem Local"""
-    if use_cache and player_name in player_stats_cache:
-        cached = player_stats_cache[player_name]
+def fetch_player_individual_stats(player_name, target_league=None, use_cache=True):
+    """
+    Busca estatísticas individuais de um jogador - Filtragem por Duração da Liga
+    Evita misturar stats de 8min, 10min e 12min que distorcem a análise
+    """
+    # Determinar duração alvo com Regex mais robusto e caso especial GT
+    target_duration = None
+    if target_league:
+        # Regex melhorado para capturar "6m", "8m", "12 mins"
+        match = re.search(r'(\d+)\s*(?:m|min|mins|minutos)', target_league, re.IGNORECASE)
+        if match:
+            target_duration = int(match.group(1))
+        elif 'GT League' in target_league or 'GT Leagues' in target_league:
+        	# Fallback para GT Leagues que geralmente são 12m
+            target_duration = 12
+            
+        if target_duration:
+            print(f"[DEBUG] Filtrando histórico de {player_name} para {target_duration} minutos")
+
+    # Atualizar chave de cache para incluir duração
+    cache_key = f"{player_name}_{target_duration}" if target_duration else player_name
+
+    if use_cache and cache_key in player_stats_cache:
+        cached = player_stats_cache[cache_key]
         if time.time() - cached['timestamp'] < CACHE_TTL:
             return cached['stats']
 
     all_matches = get_all_matches_cached()
     
-    # Filtrar partidas do jogador (Case Insensitive)
+    # Filtrar partidas do jogador (Case Insensitive) E por duração
     player_matches = []
     p_upper = player_name.upper()
     
@@ -153,11 +173,37 @@ def fetch_player_individual_stats(player_name, use_cache=True):
         h = m.get('home_player', '').upper()
         a = m.get('away_player', '').upper()
         if h == p_upper or a == p_upper:
+            # Filtro de Duração
+            if target_duration:
+                m_league = m.get('league_name', '') or m.get('league', '') # Garantir que pega o nome da liga
+                
+                # Regex melhorado
+                m_duration_match = re.search(r'(\d+)\s*(?:m|min|mins|minutos)', m_league, re.IGNORECASE)
+                m_duration = None
+                
+                if m_duration_match:
+                    m_duration = int(m_duration_match.group(1))
+                elif 'GT League' in m_league or 'GT Leagues' in m_league:
+                    m_duration = 12
+                
+                # Só filtrar se conseguiu determinar a duração do histórico
+                if m_duration is not None:
+                    if m_duration != target_duration:
+                        # PULA se for diferente
+                        continue
+                else:
+                    # Se não conseguiu determinar a duração do histórico:
+                    # Opção 1: Ignorar (Seguro) - Evita misturar
+                    # Opção 2: Incluir (Permissivo) - Pode sujar
+                    # Vamos ser SEGUROS para evitar o problema do usuário
+                    # Mas se for uma liga nova sem tempo no nome?
+                    # Vamos logar warning se for muito frequente? Não, spam.
+                    # Vamos assumir que se não tem duração, não serve para comparação estrita
+                    continue 
+            
             player_matches.append(m)
             
-    # Limitar a 20 jogos mais recentes (assumindo que a API retorna ordenado por data desc)
-    # Se não tiver ordenado, deveríamos ordenar por 'data_realizacao' aqui.
-    # Assumindo ordem da API para manter performance.
+    # Limitar a 20 jogos mais recentes
     recent_matches = player_matches[:20]
     
     final_data = {
@@ -165,12 +211,13 @@ def fetch_player_individual_stats(player_name, use_cache=True):
         'total_count': len(player_matches)
     }
     
-    player_stats_cache[player_name] = {
+    player_stats_cache[cache_key] = {
         'stats': final_data,
         'timestamp': time.time()
     }
     
-    print(f"[INFO] Stats de {player_name}: {len(recent_matches)} recentes de {len(player_matches)} totais")
+    suffix = f" (Liga: {target_duration} min)" if target_duration else " (Geral)"
+    print(f"[INFO] Stats de {player_name}: {len(recent_matches)} recentes de {len(player_matches)} totais{suffix}")
     return final_data
 
 def fetch_h2h_data(player1, player2):
@@ -1751,8 +1798,8 @@ async def main_loop(bot):
                 if event_id in sent_match_ids:
                     continue
                 
-                home_data = fetch_player_individual_stats(home_player)
-                away_data = fetch_player_individual_stats(away_player)
+                home_data = fetch_player_individual_stats(home_player, target_league=league_name)
+                away_data = fetch_player_individual_stats(away_player, target_league=league_name)
                 
                 if not home_data or not away_data:
                     print(f"[WARN] Sem dados suficientes para {home_player} ou {away_player}")
