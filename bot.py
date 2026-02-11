@@ -26,8 +26,8 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
-LIVE_API_URL = "https://app3.caveiratips.com.br/api/live-events/"
-RECENT_MATCHES_URL = "https://api.caveiratips.com/api/v1/historico/partidas"
+LIVE_API_URL = "https://rwtips.dpdns.org/api/app3/live-events"
+RECENT_MATCHES_URL = "https://rwtips-r943.onrender.com/api/rw-matches"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
@@ -35,11 +35,41 @@ AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cde
 
 MANAUS_TZ = timezone(timedelta(hours=-4))
 
+# League Name Mappings
+# Live API format → Internal format
+LIVE_LEAGUE_MAPPING = {
+    "E-Soccer - Battle - 8 minutos de jogo": "BATTLE 8 MIN",
+    "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
+    "E-Soccer - H2H GG League - 8 minutos de jogo": "H2H 8 MIN",
+    "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
+    "E-Soccer - GT Leagues - 12 minutos de jogo": "GT LEAGUE 12 MIN",
+    "Esoccer GT Leagues - 12 mins play": "GT LEAGUE 12 MIN",
+    "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
+    "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
+    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
+}
+
+# History API format → Internal format
+HISTORY_LEAGUE_MAPPING = {
+    "Battle 6m": "VOLTA 6 MIN",
+    "Battle 8m": "BATTLE 8 MIN",
+    "H2H 8m": "H2H 8 MIN",
+    "GT Leagues 12m": "GT LEAGUE 12 MIN",
+    "GT League 12m": "GT LEAGUE 12 MIN",
+}
+
 # =============================================================================
 # CACHE E ESTADO GLOBAL
 # =============================================================================
 player_stats_cache = {}  # {player_name: {stats, timestamp}}
 CACHE_TTL = 300  # 5 minutos
+
+# Cache global de histórico de partidas (compartilhado entre todos os jogadores)
+global_history_cache = {
+    'matches': [],
+    'timestamp': 0
+}
+HISTORY_CACHE_TTL = 60  # 1 minuto
 
 sent_tips = []
 sent_match_ids = set()
@@ -61,8 +91,22 @@ def fetch_live_matches():
             response.raise_for_status()
             data = response.json()
             events = data.get('events', [])
-            print(f"[INFO] {len(events)} partidas ao vivo encontradas")
-            return events
+            
+            # Normalizar dados da API ao vivo
+            normalized_events = []
+            for event in events:
+                # Mapear nome da liga
+                league_name = event.get('leagueName', '')
+                mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
+                
+                # Criar evento normalizado mantendo compatibilidade
+                normalized_event = event.copy()
+                normalized_event['leagueName'] = league_name  # Original para display
+                normalized_event['mappedLeague'] = mapped_league  # Mapeado para lógica
+                normalized_events.append(normalized_event)
+            
+            print(f"[INFO] {len(normalized_events)} partidas ao vivo encontradas")
+            return normalized_events
         except requests.exceptions.Timeout:
             print(f"[WARN] Timeout ao buscar partidas ao vivo (tentativa {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
@@ -73,37 +117,58 @@ def fetch_live_matches():
                 time.sleep(2)
     return []
 
-def fetch_recent_matches(page=1, page_size=100):
-    """Busca partidas recentes finalizadas - Nova API"""
+def fetch_recent_matches(page=1, page_size=500, use_cache=True):
+    """Busca partidas recentes finalizadas - Nova API com cache global"""
+    global global_history_cache
+    
+    # Verificar cache global
+    if use_cache and global_history_cache['matches']:
+        cache_age = time.time() - global_history_cache['timestamp']
+        if cache_age < HISTORY_CACHE_TTL:
+            print(f"[CACHE] Usando histórico do cache global ({len(global_history_cache['matches'])} partidas)")
+            return global_history_cache['matches']
+    
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            params = {'page': page, 'limit': page_size}
-            headers = {'Authorization': AUTH_HEADER}
+            # Nova API retorna array direto, sem paginação
+            params = {'limit': page_size}
             
-            response = requests.get(RECENT_MATCHES_URL, headers=headers, params=params, timeout=15)
+            response = requests.get(RECENT_MATCHES_URL, params=params, timeout=15)
             response.raise_for_status()
-            data = response.json()
+            raw_matches = response.json()
             
-            raw_matches = data.get('partidas', [])
+            # A resposta é um array direto, não um objeto com 'partidas'
+            if not isinstance(raw_matches, list):
+                print(f"[ERROR] Resposta inesperada da API: {type(raw_matches)}")
+                return []
+            
             normalized_matches = []
             
             for match in raw_matches:
+                # Mapear nome da liga
+                league_raw = match.get('league', '')
+                league_mapped = HISTORY_LEAGUE_MAPPING.get(league_raw, league_raw)
+                
                 normalized_matches.append({
                     'id': match.get('id'),
-                    'league_name': match.get('league_name'),
-                    'home_player': match.get('home_player'),
-                    'away_player': match.get('away_player'),
-                    'home_team': match.get('home_team'),
-                    'away_team': match.get('away_team'),
-                    'data_realizacao': match.get('data_realizacao'),
-                    'home_score_ht': match.get('halftime_score_home'),
-                    'away_score_ht': match.get('halftime_score_away'),
-                    'home_score_ft': match.get('score_home'),
-                    'away_score_ft': match.get('score_away')
+                    'league_name': league_mapped,  # Usar nome mapeado
+                    'home_player': match.get('homeTeam'),  # homeTeam é o jogador
+                    'away_player': match.get('awayTeam'),  # awayTeam é o jogador
+                    'home_team': match.get('homeClub'),    # homeClub é o time
+                    'away_team': match.get('awayClub'),    # awayClub é o time
+                    'data_realizacao': match.get('matchTime'),
+                    'home_score_ht': match.get('homeHT'),
+                    'away_score_ht': match.get('awayHT'),
+                    'home_score_ft': match.get('homeFT'),
+                    'away_score_ft': match.get('awayFT')
                 })
             
-            print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas")
+            # Atualizar cache global
+            global_history_cache['matches'] = normalized_matches
+            global_history_cache['timestamp'] = time.time()
+            
+            print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas")
             return normalized_matches
             
         except requests.exceptions.Timeout:
@@ -116,8 +181,9 @@ def fetch_recent_matches(page=1, page_size=100):
                 time.sleep(2)
     return []
 
+
 def fetch_player_individual_stats(player_name, use_cache=True):
-    """Busca estatísticas individuais de um jogador (últimos jogos) - Nova API"""
+    """Busca estatísticas individuais de um jogador - Usa cache global de histórico"""
     
     if use_cache and player_name in player_stats_cache:
         cached = player_stats_cache[player_name]
@@ -125,55 +191,39 @@ def fetch_player_individual_stats(player_name, use_cache=True):
             print(f"[CACHE] Stats de {player_name} do cache")
             return cached['stats']
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = "https://rwtips-r943.onrender.com/api/v1/historico/partidas-assincrono"
-            params = {'jogador': player_name, 'limit': 20, 'page': 1}
-                        
-            response = requests.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            data_raw = response.json()
-            
-            normalized_matches = []
-            for match in data_raw.get('partidas', []):
-                normalized_match = {
-                    'id': match.get('id'),
-                    'league_name': match.get('league_name'),
-                    'home_player': match.get('home_player'),
-                    'away_player': match.get('away_player'),
-                    'home_team': match.get('home_team'),
-                    'away_team': match.get('away_team'),
-                    'data_realizacao': match.get('data_realizacao'),
-                    'home_score_ht': match.get('halftime_score_home'),
-                    'away_score_ht': match.get('halftime_score_away'),
-                    'home_score_ft': match.get('score_home'),
-                    'away_score_ft': match.get('score_away')
-                }
-                normalized_matches.append(normalized_match)
-                
-            final_data = {
-                'matches': normalized_matches,
-                'total_count': data_raw.get('paginacao', {}).get('total_partidas', 0)
-            }
-            
-            player_stats_cache[player_name] = {
-                'stats': final_data,
-                'timestamp': time.time()
-            }
-            
-            print(f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
-            return final_data
-            
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar stats de {player_name} (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_player_individual_stats {player_name}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return None
+    # Buscar histórico global (usa cache se disponível)
+    all_matches = fetch_recent_matches(page_size=500, use_cache=True)
+    
+    if not all_matches:
+        print(f"[WARN] Nenhum histórico disponível para filtrar {player_name}")
+        return None
+    
+    # Filtrar jogos do jogador específico
+    player_matches = []
+    for match in all_matches:
+        home_player = match.get('home_player', '')
+        away_player = match.get('away_player', '')
+        
+        # Verificar se o jogador participou da partida
+        if (home_player.upper() == player_name.upper() or 
+            away_player.upper() == player_name.upper()):
+            player_matches.append(match)
+    
+    # Limitar aos últimos 20 jogos do jogador
+    player_matches = player_matches[:20]
+    
+    final_data = {
+        'matches': player_matches,
+        'total_count': len(player_matches)
+    }
+    
+    player_stats_cache[player_name] = {
+        'stats': final_data,
+        'timestamp': time.time()
+    }
+    
+    print(f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
+    return final_data
 
 def fetch_h2h_data(player1, player2):
     """Busca dados H2H entre dois jogadores"""
@@ -303,6 +353,105 @@ def analyze_last_5_games(matches, player_name):
         'ht_btts_pct': (ht_btts_count / 5) * 100
     }
 
+def detect_regime_change(matches):
+    """
+    Detecta mudança de estado do jogador (hot→cold ou cold→hot)
+    Previne situações como: 2 semanas over → 15 reds seguidos
+    """
+    if len(matches) < 8:
+        return {'regime_change': False}
+    
+    # Últimos 3 jogos (MOMENTO ATUAL)
+    last_3 = matches[:3]
+    
+    # Jogos 4-10 (HISTÓRICO RECENTE)
+    previous_7 = matches[3:10] if len(matches) >= 10 else matches[3:]
+    
+    def avg_goals_window(window, player_name=None):
+        total = 0
+        for m in window:
+            # Determinar se é home ou away
+            home_player = m.get('home_player', '')
+            if player_name:
+                is_home = home_player.upper() == player_name.upper()
+            else:
+                # Fallback: assumir que estamos analisando o primeiro jogador
+                is_home = True
+            
+            goals = m.get('home_score_ft', 0) if is_home else m.get('away_score_ft', 0)
+            total += goals or 0
+        return total / len(window) if window else 0
+    
+    avg_last_3 = avg_goals_window(last_3)
+    avg_previous = avg_goals_window(previous_7)
+    
+    # DETECÇÃO DE MUDANÇA DE ESTADO
+    if avg_previous > 0:
+        ratio = avg_last_3 / avg_previous
+        
+        # COOLING (jogador esfriou) - BLOQUEIO CRÍTICO
+        if ratio < 0.5 and avg_last_3 < 1.5:
+            return {
+                'regime_change': True,
+                'direction': 'COOLING',
+                'severity': 'HIGH',
+                'avg_last_3': avg_last_3,
+                'avg_previous': avg_previous,
+                'action': 'AVOID',
+                'reason': f'Jogador esfriou drasticamente: {avg_last_3:.1f} vs {avg_previous:.1f} anterior'
+            }
+        
+        # HEATING (jogador esquentou) - BOOST
+        elif ratio > 1.8 and avg_last_3 > 2.0:
+            return {
+                'regime_change': True,
+                'direction': 'HEATING',
+                'severity': 'MEDIUM',
+                'avg_last_3': avg_last_3,
+                'avg_previous': avg_previous,
+                'action': 'BOOST',
+                'reason': f'Jogador em alta: {avg_last_3:.1f} vs {avg_previous:.1f} anterior'
+            }
+    
+    return {'regime_change': False}
+
+def analyze_player_with_regime_check(matches, player_name):
+    """
+    Análise de jogador COM detecção de regime change
+    Retorna None se jogador esfriou (para bloquear tips)
+    """
+    if not matches:
+        print(f"[WARN] {player_name}: Nenhum jogo encontrado")
+        return None
+    
+    # Mínimo de 5 jogos
+    if len(matches) < 5:
+        print(f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
+        return None
+    
+    # 1. DETECTAR REGIME CHANGE (crítico!)
+    regime = detect_regime_change(matches)
+    
+    if regime['regime_change'] and regime['action'] == 'AVOID':
+        print(f"[ALERT] {player_name}: REGIME CHANGE DETECTADO - {regime['reason']}")
+        print(f"[ALERT] Bloqueando análise para evitar tips perigosas")
+        return None  # VETO! Não analisa jogador que esfriou
+    
+    # 2. Análise normal dos últimos 5 jogos
+    stats = analyze_last_5_games(matches, player_name)
+    
+    if not stats:
+        return None
+    
+    # 3. Adicionar informações de regime
+    stats['regime_change'] = regime['regime_change']
+    stats['regime_direction'] = regime.get('direction', 'STABLE')
+    
+    if regime['regime_change'] and regime['action'] == 'BOOST':
+        print(f"[INFO] {player_name} em HOT STREAK: {regime['reason']}")
+    
+    return stats
+
 # =============================================================================
 # LÓGICA DE ESTRATÉGIAS
 # =============================================================================
@@ -311,11 +460,8 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para ligas de 8 minutos"""
     strategies = []
     
-    league_name = event.get('leagueName', '')
-    # Mapeamento reverso para encontrar a chave correta em league_stats
-    league_key = None
-    if 'H2H GG League - 8 mins' in league_name: league_key = 'H2H 8 MIN'
-    elif 'Battle - 8 mins' in league_name: league_key = 'BATTLE 8 MIN'
+    # Usar o nome mapeado da liga
+    league_key = event.get('mappedLeague', '')
     
     # Se não tiver dados da liga, não entra nas estratégias
     if not league_key or league_key not in all_league_stats:
@@ -444,11 +590,8 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para liga de 12 minutos"""
     strategies = []
     
-    league_name = event.get('leagueName', '')
-    # Mapeamento reverso para encontrar a chave correta em league_stats
-    league_key = None
-    if 'GT Leagues - 12 mins' in league_name or 'GT Leagues – 12 mins' in league_name: 
-        league_key = 'GT LEAGUE 12 MIN'
+    # Usar o nome mapeado da liga
+    league_key = event.get('mappedLeague', '')
 
     if not league_key or league_key not in all_league_stats:
         return strategies
@@ -575,11 +718,8 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
     """Estratégias para liga Volta de 6 minutos"""
     strategies = []
     
-    league_name = event.get('leagueName', '')
-    # Mapeamento reverso para encontrar a chave correta em league_stats
-    league_key = None
-    if 'Volta - 6 mins' in league_name: 
-        league_key = 'VOLTA 6 MIN'
+    # Usar o nome mapeado da liga
+    league_key = event.get('mappedLeague', '')
 
     if not league_key or league_key not in all_league_stats:
         return strategies
@@ -997,29 +1137,12 @@ async def update_league_stats(bot, recent_matches):
 
         league_games = defaultdict(list)
         
-        league_mapping = {
-            'Esoccer GT Leagues – 12 mins play': 'GT LEAGUE 12 MIN',
-            'Esoccer GT Leagues - 12 mins play': 'GT LEAGUE 12 MIN',
-            'Esoccer Battle Volta - 6 mins play': 'VOLTA 6 MIN',
-            'Esoccer H2H GG League - 8 mins play': 'H2H 8 MIN',
-            'Esoccer Battle - 8 mins play': 'BATTLE 8 MIN'
-        }
-        
         for match in recent_matches[:200]:
-            league_raw = None
-            if 'league_name' in match: league_raw = match['league_name']
-            elif 'tournamentName' in match: league_raw = match['tournamentName']
-            elif 'leagueName' in match: league_raw = match['leagueName']
-            elif 'competition' in match and isinstance(match['competition'], dict): 
-                league_raw = match['competition'].get('name')
+            # Os dados já vêm normalizados com league_name mapeado
+            league = match.get('league_name', '')
             
-            if not league_raw or league_raw == 'Unknown': continue
-            
-            league = league_raw
-            for key, value in league_mapping.items():
-                if key in league_raw:
-                    league = value
-                    break
+            if not league or league == 'Unknown': 
+                continue
             
             ht_home = match.get('home_score_ht', 0) or 0
             ht_away = match.get('away_score_ht', 0) or 0
@@ -1407,11 +1530,12 @@ async def main_loop(bot):
                     print(f"[WARN] Dados insuficientes: {home_player}={len(home_matches)} jogos, {away_player}={len(away_matches)} jogos (mínimo: 5)")
                     continue
                 
-                home_stats = analyze_last_5_games(home_matches, home_player)
-                away_stats = analyze_last_5_games(away_matches, away_player)
+                # Análise COM detecção de regime change
+                home_stats = analyze_player_with_regime_check(home_matches, home_player)
+                away_stats = analyze_player_with_regime_check(away_matches, away_player)
                 
                 if not home_stats or not away_stats:
-                    print(f"[WARN] Falha na análise das estatísticas")
+                    print(f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
                 
                 print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}%")
@@ -1419,13 +1543,16 @@ async def main_loop(bot):
                 
                 strategies = []
                 
-                if 'H2H GG League - 8 mins' in league_name or 'Battle - 8 mins' in league_name:
+                # Usar o nome mapeado da liga para selecionar estratégias
+                mapped_league = event.get('mappedLeague', '')
+                
+                if mapped_league in ['BATTLE 8 MIN', 'H2H 8 MIN']:
                     strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
                 
-                elif 'GT Leagues - 12 mins' in league_name or 'GT Leagues – 12 mins' in league_name:
+                elif mapped_league == 'GT LEAGUE 12 MIN':
                     strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
                 
-                elif 'Volta - 6 mins' in league_name:
+                elif mapped_league == 'VOLTA 6 MIN':
                     strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
                 
                 for strategy in strategies:
