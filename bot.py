@@ -390,7 +390,8 @@ def detect_regime_change(matches):
         ratio = avg_last_3 / avg_previous
         
         # COOLING (jogador esfriou) - BLOQUEIO CRÍTICO
-        if ratio < 0.5 and avg_last_3 < 1.5:
+        # Ajustado para ser mais sensível e detectar cooling mais cedo
+        if ratio < 0.6 and avg_last_3 < 2.0:
             return {
                 'regime_change': True,
                 'direction': 'COOLING',
@@ -417,7 +418,7 @@ def detect_regime_change(matches):
 
 def analyze_player_with_regime_check(matches, player_name):
     """
-    Análise de jogador COM detecção de regime change
+    Análise de jogador COM detecção de regime change e cálculo de confidence
     Retorna None se jogador esfriou (para bloquear tips)
     """
     if not matches:
@@ -443,14 +444,89 @@ def analyze_player_with_regime_check(matches, player_name):
     if not stats:
         return None
     
-    # 3. Adicionar informações de regime
+    # 3. CALCULAR CONFIDENCE SCORE (0-100)
+    confidence = calculate_confidence_score(matches[:5], player_name, stats, regime)
+    stats['confidence'] = confidence
+    
+    # 4. Adicionar informações de regime
     stats['regime_change'] = regime['regime_change']
     stats['regime_direction'] = regime.get('direction', 'STABLE')
     
     if regime['regime_change'] and regime['action'] == 'BOOST':
-        print(f"[INFO] {player_name} em HOT STREAK: {regime['reason']}")
+        print(f"[INFO] {player_name} em HOT STREAK: {regime['reason']} | Confidence: {confidence}%")
+    else:
+        print(f"[INFO] {player_name} Confidence: {confidence}%")
     
     return stats
+
+def calculate_confidence_score(last_5_matches, player_name, stats, regime):
+    """
+    Calcula score de confidence (0-100) baseado em múltiplos fatores
+    """
+    score = 0
+    
+    # FATOR 1: Consistência (40 pontos)
+    # Quanto mais consistente, maior o score
+    avg_goals = stats['avg_goals_scored_ft']
+    
+    # Calcular desvio padrão dos gols marcados
+    goals_list = []
+    for match in last_5_matches:
+        is_home = match.get('home_player', '').upper() == player_name.upper()
+        goals = match.get('home_score_ft', 0) if is_home else match.get('away_score_ft', 0)
+        goals_list.append(goals or 0)
+    
+    import statistics
+    if len(goals_list) >= 2:
+        std_dev = statistics.stdev(goals_list)
+        # Baixa volatilidade = alta consistência
+        if std_dev <= 0.5:
+            score += 40  # Muito consistente
+        elif std_dev <= 1.0:
+            score += 30  # Consistente
+        elif std_dev <= 1.5:
+            score += 20  # Moderado
+        elif std_dev <= 2.0:
+            score += 10  # Inconsistente
+        # std_dev > 2.0 = 0 pontos (muito volátil)
+    
+    # FATOR 2: Média de Gols (30 pontos)
+    if avg_goals >= 3.5:
+        score += 30  # Excelente
+    elif avg_goals >= 3.0:
+        score += 25  # Muito bom
+    elif avg_goals >= 2.5:
+        score += 20  # Bom
+    elif avg_goals >= 2.0:
+        score += 15  # Razoável
+    elif avg_goals >= 1.5:
+        score += 10  # Fraco
+    # < 1.5 = 0 pontos
+    
+    # FATOR 3: Tendência/Regime (20 pontos)
+    if regime['regime_change']:
+        if regime['action'] == 'BOOST':
+            score += 20  # Jogador esquentando
+        elif regime['action'] == 'AVOID':
+            score += 0   # Jogador esfriando (já bloqueado antes)
+    else:
+        score += 10  # Estável (neutro)
+    
+    # FATOR 4: Consistência em HT (10 pontos)
+    # Jogadores que marcam consistentemente no HT são mais confiáveis
+    if stats['ht_over_05_pct'] >= 100:
+        score += 10
+    elif stats['ht_over_05_pct'] >= 80:
+        score += 7
+    elif stats['ht_over_05_pct'] >= 60:
+        score += 5
+    elif stats['ht_over_05_pct'] >= 40:
+        score += 3
+    
+    # Garantir que está entre 0-100
+    score = max(0, min(100, score))
+    
+    return score
 
 # =============================================================================
 # LÓGICA DE ESTRATÉGIAS
@@ -873,10 +949,37 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     
     scoreboard = event.get('scoreboard', '0-0')
     
+    # Calcular confidence médio
+    home_confidence = home_stats_summary.get('confidence', 0)
+    away_confidence = away_stats_summary.get('confidence', 0)
+    avg_confidence = (home_confidence + away_confidence) / 2
+    
+    # Emoji de confidence
+    if avg_confidence >= 90:
+        confidence_emoji = "🔥🔥🔥"
+    elif avg_confidence >= 80:
+        confidence_emoji = "🔥🔥"
+    elif avg_confidence >= 70:
+        confidence_emoji = "🔥"
+    else:
+        confidence_emoji = "❄️"
+    
+    # Regime status
+    home_regime = home_stats_summary.get('regime_direction', 'STABLE')
+    away_regime = away_stats_summary.get('regime_direction', 'STABLE')
+    
+    if home_regime == 'HEATING' or away_regime == 'HEATING':
+        regime_status = "🔥 HEATING"
+    else:
+        regime_status = "❄️ STABLE"
+    
     # Cabeçalho com destaque
     msg = "━━━━━━━━━━━━━━━━━━━━\n"
     msg += "🎯 <b>OPORTUNIDADE DETECTADA</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    # Confidence e Regime
+    msg += f"{confidence_emoji} <b>Confidence: {avg_confidence:.0f}%</b> | {regime_status}\n\n"
     
     # Liga e Estratégia
     msg += f"🏆 <b>{clean_league}</b>\n"
@@ -894,12 +997,12 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
         
         avg_btts = (home_stats_summary['btts_pct'] + away_stats_summary['btts_pct']) / 2
         
-        msg += f"🏠 <b>{home_player}</b>\n"
+        msg += f"🏠 <b>{home_player}</b> (Conf: {home_confidence:.0f}%)\n"
         msg += f"├ HT: +0.5 ({home_stats_summary['ht_over_05_pct']:.0f}%) • +1.5 ({home_stats_summary['ht_over_15_pct']:.0f}%)\n"
         msg += f"├ FT: Média {home_stats_summary['avg_goals_scored_ft']:.1f} gols/jogo\n"
         msg += f"└ Gols +3: {home_stats_summary['consistency_ft_3_plus_pct']:.0f}% dos jogos\n\n"
         
-        msg += f"✈️ <b>{away_player}</b>\n"
+        msg += f"✈️ <b>{away_player}</b> (Conf: {away_confidence:.0f}%)\n"
         msg += f"├ HT: +0.5 ({away_stats_summary['ht_over_05_pct']:.0f}%) • +1.5 ({away_stats_summary['ht_over_15_pct']:.0f}%)\n"
         msg += f"├ FT: Média {away_stats_summary['avg_goals_scored_ft']:.1f} gols/jogo\n"
         msg += f"└ Gols +3: {away_stats_summary['consistency_ft_3_plus_pct']:.0f}% dos jogos\n\n"
@@ -1538,8 +1641,17 @@ async def main_loop(bot):
                     print(f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
                 
-                print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}%")
-                print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}%")
+                # FILTRO DE CONFIDENCE MÍNIMO (80%)
+                home_confidence = home_stats.get('confidence', 0)
+                away_confidence = away_stats.get('confidence', 0)
+                avg_confidence = (home_confidence + away_confidence) / 2
+                
+                if home_confidence < 80 or away_confidence < 80:
+                    print(f"[BLOCKED] Confidence insuficiente: {home_player}={home_confidence:.0f}%, {away_player}={away_confidence:.0f}% (mínimo: 80%)")
+                    continue
+                
+                print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}% | Confidence: {home_confidence:.0f}%")
+                print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}% | Confidence: {away_confidence:.0f}%")
                 
                 strategies = []
                 
@@ -1556,7 +1668,7 @@ async def main_loop(bot):
                     strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
                 
                 for strategy in strategies:
-                    print(f"[✓] OPORTUNIDADE ENCONTRADA: {strategy}")
+                    print(f"[✓] OPORTUNIDADE ENCONTRADA: {strategy} | Confidence Médio: {avg_confidence:.0f}%")
                     await send_tip(bot, event, strategy, home_stats, away_stats)
                     await asyncio.sleep(1)
             
