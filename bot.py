@@ -120,8 +120,18 @@ def fetch_live_matches():
         response = requests.get(LIVE_API_BACKUP, timeout=10)
         response.raise_for_status()
         data = response.json()
-        items = data.get('items', []) or data.get('data', [])
         
+        if isinstance(data, str):
+            print(f"[ERROR] Backup Live API retornou string inesperada: {data[:200]}")
+            items = []
+        else:
+            print(f"[DEBUG] Tipo de data: {type(data)}")
+            items = data.get('items', []) or data.get('data', [])
+            print(f"[DEBUG] Tipo de items: {type(items)}")
+            if isinstance(items, list) and len(items) > 0:
+                 print(f"[DEBUG] Primeiro item: {items[0]}")
+                 print(f"[DEBUG] Tipo do primeiro item: {type(items[0])}")
+
         normalized_events = []
         
         def extract_name(s):
@@ -130,30 +140,83 @@ def fetch_live_matches():
             return m.group(1).strip() if m else s.strip()
 
         for item in items:
-            league_name = item.get('competition', {}).get('name') or item.get('league', {}).get('name') or "Esoccer"
-            mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
-            
-            # Construir objeto compatível com o esperado pelo bot
-            event = {
-                'id': str(item.get('eventId') or item.get('id')),
-                'leagueName': league_name,
-                'mappedLeague': mapped_league,
-                'homePlayer': extract_name(item.get('home', {}).get('name', '')),
-                'awayPlayer': extract_name(item.get('away', {}).get('name', '')),
-                'homeTeamName': item.get('home', {}).get('teamName', ''),
-                'awayTeamName': item.get('away', {}).get('teamName', ''),
-                'timer': {
-                    'minute': int(item.get('timer', {}).get('tm', 0) or 0),
-                    'second': int(item.get('timer', {}).get('ts', 0) or 0),
-                    'formatted': "00:00" # Green365 pode não enviar formatted
-                },
-                'score': {
-                    'home': int(item.get('score', {}).get('home') or item.get('ss', '0-0').split('-')[0] or 0),
-                    'away': int(item.get('score', {}).get('away') or item.get('ss', '0-0').split('-')[1] or 0)
-                },
-                'scoreboard': item.get('ss', '0-0')
-            }
-            normalized_events.append(event)
+            try:
+                if isinstance(item, str):
+                    continue
+                
+                # Robust extraction of league name
+                league_name = "Esoccer"
+                
+                comp = item.get('competition')
+                if isinstance(comp, dict):
+                    league_name = comp.get('name', "Esoccer")
+                elif isinstance(comp, str):
+                    league_name = comp
+                    
+                if league_name == "Esoccer": # Try 'league' field if competition didn't yield result
+                    league = item.get('league')
+                    if isinstance(league, dict):
+                        league_name = league.get('name', "Esoccer")
+                    elif isinstance(league, str):
+                        league_name = league
+                
+                mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
+                
+                # Robust timer extraction
+                timer_val = item.get('timer')
+                tm = 0
+                ts = 0
+                
+                if isinstance(timer_val, str) and ':' in timer_val:
+                    try:
+                        parts = timer_val.split(':')
+                        tm = int(parts[0])
+                        ts = int(parts[1])
+                    except:
+                        pass
+                elif isinstance(timer_val, dict):
+                    tm = timer_val.get('tm', 0)
+                    ts = timer_val.get('ts', 0)
+                
+                # Robust score extraction
+                score_obj = item.get('score')
+                if isinstance(score_obj, dict):
+                    home_score = score_obj.get('home')
+                    away_score = score_obj.get('away')
+                else:
+                    home_score = None
+                    away_score = None
+
+                # Fallback score from 'ss' or 'scores' if needed could be added here
+                # but simplest is to handle None
+                
+                if home_score is None: home_score = 0
+                if away_score is None: away_score = 0
+                
+                # Construir objeto compatível com o esperado pelo bot
+                event = {
+                    'id': str(item.get('eventId') or item.get('id')),
+                    'leagueName': league_name,
+                    'mappedLeague': mapped_league,
+                    'homePlayer': extract_name(item.get('home', {}).get('name', '')),
+                    'awayPlayer': extract_name(item.get('away', {}).get('name', '')),
+                    'homeTeamName': item.get('home', {}).get('teamName', ''),
+                    'awayTeamName': item.get('away', {}).get('teamName', ''),
+                    'timer': {
+                        'minute': int(tm or 0),
+                        'second': int(ts or 0),
+                        'formatted': "00:00" 
+                    },
+                    'score': {
+                        'home': int(home_score),
+                        'away': int(away_score)
+                    },
+                    'scoreboard': item.get('ss', f"{home_score}-{away_score}")
+                }
+                normalized_events.append(event)
+            except Exception as e:
+                print(f"[WARN] Erro ao processar item específico: {e} | Item: {str(item)[:100]}...")
+                continue
             
         print(f"[INFO] {len(normalized_events)} partidas ao vivo (Backup API)")
         return normalized_events
@@ -263,7 +326,8 @@ def fetch_player_individual_stats(player_name, use_cache=True):
             return cached['stats']
     
     # Buscar histórico global (usa cache se disponível)
-    all_matches = fetch_recent_matches(page_size=500, use_cache=True)
+    # 500 jogos ~= 21 páginas de 24 jogos
+    all_matches = fetch_recent_matches(num_pages=15, use_cache=True)
     
     if not all_matches:
         print(f"[WARN] Nenhum histórico disponível para filtrar {player_name}")
@@ -1152,7 +1216,8 @@ async def check_results(bot):
     global last_summary, last_league_summary, last_league_message_id
     
     try:
-        recent = fetch_recent_matches(page=1, page_size=50)
+        # Buscar 3 páginas para ter ~72 partidas recentes (limit=24 por página)
+        recent = fetch_recent_matches(num_pages=3)
         
         # Agrupar partidas por jogadores, mantendo múltiplas partidas
         finished_matches = defaultdict(list)
