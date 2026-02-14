@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import asyncio
+import concurrent.futures
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from telegram import Bot
@@ -26,8 +27,12 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
+# Primary Live API (Backup will be Green365)
 LIVE_API_URL = "https://rwtips.dpdns.org/api/app3/live-events"
-RECENT_MATCHES_URL = "https://rwtips-r943.onrender.com/api/rw-matches"
+# Green365 for History
+RECENT_MATCHES_URL = "https://api-v2.green365.com.br/api/v2/sport-events"
+# Green365 for Live Backup
+LIVE_API_BACKUP = "https://api-v2.green365.com.br/api/v2/sport-events?page=1&limit=50&sport=esoccer&status=inplay"
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
@@ -83,42 +88,82 @@ league_stats = {}
 # =============================================================================
 
 def fetch_live_matches():
-    """Busca partidas ao vivo da nova API"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(LIVE_API_URL, timeout=15)
-            response.raise_for_status()
+    """Busca partidas ao vivo (Primary API -> Backup Green365)"""
+    
+    # 1. Tentar API Primária
+    try:
+        response = requests.get(LIVE_API_URL, timeout=10)
+        if response.status_code == 200:
             data = response.json()
             events = data.get('events', [])
             
-            # Normalizar dados da API ao vivo
+            # Normalizar dados da API Primária
             normalized_events = []
             for event in events:
-                # Mapear nome da liga
                 league_name = event.get('leagueName', '')
                 mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
                 
-                # Criar evento normalizado mantendo compatibilidade
                 normalized_event = event.copy()
-                normalized_event['leagueName'] = league_name  # Original para display
-                normalized_event['mappedLeague'] = mapped_league  # Mapeado para lógica
+                normalized_event['leagueName'] = league_name
+                normalized_event['mappedLeague'] = mapped_league
                 normalized_events.append(normalized_event)
             
-            print(f"[INFO] {len(normalized_events)} partidas ao vivo encontradas")
+            print(f"[INFO] {len(normalized_events)} partidas ao vivo (Primary API)")
             return normalized_events
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar partidas ao vivo (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_live_matches: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return []
+            
+    except Exception as e:
+        print(f"[WARN] Primary Live API falhou: {e}")
 
-def fetch_recent_matches(page=1, page_size=500, use_cache=True):
-    """Busca partidas recentes finalizadas - Nova API com cache global"""
+    # 2. Tentar Backup (Green365)
+    print(f"[INFO] Tentando Backup API (Green365)...")
+    try:
+        response = requests.get(LIVE_API_BACKUP, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get('items', []) or data.get('data', [])
+        
+        normalized_events = []
+        
+        def extract_name(s):
+            if not s: return ""
+            m = re.search(r'\((.*?)\)', s)
+            return m.group(1).strip() if m else s.strip()
+
+        for item in items:
+            league_name = item.get('competition', {}).get('name') or item.get('league', {}).get('name') or "Esoccer"
+            mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
+            
+            # Construir objeto compatível com o esperado pelo bot
+            event = {
+                'id': str(item.get('eventId') or item.get('id')),
+                'leagueName': league_name,
+                'mappedLeague': mapped_league,
+                'homePlayer': extract_name(item.get('home', {}).get('name', '')),
+                'awayPlayer': extract_name(item.get('away', {}).get('name', '')),
+                'homeTeamName': item.get('home', {}).get('teamName', ''),
+                'awayTeamName': item.get('away', {}).get('teamName', ''),
+                'timer': {
+                    'minute': int(item.get('timer', {}).get('tm', 0) or 0),
+                    'second': int(item.get('timer', {}).get('ts', 0) or 0),
+                    'formatted': "00:00" # Green365 pode não enviar formatted
+                },
+                'score': {
+                    'home': int(item.get('score', {}).get('home') or item.get('ss', '0-0').split('-')[0] or 0),
+                    'away': int(item.get('score', {}).get('away') or item.get('ss', '0-0').split('-')[1] or 0)
+                },
+                'scoreboard': item.get('ss', '0-0')
+            }
+            normalized_events.append(event)
+            
+        print(f"[INFO] {len(normalized_events)} partidas ao vivo (Backup API)")
+        return normalized_events
+        
+    except Exception as e:
+        print(f"[ERROR] Backup Live API falhou: {e}")
+        return []
+
+def fetch_recent_matches(num_pages=10, use_cache=True):
+    """Busca partidas recentes finalizadas - Green365 API com Fetch Paralelo"""
     global global_history_cache
     
     # Verificar cache global
@@ -127,59 +172,85 @@ def fetch_recent_matches(page=1, page_size=500, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             print(f"[CACHE] Usando histórico do cache global ({len(global_history_cache['matches'])} partidas)")
             return global_history_cache['matches']
+            
+    print(f"[INFO] Buscando histórico via Green365 ({num_pages} páginas) em paralelo...")
     
-    max_retries = 3
-    for attempt in range(max_retries):
+    all_matches = []
+    
+    def fetch_page(page):
         try:
-            # Nova API retorna array direto, sem paginação
-            params = {'limit': page_size}
-            
-            response = requests.get(RECENT_MATCHES_URL, params=params, timeout=15)
-            response.raise_for_status()
-            raw_matches = response.json()
-            
-            # A resposta é um array direto, não um objeto com 'partidas'
-            if not isinstance(raw_matches, list):
-                print(f"[ERROR] Resposta inesperada da API: {type(raw_matches)}")
+            params = {'page': page, 'limit': 24, 'sport': 'esoccer', 'status': 'ended'}
+            response = requests.get(RECENT_MATCHES_URL, params=params, timeout=10)
+            if response.status_code != 200:
+                print(f"[WARN] Erro na página {page}: {response.status_code}")
                 return []
             
-            normalized_matches = []
-            
-            for match in raw_matches:
-                # Mapear nome da liga
-                league_raw = match.get('league', '')
-                league_mapped = HISTORY_LEAGUE_MAPPING.get(league_raw, league_raw)
-                
-                normalized_matches.append({
-                    'id': match.get('id'),
-                    'league_name': league_mapped,  # Usar nome mapeado
-                    'home_player': match.get('homeTeam'),  # homeTeam é o jogador
-                    'away_player': match.get('awayTeam'),  # awayTeam é o jogador
-                    'home_team': match.get('homeClub'),    # homeClub é o time
-                    'away_team': match.get('awayClub'),    # awayClub é o time
-                    'data_realizacao': match.get('matchTime'),
-                    'home_score_ht': match.get('homeHT'),
-                    'away_score_ht': match.get('awayHT'),
-                    'home_score_ft': match.get('homeFT'),
-                    'away_score_ft': match.get('awayFT')
-                })
-            
-            # Atualizar cache global
-            global_history_cache['matches'] = normalized_matches
-            global_history_cache['timestamp'] = time.time()
-            
-            print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas")
-            return normalized_matches
-            
-        except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar partidas recentes (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
+            data = response.json()
+            items = data.get('items', [])
+            return items
         except Exception as e:
-            print(f"[ERROR] fetch_recent_matches: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return []
+            print(f"[ERROR] Erro ao buscar página {page}: {e}")
+            return []
+
+    # Executar requisições em paralelo
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_page = {executor.submit(fetch_page, page): page for page in range(1, num_pages + 1)}
+        for future in concurrent.futures.as_completed(future_to_page):
+            items = future.result()
+            all_matches.extend(items)
+            
+    if not all_matches:
+        print("[WARN] Nenhuma partida encontrada no histórico Green365")
+        return []
+
+    # Normalizar dados
+    normalized_matches = []
+    
+    def extract_name(s):
+        if not s: return ""
+        # Remove parentesis content mostly
+        m = re.search(r'\((.*?)\)', s)
+        return m.group(1).strip() if m else s.strip()
+
+    for match in all_matches:
+        home_team_obj = match.get('home', {})
+        away_team_obj = match.get('away', {})
+        score_obj = match.get('score', {})
+        score_ht_obj = match.get('scoreHT', {})
+        competition = match.get('competition', {})
+
+        home_player = extract_name(home_team_obj.get('name', ''))
+        away_player = extract_name(away_team_obj.get('name', ''))
+        
+        # Mapeamento do nome da liga
+        league_raw = competition.get('name', 'Esoccer')
+        league_mapped = HISTORY_LEAGUE_MAPPING.get(league_raw, league_raw)
+        
+        normalized_matches.append({
+            'id': match.get('eventId'),
+            'league_name': league_mapped,
+            'home_player': home_player,
+            'away_player': away_player,
+            'home_team': home_team_obj.get('teamName', ''),
+            'away_team': away_team_obj.get('teamName', ''),
+            'home_team_logo': home_team_obj.get('imageUrl', ''),
+            'away_team_logo': away_team_obj.get('imageUrl', ''),
+            'data_realizacao': match.get('startTime', datetime.now().isoformat()),
+            'home_score_ht': score_ht_obj.get('home', 0) if score_ht_obj.get('home') is not None else 0,
+            'away_score_ht': score_ht_obj.get('away', 0) if score_ht_obj.get('away') is not None else 0,
+            'home_score_ft': score_obj.get('home', 0) if score_obj.get('home') is not None else 0,
+            'away_score_ft': score_obj.get('away', 0) if score_obj.get('away') is not None else 0
+        })
+    
+    # Ordenar por data (recente primeiro)
+    normalized_matches.sort(key=lambda x: x['data_realizacao'], reverse=True)
+    
+    # Atualizar cache global
+    global_history_cache['matches'] = normalized_matches
+    global_history_cache['timestamp'] = time.time()
+    
+    print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas (Green365)")
+    return normalized_matches
 
 
 def fetch_player_individual_stats(player_name, use_cache=True):
