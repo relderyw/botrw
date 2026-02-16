@@ -60,8 +60,12 @@ LIVE_LEAGUE_MAPPING = {
     "Valhalla Cup": "VALHALLA CUP",
     "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
-    "CLA": "CLA LEAGUE",
-    "Cyber Live Arena": "CLA LEAGUE",
+    "CLA": "CLA 10 MIN",
+    "Cyber Live Arena": "CLA 10 MIN",
+    "Champions League B 2×6": "GT LEAGUE 12 MIN",
+    "Champions League": "GT LEAGUE 12 MIN",
+    "Super Lig": "GT LEAGUE 12 MIN",
+    "Super Lig • E-battles": "GT LEAGUE 12 MIN",
 }
 
 # History API / Green365 format → Internal format
@@ -79,7 +83,10 @@ HISTORY_LEAGUE_MAPPING = {
     # New leagues from internal API
     "Valhalla Cup": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
-    "CLA League": "CLA LEAGUE",
+    "CLA League": "CLA 10 MIN",
+    "CLA": "CLA 10 MIN",
+    "Champions League": "GT LEAGUE 12 MIN",
+    "Super Lig": "GT LEAGUE 12 MIN",
 }
 
 # =============================================================================
@@ -996,6 +1003,70 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
     return strategies
 
 
+def check_strategies_10mins(event, home_stats, away_stats, all_league_stats):
+    """Estratégias para liga de 10 minutos (CLA)"""
+    strategies = []
+
+    # Usar o nome mapeado da liga
+    league_key = event.get('mappedLeague', '')
+
+    if not league_key or league_key not in all_league_stats:
+        return strategies
+
+    l_stats = all_league_stats[league_key]
+
+    timer = event.get('timer', {})
+    minute = timer.get('minute', 0)
+    second = timer.get('second', 0)
+    time_seconds = minute * 60 + second
+
+    score = event.get('score', {})
+    home_goals = score.get('home', 0)
+    away_goals = score.get('away', 0)
+
+    avg_btts = (home_stats['btts_pct'] + away_stats['btts_pct']) / 2
+    home_player = event.get('homePlayer', 'Player 1')
+    away_player = event.get('awayPlayer', 'Player 2')
+
+    # HT (70s - 240s) - CLA HT is usually 5 mins total, so 4 mins analysis
+    if 70 <= time_seconds <= 240:
+        if (home_goals == 0 and away_goals == 0 and
+                l_stats['ht']['o05'] >= 100):
+            if (home_stats['avg_goals_scored_ft'] >= 0.7 and
+                away_stats['avg_goals_scored_ft'] >= 0.7 and
+                avg_btts >= 45 and
+                home_stats['ht_over_05_pct'] >= 90 and
+                    away_stats['ht_over_05_pct'] >= 90):
+                strategies.append("⚽ +0.5 GOL HT")
+
+        if (home_goals == 0 and away_goals == 0 and
+                l_stats['ht']['o15'] >= 95):
+            if (home_stats['avg_goals_scored_ft'] >= 1.0 and
+                away_stats['avg_goals_scored_ft'] >= 1.0 and
+                avg_btts >= 45 and
+                home_stats['ht_over_15_pct'] >= 90 and
+                    away_stats['ht_over_15_pct'] >= 90):
+                strategies.append("⚽ +1.5 GOLS HT")
+
+    # FT (220s - 450s)
+    if 220 <= time_seconds <= 450:
+        if (home_goals == 0 and away_goals == 0 and
+                l_stats['ft']['o15'] >= 95):
+            if (home_stats['avg_goals_scored_ft'] >= 0.8 and
+                away_stats['avg_goals_scored_ft'] >= 0.8 and
+                    avg_btts >= 75):
+                strategies.append("⚽ +1.5 GOLS FT")
+
+        if (home_goals == 0 and away_goals == 0 and
+                l_stats['ft']['o25'] >= 90):
+            if (home_stats['avg_goals_scored_ft'] >= 2.0 and
+                away_stats['avg_goals_scored_ft'] >= 2.0 and
+                    avg_btts >= 80):
+                strategies.append("⚽ +2.5 GOLS FT")
+
+    return strategies
+
+
 def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para liga Volta de 6 minutos"""
     strategies = []
@@ -1217,11 +1288,11 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
 
         msg += f"🔥 <b>BTTS Médio:</b> {avg_btts:.0f}%\n\n"
 
-    # Link Bet365
-    if bet365_event_id:
-        bet365_link = f"https://www.bet365.bet.br/?#/IP/EV{bet365_event_id}"
+    # Link EstrelaBet
+    if event_id:
+        estrela_link = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"🎲 <a href='{bet365_link}'><b>APOSTAR NA BET365</b></a>\n"
+        msg += f"🎲 <a href='{estrela_link}'><b>CONFRONTO</b></a>\n"
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
 
     return msg
@@ -1917,8 +1988,16 @@ async def main_loop(bot):
                     strategies = check_strategies_12mins(
                         event, home_stats, away_stats, league_stats)
 
-                elif mapped_league == 'VOLTA 6 MIN':
+                elif mapped_league in ['VOLTA 6 MIN']:
                     strategies = check_strategies_volta_6mins(
+                        event, home_stats, away_stats, league_stats)
+
+                elif mapped_league in ['VALHALLA CUP', 'VALKYRIE CUP']:
+                    strategies = check_strategies_8mins(
+                        event, home_stats, away_stats, league_stats)
+
+                elif mapped_league == 'CLA 10 MIN':
+                    strategies = check_strategies_10mins(
                         event, home_stats, away_stats, league_stats)
 
                 for strategy in strategies:
