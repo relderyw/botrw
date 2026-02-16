@@ -1832,15 +1832,17 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (80%)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 70%)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if home_confidence < 80 or away_confidence < 80:
+                if avg_confidence < 70:
                     print(
-                        f"[BLOCKED] Confidence insuficiente: {home_player}={home_confidence:.0f}%, {away_player}={away_confidence:.0f}% (mínimo: 80%)")
+                        f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
+
+                print(f"[✓] Confidence aprovado: Média {avg_confidence:.0f}% | {home_player}: {home_confidence:.0f}% | {away_player}: {away_confidence:.0f}%")
 
                 print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}% | Confidence: {home_confidence:.0f}%")
                 print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}% | Confidence: {away_confidence:.0f}%")
