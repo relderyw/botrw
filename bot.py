@@ -27,8 +27,8 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
-# Altenar Live API (same as frontend)
-LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents"
+# Altenar Live API (same as frontend) - includes auth parameters
+LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventCount=0&sportId=66&catIds=2085,1571,1728,1594,2086,1729,2130"
 # Internal History API
 HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
 # Legacy URLs (kept for reference/fallback)
