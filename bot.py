@@ -27,12 +27,11 @@ BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
 CHAT_ID = "-1001981134607"
 
 # APIs
-# Primary Live API (Backup will be Green365)
-LIVE_API_URL = "https://rwtips.dpdns.org/api/app3/live-events"
-# Green365 for History
-RECENT_MATCHES_URL = "https://api-v2.green365.com.br/api/v2/sport-events"
-# Green365 for Live Backup
-LIVE_API_BACKUP = "https://api-v2.green365.com.br/api/v2/sport-events?page=1&limit=50&sport=esoccer&status=inplay"
+# Altenar Live API (same as frontend)
+LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents"
+# Internal History API
+HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
+# Legacy URLs (kept for reference/fallback)
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
@@ -52,6 +51,12 @@ LIVE_LEAGUE_MAPPING = {
     "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
     "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
     "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
+    # New Altenar leagues
+    "Valhalla Cup": "VALHALLA CUP",
+    "Valhalla League": "VALHALLA CUP",
+    "Valkyrie Cup": "VALKYRIE CUP",
+    "CLA": "CLA LEAGUE",
+    "Cyber Live Arena": "CLA LEAGUE",
 }
 
 # History API format → Internal format
@@ -61,6 +66,10 @@ HISTORY_LEAGUE_MAPPING = {
     "H2H 8m": "H2H 8 MIN",
     "GT Leagues 12m": "GT LEAGUE 12 MIN",
     "GT League 12m": "GT LEAGUE 12 MIN",
+    # New leagues from internal API
+    "Valhalla Cup": "VALHALLA CUP",
+    "Valkyrie Cup": "VALKYRIE CUP",
+    "CLA League": "CLA LEAGUE",
 }
 
 # =============================================================================
@@ -87,169 +96,142 @@ league_stats = {}
 # FUNÇÕES DE REQUISIÇÃO
 # =============================================================================
 
-def fetch_live_matches():
-    """Busca partidas ao vivo (Primary API -> Backup Green365)"""
-    
-    # 1. Tentar API Primária
-    try:
-        response = requests.get(LIVE_API_URL, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            events = data.get('events', [])
-            
-            # Normalizar dados da API Primária
-            normalized_events = []
-            for event in events:
-                league_name = event.get('leagueName', '')
-                mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
-                
-                normalized_event = event.copy()
-                normalized_event['leagueName'] = league_name
-                normalized_event['mappedLeague'] = mapped_league
-                normalized_events.append(normalized_event)
-            
-            print(f"[INFO] {len(normalized_events)} partidas ao vivo (Primary API)")
-            return normalized_events
-            
-    except Exception as e:
-        print(f"[WARN] Primary Live API falhou: {e}")
 
-    # 2. Tentar Backup (Green365)
-    print(f"[INFO] Tentando Backup API (Green365)...")
+def fetch_live_matches():
+    """Busca partidas ao vivo da Altenar API"""
+
     try:
-        response = requests.get(LIVE_API_BACKUP, timeout=10)
+        print(f"[INFO] Buscando partidas ao vivo da Altenar API...")
+        response = requests.get(LIVE_API_URL, timeout=10)
         response.raise_for_status()
         data = response.json()
-        
-        if isinstance(data, str):
-            print(f"[ERROR] Backup Live API retornou string inesperada: {data[:200]}")
-            items = []
-        else:
-            print(f"[DEBUG] Tipo de data: {type(data)}")
-            items = data.get('items', []) or data.get('data', [])
-            print(f"[DEBUG] Tipo de items: {type(items)}")
-            if isinstance(items, list) and len(items) > 0:
-                 print(f"[DEBUG] Primeiro item: {items[0]}")
-                 print(f"[DEBUG] Tipo do primeiro item: {type(items[0])}")
+
+        events = data.get('events', [])
+        competitors_list = data.get('competitors', [])
+        champs_list = data.get('champs', [])
+
+        # Criar mapas para lookup rápido
+        competitors_map = {c['id']: c['name'] for c in competitors_list}
+        champs_map = {c['id']: c['name'] for c in champs_list}
+
+        print(
+            f"[DEBUG] Altenar API: {len(events)} eventos, {len(competitors_map)} competidores, {len(champs_map)} campeonatos")
+
+        # Filtrar apenas futebol (sportId 66)
+        football_events = [e for e in events if e.get('sportId') == 66]
+        print(f"[DEBUG] {len(football_events)} eventos de futebol após filtro")
+
+        def extract_player_name(competitor_name):
+            """Extrai nome do jogador de 'Team (PlayerName)'"""
+            if not competitor_name:
+                return ""
+            match = re.search(r'\((.*?)\)', competitor_name)
+            return match.group(1).strip() if match else competitor_name.strip()
+
+        def parse_live_time(live_time_str):
+            """Parseia tempo ao vivo (ex: '1ª parte', '2ª parte')"""
+            # Altenar não fornece minuto exato, apenas período
+            # Retornar 0 por enquanto (pode ser melhorado)
+            return 0, 0
 
         normalized_events = []
-        
-        def extract_name(s):
-            if not s: return ""
-            m = re.search(r'\((.*?)\)', s)
-            return m.group(1).strip() if m else s.strip()
 
-        for item in items:
+        for event in football_events:
             try:
-                if isinstance(item, str):
-                    continue
-                
-                # Robust extraction of league name
-                league_name = "Esoccer"
-                
-                comp = item.get('competition')
-                if isinstance(comp, dict):
-                    league_name = comp.get('name', "Esoccer")
-                elif isinstance(comp, str):
-                    league_name = comp
-                    
-                if league_name == "Esoccer": # Try 'league' field if competition didn't yield result
-                    league = item.get('league')
-                    if isinstance(league, dict):
-                        league_name = league.get('name', "Esoccer")
-                    elif isinstance(league, str):
-                        league_name = league
-                
-                mapped_league = LIVE_LEAGUE_MAPPING.get(league_name, league_name)
-                
-                # Robust timer extraction
-                timer_val = item.get('timer')
-                tm = 0
-                ts = 0
-                
-                if isinstance(timer_val, str) and ':' in timer_val:
-                    try:
-                        parts = timer_val.split(':')
-                        tm = int(parts[0])
-                        ts = int(parts[1])
-                    except:
-                        pass
-                elif isinstance(timer_val, dict):
-                    tm = timer_val.get('tm', 0)
-                    ts = timer_val.get('ts', 0)
-                
-                # Robust score extraction
-                score_obj = item.get('score')
-                if isinstance(score_obj, dict):
-                    home_score = score_obj.get('home')
-                    away_score = score_obj.get('away')
-                else:
-                    home_score = None
-                    away_score = None
+                event_id = event.get('id')
+                champ_id = event.get('champId')
+                competitor_ids = event.get('competitorIds', [])
+                score = event.get('score', [0, 0])
+                live_time = event.get('liveTime', '')
 
-                # Fallback score from 'ss' or 'scores' if needed could be added here
-                # but simplest is to handle None
-                
-                if home_score is None: home_score = 0
-                if away_score is None: away_score = 0
-                
-                # Construir objeto compatível com o esperado pelo bot
-                event = {
-                    'id': str(item.get('eventId') or item.get('id')),
+                # Obter nomes dos competidores
+                if len(competitor_ids) >= 2:
+                    home_competitor_name = competitors_map.get(
+                        competitor_ids[0], '')
+                    away_competitor_name = competitors_map.get(
+                        competitor_ids[1], '')
+                else:
+                    print(
+                        f"[WARN] Evento {event_id} sem competidores suficientes")
+                    continue
+
+                # Extrair nomes dos jogadores
+                home_player = extract_player_name(home_competitor_name)
+                away_player = extract_player_name(away_competitor_name)
+
+                # Obter nome da liga
+                league_name = champs_map.get(champ_id, 'Unknown League')
+
+                # Mapear nome da liga
+                mapped_league = LIVE_LEAGUE_MAPPING.get(
+                    league_name, league_name)
+
+                # Parsear tempo
+                minute, second = parse_live_time(live_time)
+
+                normalized_event = {
+                    'id': str(event_id),
                     'leagueName': league_name,
                     'mappedLeague': mapped_league,
-                    'homePlayer': extract_name(item.get('home', {}).get('name', '')),
-                    'awayPlayer': extract_name(item.get('away', {}).get('name', '')),
-                    'homeTeamName': item.get('home', {}).get('teamName', ''),
-                    'awayTeamName': item.get('away', {}).get('teamName', ''),
+                    'homePlayer': home_player,
+                    'awayPlayer': away_player,
+                    'homeTeamName': home_competitor_name.split('(')[0].strip() if '(' in home_competitor_name else home_competitor_name,
+                    'awayTeamName': away_competitor_name.split('(')[0].strip() if '(' in away_competitor_name else away_competitor_name,
                     'timer': {
-                        'minute': int(tm or 0),
-                        'second': int(ts or 0),
-                        'formatted': "00:00" 
+                        'minute': minute,
+                        'second': second,
+                        'formatted': f"{minute:02d}:{second:02d}"
                     },
                     'score': {
-                        'home': int(home_score),
-                        'away': int(away_score)
+                        'home': score[0] if len(score) > 0 else 0,
+                        'away': score[1] if len(score) > 1 else 0
                     },
-                    'scoreboard': item.get('ss', f"{home_score}-{away_score}")
+                    'scoreboard': f"{score[0] if len(score) > 0 else 0}-{score[1] if len(score) > 1 else 0}"
                 }
-                normalized_events.append(event)
+
+                normalized_events.append(normalized_event)
+
             except Exception as e:
-                print(f"[WARN] Erro ao processar item específico: {e} | Item: {str(item)[:100]}...")
+                print(
+                    f"[WARN] Erro ao processar evento {event.get('id')}: {e}")
                 continue
-            
-        print(f"[INFO] {len(normalized_events)} partidas ao vivo (Backup API)")
+
+        print(
+            f"[INFO] {len(normalized_events)} partidas ao vivo normalizadas (Altenar API)")
         return normalized_events
-        
+
     except Exception as e:
-        print(f"[ERROR] Backup Live API falhou: {e}")
+        print(f"[ERROR] Altenar Live API falhou: {e}")
         return []
 
+
 def fetch_recent_matches(num_pages=10, use_cache=True):
-    """Busca partidas recentes finalizadas - Green365 API com Fetch Paralelo"""
+    """Busca partidas recentes finalizadas - Internal History API com Fetch Paralelo"""
     global global_history_cache
-    
+
     # Verificar cache global
     if use_cache and global_history_cache['matches']:
         cache_age = time.time() - global_history_cache['timestamp']
         if cache_age < HISTORY_CACHE_TTL:
-            print(f"[CACHE] Usando histórico do cache global ({len(global_history_cache['matches'])} partidas)")
+            print(
+                f"[CACHE] Usando histórico do cache global ({len(global_history_cache['matches'])} partidas)")
             return global_history_cache['matches']
-            
-    print(f"[INFO] Buscando histórico via Green365 ({num_pages} páginas) em paralelo...")
-    
+
+    print(
+        f"[INFO] Buscando histórico via Internal API ({num_pages} páginas) em paralelo...")
+
     all_matches = []
-    
+
     def fetch_page(page):
         try:
-            params = {'page': page, 'limit': 24, 'sport': 'esoccer', 'status': 'ended'}
-            response = requests.get(RECENT_MATCHES_URL, params=params, timeout=10)
+            params = {'page': page, 'limit': 24}
+            response = requests.get(HISTORY_API_URL, params=params, timeout=10)
             if response.status_code != 200:
                 print(f"[WARN] Erro na página {page}: {response.status_code}")
                 return []
-            
+
             data = response.json()
-            items = data.get('items', [])
+            items = data.get('data', [])
             return items
         except Exception as e:
             print(f"[ERROR] Erro ao buscar página {page}: {e}")
@@ -257,108 +239,97 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
 
     # Executar requisições em paralelo
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_page = {executor.submit(fetch_page, page): page for page in range(1, num_pages + 1)}
+        future_to_page = {executor.submit(
+            fetch_page, page): page for page in range(1, num_pages + 1)}
         for future in concurrent.futures.as_completed(future_to_page):
             items = future.result()
             all_matches.extend(items)
-            
+
     if not all_matches:
-        print("[WARN] Nenhuma partida encontrada no histórico Green365")
+        print("[WARN] Nenhuma partida encontrada no histórico (Internal API)")
         return []
 
-    # Normalizar dados
+    # Normalizar dados (API interna já retorna no formato correto, apenas mapear nomes)
     normalized_matches = []
-    
-    def extract_name(s):
-        if not s: return ""
-        # Remove parentesis content mostly
-        m = re.search(r'\((.*?)\)', s)
-        return m.group(1).strip() if m else s.strip()
 
     for match in all_matches:
-        home_team_obj = match.get('home', {})
-        away_team_obj = match.get('away', {})
-        score_obj = match.get('score', {})
-        score_ht_obj = match.get('scoreHT', {})
-        competition = match.get('competition', {})
+        # A API interna já retorna os dados no formato esperado
+        league_name = match.get('league_name', 'Unknown')
+        league_mapped = HISTORY_LEAGUE_MAPPING.get(league_name, league_name)
 
-        home_player = extract_name(home_team_obj.get('name', ''))
-        away_player = extract_name(away_team_obj.get('name', ''))
-        
-        # Mapeamento do nome da liga
-        league_raw = competition.get('name', 'Esoccer')
-        league_mapped = HISTORY_LEAGUE_MAPPING.get(league_raw, league_raw)
-        
         normalized_matches.append({
-            'id': match.get('eventId'),
+            'id': match.get('id'),
             'league_name': league_mapped,
-            'home_player': home_player,
-            'away_player': away_player,
-            'home_team': home_team_obj.get('teamName', ''),
-            'away_team': away_team_obj.get('teamName', ''),
-            'home_team_logo': home_team_obj.get('imageUrl', ''),
-            'away_team_logo': away_team_obj.get('imageUrl', ''),
-            'data_realizacao': match.get('startTime', datetime.now().isoformat()),
-            'home_score_ht': score_ht_obj.get('home', 0) if score_ht_obj.get('home') is not None else 0,
-            'away_score_ht': score_ht_obj.get('away', 0) if score_ht_obj.get('away') is not None else 0,
-            'home_score_ft': score_obj.get('home', 0) if score_obj.get('home') is not None else 0,
-            'away_score_ft': score_obj.get('away', 0) if score_obj.get('away') is not None else 0
+            'home_player': match.get('home_player', ''),
+            'away_player': match.get('away_player', ''),
+            'home_team': match.get('home_team', ''),
+            'away_team': match.get('away_team', ''),
+            'home_team_logo': match.get('home_team_logo', ''),
+            'away_team_logo': match.get('away_team_logo', ''),
+            'data_realizacao': match.get('data_realizacao', datetime.now().isoformat()),
+            'home_score_ht': match.get('halftime_score_home', 0) or 0,
+            'away_score_ht': match.get('halftime_score_away', 0) or 0,
+            'home_score_ft': match.get('score_home', 0) or 0,
+            'away_score_ft': match.get('score_away', 0) or 0
         })
-    
+
     # Ordenar por data (recente primeiro)
     normalized_matches.sort(key=lambda x: x['data_realizacao'], reverse=True)
-    
+
     # Atualizar cache global
     global_history_cache['matches'] = normalized_matches
     global_history_cache['timestamp'] = time.time()
-    
-    print(f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas (Green365)")
+
+    print(
+        f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas (Internal API)")
     return normalized_matches
 
 
 def fetch_player_individual_stats(player_name, use_cache=True):
     """Busca estatísticas individuais de um jogador - Usa cache global de histórico"""
-    
+
     if use_cache and player_name in player_stats_cache:
         cached = player_stats_cache[player_name]
         if time.time() - cached['timestamp'] < CACHE_TTL:
             print(f"[CACHE] Stats de {player_name} do cache")
             return cached['stats']
-    
+
     # Buscar histórico global (usa cache se disponível)
     # 500 jogos ~= 21 páginas de 24 jogos
     all_matches = fetch_recent_matches(num_pages=15, use_cache=True)
-    
+
     if not all_matches:
         print(f"[WARN] Nenhum histórico disponível para filtrar {player_name}")
         return None
-    
+
     # Filtrar jogos do jogador específico
     player_matches = []
     for match in all_matches:
         home_player = match.get('home_player', '')
         away_player = match.get('away_player', '')
-        
+
         # Verificar se o jogador participou da partida
-        if (home_player.upper() == player_name.upper() or 
-            away_player.upper() == player_name.upper()):
+        if (home_player.upper() == player_name.upper() or
+                away_player.upper() == player_name.upper()):
             player_matches.append(match)
-    
+
     # Limitar aos últimos 20 jogos do jogador
     player_matches = player_matches[:20]
-    
+
     final_data = {
         'matches': player_matches,
         'total_count': len(player_matches)
     }
-    
+
     player_stats_cache[player_name] = {
         'stats': final_data,
         'timestamp': time.time()
     }
-    
-    print(f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
+
+    print(
+        f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
     return final_data
+
 
 def fetch_h2h_data(player1, player2):
     """Busca dados H2H entre dois jogadores"""
@@ -369,10 +340,12 @@ def fetch_h2h_data(player1, player2):
             response = requests.get(url, timeout=15)
             response.raise_for_status()
             data = response.json()
-            print(f"[INFO] H2H {player1} vs {player2}: {data.get('total_matches', 0)} jogos")
+            print(
+                f"[INFO] H2H {player1} vs {player2}: {data.get('total_matches', 0)} jogos")
             return data
         except requests.exceptions.Timeout:
-            print(f"[WARN] Timeout ao buscar H2H (tentativa {attempt + 1}/{max_retries})")
+            print(
+                f"[WARN] Timeout ao buscar H2H (tentativa {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 time.sleep(2)
         except Exception as e:
@@ -385,82 +358,104 @@ def fetch_h2h_data(player1, player2):
 # ANÁLISE DE ESTATÍSTICAS
 # =============================================================================
 
+
 def analyze_last_5_games(matches, player_name):
     """Analisa os últimos 5 jogos de um jogador"""
     if not matches:
         print(f"[WARN] {player_name}: Nenhum jogo encontrado")
         return None
-    
+
     if len(matches) < 5:
-        print(f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
+        print(
+            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
         return None
-    
+
     last_5 = matches[:5]
     print(f"[DEBUG] Analisando últimos 5 jogos de {player_name}")
-    
+
     # Contadores
     ht_over_05 = ht_over_15 = ht_over_25 = ht_over_35 = 0
     ht_scored_05 = ht_scored_15 = ht_scored_25 = 0
     ht_conceded_15 = 0
-    
+
     ft_over_05 = ft_over_15 = ft_over_25 = ft_over_35 = ft_over_45 = 0
     ft_scored_05 = ft_scored_15 = ft_scored_25 = ft_scored_35 = 0
-    
+
     total_goals_scored = total_goals_conceded = 0
     total_goals_scored_ht = total_goals_conceded_ht = 0
     games_scored_3_plus = btts_count = ht_btts_count = 0
-    
+
     for match in last_5:
         is_home = match.get('home_player', '').upper() == player_name.upper()
-        
+
         ht_home = match.get('home_score_ht', 0) or 0
         ht_away = match.get('away_score_ht', 0) or 0
         ht_total = ht_home + ht_away
-        
+
         ft_home = match.get('home_score_ft', 0) or 0
         ft_away = match.get('away_score_ft', 0) or 0
         ft_total = ft_home + ft_away
-        
+
         player_ht_goals = ht_home if is_home else ht_away
         player_ht_conceded = ht_away if is_home else ht_home
-        
+
         player_ft_goals = ft_home if is_home else ft_away
         player_ft_conceded = ft_away if is_home else ft_home
-        
+
         total_goals_scored += player_ft_goals
         total_goals_conceded += player_ft_conceded
         total_goals_scored_ht += player_ht_goals
         total_goals_conceded_ht += player_ht_conceded
-        
-        if player_ft_goals >= 3: games_scored_3_plus += 1
-        if ft_home > 0 and ft_away > 0: btts_count += 1
-        if ht_home > 0 and ht_away > 0: ht_btts_count += 1
-        
+
+        if player_ft_goals >= 3:
+            games_scored_3_plus += 1
+        if ft_home > 0 and ft_away > 0:
+            btts_count += 1
+        if ht_home > 0 and ht_away > 0:
+            ht_btts_count += 1
+
         # HT Overs
-        if ht_total > 0: ht_over_05 += 1
-        if ht_total > 1: ht_over_15 += 1
-        if ht_total > 2: ht_over_25 += 1
-        if ht_total > 3: ht_over_35 += 1
-        
+        if ht_total > 0:
+            ht_over_05 += 1
+        if ht_total > 1:
+            ht_over_15 += 1
+        if ht_total > 2:
+            ht_over_25 += 1
+        if ht_total > 3:
+            ht_over_35 += 1
+
         # HT Individual
-        if player_ht_goals > 0: ht_scored_05 += 1
-        if player_ht_goals > 1: ht_scored_15 += 1
-        if player_ht_goals > 2: ht_scored_25 += 1
-        if player_ht_conceded > 1: ht_conceded_15 += 1
-        
+        if player_ht_goals > 0:
+            ht_scored_05 += 1
+        if player_ht_goals > 1:
+            ht_scored_15 += 1
+        if player_ht_goals > 2:
+            ht_scored_25 += 1
+        if player_ht_conceded > 1:
+            ht_conceded_15 += 1
+
         # FT Overs
-        if ft_total > 0: ft_over_05 += 1
-        if ft_total > 1: ft_over_15 += 1
-        if ft_total > 2: ft_over_25 += 1
-        if ft_total > 3: ft_over_35 += 1
-        if ft_total > 4: ft_over_45 += 1
-        
+        if ft_total > 0:
+            ft_over_05 += 1
+        if ft_total > 1:
+            ft_over_15 += 1
+        if ft_total > 2:
+            ft_over_25 += 1
+        if ft_total > 3:
+            ft_over_35 += 1
+        if ft_total > 4:
+            ft_over_45 += 1
+
         # FT Individual
-        if player_ft_goals > 0: ft_scored_05 += 1
-        if player_ft_goals > 1: ft_scored_15 += 1
-        if player_ft_goals > 2: ft_scored_25 += 1
-        if player_ft_goals > 3: ft_scored_35 += 1
-    
+        if player_ft_goals > 0:
+            ft_scored_05 += 1
+        if player_ft_goals > 1:
+            ft_scored_15 += 1
+        if player_ft_goals > 2:
+            ft_scored_25 += 1
+        if player_ft_goals > 3:
+            ft_scored_35 += 1
+
     return {
         'ht_over_05_pct': (ht_over_05 / 5) * 100,
         'ht_over_15_pct': (ht_over_15 / 5) * 100,
@@ -488,6 +483,7 @@ def analyze_last_5_games(matches, player_name):
         'ht_btts_pct': (ht_btts_count / 5) * 100
     }
 
+
 def detect_regime_change(matches):
     """
     Detecta mudança de estado do jogador (hot→cold ou cold→hot)
@@ -495,13 +491,13 @@ def detect_regime_change(matches):
     """
     if len(matches) < 8:
         return {'regime_change': False}
-    
+
     # Últimos 3 jogos (MOMENTO ATUAL)
     last_3 = matches[:3]
-    
+
     # Jogos 4-10 (HISTÓRICO RECENTE)
     previous_7 = matches[3:10] if len(matches) >= 10 else matches[3:]
-    
+
     def avg_goals_window(window, player_name=None):
         total = 0
         for m in window:
@@ -512,18 +508,19 @@ def detect_regime_change(matches):
             else:
                 # Fallback: assumir que estamos analisando o primeiro jogador
                 is_home = True
-            
-            goals = m.get('home_score_ft', 0) if is_home else m.get('away_score_ft', 0)
+
+            goals = m.get('home_score_ft', 0) if is_home else m.get(
+                'away_score_ft', 0)
             total += goals or 0
         return total / len(window) if window else 0
-    
+
     avg_last_3 = avg_goals_window(last_3)
     avg_previous = avg_goals_window(previous_7)
-    
+
     # DETECÇÃO DE MUDANÇA DE ESTADO
     if avg_previous > 0:
         ratio = avg_last_3 / avg_previous
-        
+
         # COOLING (jogador esfriou) - BLOQUEIO CRÍTICO
         # Ajustado para ser mais sensível e detectar cooling mais cedo
         if ratio < 0.6 and avg_last_3 < 2.0:
@@ -536,7 +533,7 @@ def detect_regime_change(matches):
                 'action': 'AVOID',
                 'reason': f'Jogador esfriou drasticamente: {avg_last_3:.1f} vs {avg_previous:.1f} anterior'
             }
-        
+
         # HEATING (jogador esquentou) - BOOST
         elif ratio > 1.8 and avg_last_3 > 2.0:
             return {
@@ -548,8 +545,9 @@ def detect_regime_change(matches):
                 'action': 'BOOST',
                 'reason': f'Jogador em alta: {avg_last_3:.1f} vs {avg_previous:.1f} anterior'
             }
-    
+
     return {'regime_change': False}
+
 
 def analyze_player_with_regime_check(matches, player_name):
     """
@@ -559,58 +557,64 @@ def analyze_player_with_regime_check(matches, player_name):
     if not matches:
         print(f"[WARN] {player_name}: Nenhum jogo encontrado")
         return None
-    
+
     # Mínimo de 5 jogos
     if len(matches) < 5:
-        print(f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
+        print(
+            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
         return None
-    
+
     # 1. DETECTAR REGIME CHANGE (crítico!)
     regime = detect_regime_change(matches)
-    
+
     if regime['regime_change'] and regime['action'] == 'AVOID':
-        print(f"[ALERT] {player_name}: REGIME CHANGE DETECTADO - {regime['reason']}")
+        print(
+            f"[ALERT] {player_name}: REGIME CHANGE DETECTADO - {regime['reason']}")
         print(f"[ALERT] Bloqueando análise para evitar tips perigosas")
         return None  # VETO! Não analisa jogador que esfriou
-    
+
     # 2. Análise normal dos últimos 5 jogos
     stats = analyze_last_5_games(matches, player_name)
-    
+
     if not stats:
         return None
-    
+
     # 3. CALCULAR CONFIDENCE SCORE (0-100)
-    confidence = calculate_confidence_score(matches[:5], player_name, stats, regime)
+    confidence = calculate_confidence_score(
+        matches[:5], player_name, stats, regime)
     stats['confidence'] = confidence
-    
+
     # 4. Adicionar informações de regime
     stats['regime_change'] = regime['regime_change']
     stats['regime_direction'] = regime.get('direction', 'STABLE')
-    
+
     if regime['regime_change'] and regime['action'] == 'BOOST':
-        print(f"[INFO] {player_name} em HOT STREAK: {regime['reason']} | Confidence: {confidence}%")
+        print(
+            f"[INFO] {player_name} em HOT STREAK: {regime['reason']} | Confidence: {confidence}%")
     else:
         print(f"[INFO] {player_name} Confidence: {confidence}%")
-    
+
     return stats
+
 
 def calculate_confidence_score(last_5_matches, player_name, stats, regime):
     """
     Calcula score de confidence (0-100) baseado em múltiplos fatores
     """
     score = 0
-    
+
     # FATOR 1: Consistência (40 pontos)
     # Quanto mais consistente, maior o score
     avg_goals = stats['avg_goals_scored_ft']
-    
+
     # Calcular desvio padrão dos gols marcados
     goals_list = []
     for match in last_5_matches:
         is_home = match.get('home_player', '').upper() == player_name.upper()
-        goals = match.get('home_score_ft', 0) if is_home else match.get('away_score_ft', 0)
+        goals = match.get('home_score_ft', 0) if is_home else match.get(
+            'away_score_ft', 0)
         goals_list.append(goals or 0)
-    
+
     import statistics
     if len(goals_list) >= 2:
         std_dev = statistics.stdev(goals_list)
@@ -624,7 +628,7 @@ def calculate_confidence_score(last_5_matches, player_name, stats, regime):
         elif std_dev <= 2.0:
             score += 10  # Inconsistente
         # std_dev > 2.0 = 0 pontos (muito volátil)
-    
+
     # FATOR 2: Média de Gols (30 pontos)
     if avg_goals >= 3.5:
         score += 30  # Excelente
@@ -637,7 +641,7 @@ def calculate_confidence_score(last_5_matches, player_name, stats, regime):
     elif avg_goals >= 1.5:
         score += 10  # Fraco
     # < 1.5 = 0 pontos
-    
+
     # FATOR 3: Tendência/Regime (20 pontos)
     if regime['regime_change']:
         if regime['action'] == 'BOOST':
@@ -646,7 +650,7 @@ def calculate_confidence_score(last_5_matches, player_name, stats, regime):
             score += 0   # Jogador esfriando (já bloqueado antes)
     else:
         score += 10  # Estável (neutro)
-    
+
     # FATOR 4: Consistência em HT (10 pontos)
     # Jogadores que marcam consistentemente no HT são mais confiáveis
     if stats['ht_over_05_pct'] >= 100:
@@ -657,150 +661,152 @@ def calculate_confidence_score(last_5_matches, player_name, stats, regime):
         score += 5
     elif stats['ht_over_05_pct'] >= 40:
         score += 3
-    
+
     # Garantir que está entre 0-100
     score = max(0, min(100, score))
-    
+
     return score
 
 # =============================================================================
 # LÓGICA DE ESTRATÉGIAS
 # =============================================================================
 
+
 def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para ligas de 8 minutos"""
     strategies = []
-    
+
     # Usar o nome mapeado da liga
     league_key = event.get('mappedLeague', '')
-    
+
     # Se não tiver dados da liga, não entra nas estratégias
     if not league_key or league_key not in all_league_stats:
         return strategies
 
     l_stats = all_league_stats[league_key]
-    
+
     timer = event.get('timer', {})
     minute = timer.get('minute', 0)
     second = timer.get('second', 0)
     time_seconds = minute * 60 + second
-    
+
     score = event.get('score', {})
     home_goals = score.get('home', 0)
     away_goals = score.get('away', 0)
-    
+
     avg_btts = (home_stats['btts_pct'] + away_stats['btts_pct']) / 2
     home_player = event.get('homePlayer', 'Player 1')
     away_player = event.get('awayPlayer', 'Player 2')
-    
+
     # HT (60s - 180s)
     if 60 <= time_seconds <= 180:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o05'] >= 100):
+                l_stats['ht']['o05'] >= 100):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
                 avg_btts >= 45 and
                 home_stats['ht_over_05_pct'] >= 90 and
-                away_stats['ht_over_05_pct'] >= 90):
+                    away_stats['ht_over_05_pct'] >= 90):
                 strategies.append("⚽ +0.5 GOL HT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o15'] >= 95):
+                l_stats['ht']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 1.0 and
                 away_stats['avg_goals_scored_ft'] >= 1.0 and
                 avg_btts >= 45 and
                 home_stats['ht_over_15_pct'] >= 80 and
-                away_stats['ht_over_15_pct'] >= 80):
+                    away_stats['ht_over_15_pct'] >= 80):
                 strategies.append("⚽ +1.5 GOLS HT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
             if (l_stats['ht']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 1.5 and
                     away_stats['avg_goals_scored_ft'] >= 1.5 and
                     avg_btts >= 75 and
                     home_stats['ht_over_15_pct'] == 100 and
-                    away_stats['ht_over_15_pct'] == 100):
+                        away_stats['ht_over_15_pct'] == 100):
                     strategies.append("⚽ +2.5 GOLS HT")
-                
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['btts'] >= 90):
+                l_stats['ht']['btts'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 1.3 and
                 away_stats['avg_goals_scored_ft'] >= 1.3 and
                 avg_btts >= 85 and
                 home_stats['ht_over_05_pct'] == 100 and
-                away_stats['ht_over_05_pct'] == 100):
+                    away_stats['ht_over_05_pct'] == 100):
                 strategies.append("⚽ BTTS HT")
 
     # FT (180s - 360s)
     if 180 <= time_seconds <= 360:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o15'] >= 95):
+                l_stats['ft']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
-                avg_btts >= 75):
+                    avg_btts >= 75):
                 strategies.append("⚽ +1.5 GOLS FT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o25'] >= 90):
+                l_stats['ft']['o25'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                 away_stats['avg_goals_scored_ft'] >= 2.0 and
-                avg_btts >= 80):
+                    avg_btts >= 80):
                 strategies.append("⚽ +2.5 GOLS FT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
-            if (l_stats['ft']['o25'] >= 90): 
+            if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 2.5 and
                     away_stats['avg_goals_scored_ft'] >= 2.5 and
-                    avg_btts >= 80):
+                        avg_btts >= 80):
                     strategies.append("⚽ +3.5 GOLS FT")
-                
+
     # Estratégias de jogador (90s - 360s)
     if 90 <= time_seconds <= 360:
         # Player 1.5 FT check
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.5 and
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
-                    home_stats['ft_scored_25_pct'] >= 60):
+                        home_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
-                
-        valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
+
+        valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
-             if (l_stats['ft']['o25'] >= 90):
+            if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 3.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.0 and
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
-                    home_stats['ft_scored_35_pct'] >= 60):
+                        home_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
-                
+
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 2.5 and
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
-                    away_stats['ft_scored_25_pct'] >= 60):
+                        away_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
-                
-        valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
+
+        valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
             if (l_stats['ft']['o25'] >= 90):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 3.4 and
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
-                    away_stats['ft_scored_35_pct'] >= 60):
+                        away_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
-    
+
     return strategies
+
 
 def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para liga de 12 minutos"""
     strategies = []
-    
+
     # Usar o nome mapeado da liga
     league_key = event.get('mappedLeague', '')
 
@@ -808,127 +814,128 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
         return strategies
 
     l_stats = all_league_stats[league_key]
-    
+
     timer = event.get('timer', {})
     minute = timer.get('minute', 0)
     second = timer.get('second', 0)
     time_seconds = minute * 60 + second
-    
+
     score = event.get('score', {})
     home_goals = score.get('home', 0)
     away_goals = score.get('away', 0)
-    
+
     avg_btts = (home_stats['btts_pct'] + away_stats['btts_pct']) / 2
     home_player = event.get('homePlayer', 'Player 1')
     away_player = event.get('awayPlayer', 'Player 2')
-    
+
     # HT (90s - 300s)
     if 90 <= time_seconds <= 300:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o05'] >= 100):
+                l_stats['ht']['o05'] >= 100):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
                 avg_btts >= 45 and
                 home_stats['ht_over_05_pct'] >= 90 and
-                away_stats['ht_over_05_pct'] >= 90):
+                    away_stats['ht_over_05_pct'] >= 90):
                 strategies.append("⚽ +0.5 GOL HT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o15'] >= 95):
+                l_stats['ht']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 1.0 and
                 away_stats['avg_goals_scored_ft'] >= 1.0 and
                 avg_btts >= 45 and
                 home_stats['ht_over_15_pct'] >= 90 and
-                away_stats['ht_over_15_pct'] >= 90):
+                    away_stats['ht_over_15_pct'] >= 90):
                 strategies.append("⚽ +1.5 GOLS HT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
             if (l_stats['ht']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 1.5 and
                     away_stats['avg_goals_scored_ft'] >= 1.5 and
                     avg_btts >= 75 and
                     home_stats['ht_over_15_pct'] == 100 and
-                    away_stats['ht_over_15_pct'] == 100):
+                        away_stats['ht_over_15_pct'] == 100):
                     strategies.append("⚽ +2.5 GOLS HT")
-                
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['btts'] >= 90):
+                l_stats['ht']['btts'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 1.3 and
                 away_stats['avg_goals_scored_ft'] >= 1.3 and
                 avg_btts >= 85 and
                 home_stats['ht_over_05_pct'] == 100 and
-                away_stats['ht_over_05_pct'] == 100):
+                    away_stats['ht_over_05_pct'] == 100):
                 strategies.append("⚽ BTTS HT")
 
     # FT (260s - 510s)
     if 260 <= time_seconds <= 510:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o15'] >= 95):
+                l_stats['ft']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
-                avg_btts >= 75):
+                    avg_btts >= 75):
                 strategies.append("⚽ +1.5 GOLS FT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o25'] >= 90):
+                l_stats['ft']['o25'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                 away_stats['avg_goals_scored_ft'] >= 2.0 and
-                avg_btts >= 80):
+                    avg_btts >= 80):
                 strategies.append("⚽ +2.5 GOLS FT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
             if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 2.5 and
                     away_stats['avg_goals_scored_ft'] >= 2.5 and
-                    avg_btts >= 80):
+                        avg_btts >= 80):
                     strategies.append("⚽ +3.5 GOLS FT")
-                
+
     # Estratégias de jogador (90s - 510s)
     if 90 <= time_seconds <= 510:
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.5 and
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
-                    home_stats['ft_scored_25_pct'] >= 60):
+                        home_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
-                
-        valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
+
+        valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
             if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 3.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.0 and
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
-                    home_stats['ft_scored_35_pct'] >= 60):
+                        home_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
-                
+
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 2.5 and
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
-                    away_stats['ft_scored_25_pct'] >= 60):
+                        away_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
-                
-        valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
+
+        valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
             if (l_stats['ft']['o25'] >= 90):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 3.4 and
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
-                    away_stats['ft_scored_35_pct'] >= 60):
+                        away_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
-    
+
     return strategies
+
 
 def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats):
     """Estratégias para liga Volta de 6 minutos"""
     strategies = []
-    
+
     # Usar o nome mapeado da liga
     league_key = event.get('mappedLeague', '')
 
@@ -936,131 +943,132 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
         return strategies
 
     l_stats = all_league_stats[league_key]
-    
+
     timer = event.get('timer', {})
     minute = timer.get('minute', 0)
     second = timer.get('second', 0)
     time_seconds = minute * 60 + second
-    
+
     score = event.get('score', {})
     home_goals = score.get('home', 0)
     away_goals = score.get('away', 0)
-    
+
     avg_btts = (home_stats['btts_pct'] + away_stats['btts_pct']) / 2
     home_player = event.get('homePlayer', 'Player 1')
     away_player = event.get('awayPlayer', 'Player 2')
-    
+
     # HT (30s - 120s)
     if 30 <= time_seconds <= 120:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o05'] >= 100):
+                l_stats['ht']['o05'] >= 100):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
                 avg_btts >= 45 and
                 home_stats['ht_over_05_pct'] >= 90 and
-                away_stats['ht_over_05_pct'] >= 90):
+                    away_stats['ht_over_05_pct'] >= 90):
                 strategies.append("⚽ +0.5 GOL HT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['o15'] >= 95):
+                l_stats['ht']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 1.0 and
                 away_stats['avg_goals_scored_ft'] >= 1.0 and
                 avg_btts >= 45 and
                 home_stats['ht_over_15_pct'] >= 90 and
-                away_stats['ht_over_15_pct'] >= 90):
+                    away_stats['ht_over_15_pct'] >= 90):
                 strategies.append("⚽ +1.5 GOLS HT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
             if (l_stats['ht']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 1.5 and
                     away_stats['avg_goals_scored_ft'] >= 1.5 and
                     avg_btts >= 75 and
                     home_stats['ht_over_15_pct'] == 100 and
-                    away_stats['ht_over_15_pct'] == 100):
+                        away_stats['ht_over_15_pct'] == 100):
                     strategies.append("⚽ +2.5 GOLS HT")
-                
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ht']['btts'] >= 90):
+                l_stats['ht']['btts'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 1.3 and
                 away_stats['avg_goals_scored_ft'] >= 1.3 and
                 avg_btts >= 85 and
                 home_stats['ht_over_05_pct'] == 100 and
-                away_stats['ht_over_05_pct'] == 100):
+                    away_stats['ht_over_05_pct'] == 100):
                 strategies.append("⚽ BTTS HT")
 
     # FT (150s - 265s)
     if 150 <= time_seconds <= 265:
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o15'] >= 95):
+                l_stats['ft']['o15'] >= 95):
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
-                avg_btts >= 75):
+                    avg_btts >= 75):
                 strategies.append("⚽ +1.5 GOLS FT")
-            
+
         if (home_goals == 0 and away_goals == 0 and
-            l_stats['ft']['o25'] >= 90):
+                l_stats['ft']['o25'] >= 90):
             if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                 away_stats['avg_goals_scored_ft'] >= 2.0 and
-                avg_btts >= 80):
+                    avg_btts >= 80):
                 strategies.append("⚽ +2.5 GOLS FT")
-            
+
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
             if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 2.5 and
                     away_stats['avg_goals_scored_ft'] >= 2.5 and
-                    avg_btts >= 80):
+                        avg_btts >= 80):
                     strategies.append("⚽ +3.5 GOLS FT")
-                
+
     # Estratégias de jogador (30s - 265s)
     if 30 <= time_seconds <= 265:
         if (home_goals == 0 and away_goals == 0) or (home_goals == 0 and away_goals == 1):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (home_stats['avg_goals_scored_ft'] >= 2.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.5 and
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
-                    home_stats['ft_scored_25_pct'] >= 60):
+                        home_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
-                
-        valid_scores_p1 = [(0,0), (0,1), (0,2), (1,1), (1,2)]
+
+        valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
-             if (l_stats['ft']['o25'] >= 90):
+            if (l_stats['ft']['o25'] >= 90):
                 if (home_stats['avg_goals_scored_ft'] >= 3.0 and
                     away_stats['avg_goals_scored_ft'] <= 1.0 and
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
-                    home_stats['ft_scored_35_pct'] >= 60):
+                        home_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
-                
+
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
-             if (l_stats['ft']['o15'] >= 95):
+            if (l_stats['ft']['o15'] >= 95):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 2.5 and
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
-                    away_stats['ft_scored_25_pct'] >= 60):
+                        away_stats['ft_scored_25_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
-                
-        valid_scores_p2 = [(0,0), (1,0), (2,0), (1,1), (2,1)]
+
+        valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
             if (l_stats['ft']['o25'] >= 90):
                 if (away_stats['avg_goals_scored_ft'] >= 0.8 and
                     away_stats['avg_goals_scored_ft'] <= 3.4 and
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
-                    away_stats['ft_scored_35_pct'] >= 60):
+                        away_stats['ft_scored_35_pct'] >= 60):
                     strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
-    
+
     return strategies
 
 # =============================================================================
 # FORMATAÇÃO DE MENSAGENS
 # =============================================================================
 
+
 def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     """Formata mensagem da dica"""
     league = event.get('leagueName', 'Desconhecida')
-    
+
     league_mapping = {
         'Esoccer GT Leagues – 12 mins play': 'GT LEAGUE 12 MIN',
         'Esoccer GT Leagues - 12 mins play': 'GT LEAGUE 12 MIN',
@@ -1068,27 +1076,27 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
         'Esoccer H2H GG League - 8 mins play': 'H2H 8 MIN',
         'Esoccer Battle - 8 mins play': 'BATTLE 8 MIN'
     }
-    
+
     clean_league = league
     for key, value in league_mapping.items():
         if key in league:
             clean_league = value
             break
-            
+
     home_player = event.get('homePlayer', '?')
     away_player = event.get('awayPlayer', '?')
     bet365_event_id = event.get('bet365EventId', '')
-    
+
     timer = event.get('timer', {})
     time_str = timer.get('formatted', '00:00')
-    
+
     scoreboard = event.get('scoreboard', '0-0')
-    
+
     # Calcular confidence médio
     home_confidence = home_stats_summary.get('confidence', 0)
     away_confidence = away_stats_summary.get('confidence', 0)
     avg_confidence = (home_confidence + away_confidence) / 2
-    
+
     # Emoji de confidence
     if avg_confidence >= 90:
         confidence_emoji = "🔥🔥🔥"
@@ -1098,81 +1106,87 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
         confidence_emoji = "🔥"
     else:
         confidence_emoji = "❄️"
-    
+
     # Regime status
     home_regime = home_stats_summary.get('regime_direction', 'STABLE')
     away_regime = away_stats_summary.get('regime_direction', 'STABLE')
-    
+
     if home_regime == 'HEATING' or away_regime == 'HEATING':
         regime_status = "🔥 HEATING"
     else:
         regime_status = "❄️ STABLE"
-    
+
     # Cabeçalho com destaque
     msg = "━━━━━━━━━━━━━━━━━━━━\n"
     msg += "🎯 <b>OPORTUNIDADE DETECTADA</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    
+
     # Confidence e Regime
     msg += f"{confidence_emoji} <b>Confidence: {avg_confidence:.0f}%</b> | {regime_status}\n\n"
-    
+
     # Liga e Estratégia
     msg += f"🏆 <b>{clean_league}</b>\n"
     msg += f"💎 <b>{strategy}</b>\n\n"
-    
+
     # Informações do jogo
     msg += f"⏱ <b>Tempo:</b> {time_str} | 📊 <b>Placar:</b> {scoreboard}\n"
     msg += f"🎮 <b>{home_player}</b> vs <b>{away_player}</b>\n\n"
-    
+
     # Estatísticas formatadas
     if home_stats_summary and away_stats_summary:
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
         msg += "📈 <b>ANÁLISE - ÚLTIMOS 5 JOGOS</b>\n"
         msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        avg_btts = (home_stats_summary['btts_pct'] + away_stats_summary['btts_pct']) / 2
-        
+
+        avg_btts = (home_stats_summary['btts_pct'] +
+                    away_stats_summary['btts_pct']) / 2
+
         msg += f"🏠 <b>{home_player}</b> (Conf: {home_confidence:.0f}%)\n"
         msg += f"├ HT: +0.5 ({home_stats_summary['ht_over_05_pct']:.0f}%) • +1.5 ({home_stats_summary['ht_over_15_pct']:.0f}%)\n"
         msg += f"├ FT: Média {home_stats_summary['avg_goals_scored_ft']:.1f} gols/jogo\n"
         msg += f"└ Gols +3: {home_stats_summary['consistency_ft_3_plus_pct']:.0f}% dos jogos\n\n"
-        
+
         msg += f"✈️ <b>{away_player}</b> (Conf: {away_confidence:.0f}%)\n"
         msg += f"├ HT: +0.5 ({away_stats_summary['ht_over_05_pct']:.0f}%) • +1.5 ({away_stats_summary['ht_over_15_pct']:.0f}%)\n"
         msg += f"├ FT: Média {away_stats_summary['avg_goals_scored_ft']:.1f} gols/jogo\n"
         msg += f"└ Gols +3: {away_stats_summary['consistency_ft_3_plus_pct']:.0f}% dos jogos\n\n"
-        
+
         msg += f"🔥 <b>BTTS Médio:</b> {avg_btts:.0f}%\n\n"
-    
+
     # Link Bet365
     if bet365_event_id:
         bet365_link = f"https://www.bet365.bet.br/?#/IP/EV{bet365_event_id}"
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
         msg += f"🎲 <a href='{bet365_link}'><b>APOSTAR NA BET365</b></a>\n"
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    
+
     return msg
+
 
 def get_trend_emoji(perc, inverse=False):
     """Retorna emoji baseado na porcentagem"""
     adjusted = 100 - perc if inverse else perc
-    
-    if adjusted >= 95: return "🟢"
-    if adjusted >= 80: return "🟡"
-    if adjusted >= 60: return "🟠"
+
+    if adjusted >= 95:
+        return "🟢"
+    if adjusted >= 80:
+        return "🟡"
+    if adjusted >= 60:
+        return "🟠"
     return "🔴"
 
 # =============================================================================
 # ENVIO DE MENSAGENS
 # =============================================================================
 
+
 async def send_tip(bot, event, strategy, home_stats, away_stats):
     """Envia uma dica para o Telegram"""
     event_id = event.get('id')
-    
+
     if event_id in sent_match_ids:
         return
-    
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -1183,9 +1197,9 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 parse_mode="HTML",
                 disable_web_page_preview=True
             )
-            
+
             sent_match_ids.add(event_id)
-            
+
             sent_tips.append({
                 'event_id': event_id,
                 'strategy': strategy,
@@ -1196,29 +1210,32 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'home_player': event.get('homePlayer'),
                 'away_player': event.get('awayPlayer')
             })
-            
+
             print(f"[✓] Dica enviada: {event_id} - {strategy}")
             break
-            
+
         except Exception as e:
-            print(f"[ERROR] send_tip (tentativa {attempt + 1}/{max_retries}): {e}")
+            print(
+                f"[ERROR] send_tip (tentativa {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2)
             else:
-                print(f"[ERROR] Falha ao enviar dica após {max_retries} tentativas")
+                print(
+                    f"[ERROR] Falha ao enviar dica após {max_retries} tentativas")
 
 # =============================================================================
 # VERIFICAÇÃO DE RESULTADOS
 # =============================================================================
 
+
 async def check_results(bot):
     """Verifica resultados das tips e atualiza mensagens"""
     global last_summary, last_league_summary, last_league_message_id
-    
+
     try:
         # Buscar 3 páginas para ter ~72 partidas recentes (limit=24 por página)
         recent = fetch_recent_matches(num_pages=3)
-        
+
         # Agrupar partidas por jogadores, mantendo múltiplas partidas
         finished_matches = defaultdict(list)
         for match in recent:
@@ -1226,64 +1243,69 @@ async def check_results(bot):
             away = match.get('away_player', '').upper()
             key = f"{home}_{away}"
             finished_matches[key].append(match)
-        
+
         today = datetime.now(MANAUS_TZ).date()
         greens = reds = refunds = 0
-        
+
         for tip in sent_tips:
             if tip['sent_time'].date() != today:
                 continue
-            
+
             if tip['status'] == 'pending':
                 home = (tip.get('home_player') or '').upper()
                 away = (tip.get('away_player') or '').upper()
                 key = f"{home}_{away}"
-                
+
                 # Buscar a partida correta baseada no horário
                 matches_for_players = finished_matches.get(key, [])
                 match = None
-                
+
                 for m in matches_for_players:
                     match_time_str = m.get('data_realizacao', '')
                     if match_time_str:
                         try:
                             # Parse da data da partida
-                            match_time = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
-                            
+                            match_time = datetime.fromisoformat(
+                                match_time_str.replace('Z', '+00:00'))
+
                             # Converter para timezone de Manaus
                             if match_time.tzinfo is None:
-                                match_time = match_time.replace(tzinfo=timezone.utc)
+                                match_time = match_time.replace(
+                                    tzinfo=timezone.utc)
                             match_time_local = match_time.astimezone(MANAUS_TZ)
-                            
+
                             tip_time = tip['sent_time']
-                            
+
                             # A partida deve ter sido realizada DEPOIS do envio da tip
                             # Margem: 5 min antes (tolerância) até 30 min depois do envio
-                            time_diff = (match_time_local - tip_time).total_seconds()
-                            
+                            time_diff = (match_time_local -
+                                         tip_time).total_seconds()
+
                             # Partida ocorreu entre 5 min antes e 30 min depois do envio
                             if -300 <= time_diff <= 1800:
                                 match = m
-                                print(f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
+                                print(
+                                    f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
                                 break
                         except Exception as e:
-                            print(f"[WARN] Erro ao parsear data da partida: {e}")
+                            print(
+                                f"[WARN] Erro ao parsear data da partida: {e}")
                             continue
-                
+
                 # Se não encontrou pelo horário, NÃO usar partida antiga
                 if not match:
                     continue
-                
+
                 ht_home = match.get('home_score_ht', 0) or 0
                 ht_away = match.get('away_score_ht', 0) or 0
                 ht_total = ht_home + ht_away
-                
+
                 ft_home = match.get('home_score_ft', 0) or 0
                 ft_away = match.get('away_score_ft', 0) or 0
                 ft_total = ft_home + ft_away
-                
+
                 strategy = tip['strategy']
-                
+
                 result = None
                 if '+0.5 GOL HT' in strategy:
                     result = 'green' if ht_total >= 1 else 'red'
@@ -1292,13 +1314,15 @@ async def check_results(bot):
                 elif '+2.5 GOLS HT' in strategy:
                     result = 'green' if ht_total >= 3 else 'red'
                 elif 'BTTS HT' in strategy:
-                    result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
+                    result = 'green' if (
+                        ht_home > 0 and ht_away > 0) else 'red'
                 elif '+1.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 2 else 'red'
                 elif '+2.5 GOLS FT' in strategy:
                     if "⚽ Player" in strategy or "⚽ " in strategy and "GOLS FT" in strategy and not strategy.startswith("⚽ +2.5 GOLS FT"):
                         try:
-                            player_name = strategy.replace("⚽ ", "").replace(" +2.5 GOLS FT", "").strip().upper()
+                            player_name = strategy.replace("⚽ ", "").replace(
+                                " +2.5 GOLS FT", "").strip().upper()
                             if player_name == home:
                                 result = 'green' if ft_home >= 3 else 'red'
                             elif player_name == away:
@@ -1307,28 +1331,29 @@ async def check_results(bot):
                             pass
                     else:
                         result = 'green' if ft_total >= 3 else 'red'
-                        
+
                 elif '+3.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 4 else 'red'
                 elif '+4.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 5 else 'red'
-                
+
                 elif '+1.5 GOLS FT' in strategy and ("⚽ Player" in strategy or "⚽ " in strategy and not strategy.startswith("⚽ +1.5 GOLS FT")):
                     try:
-                        player_name = strategy.replace("⚽ ", "").replace(" +1.5 GOLS FT", "").strip().upper()
+                        player_name = strategy.replace("⚽ ", "").replace(
+                            " +1.5 GOLS FT", "").strip().upper()
                         if player_name == home:
                             result = 'green' if ft_home >= 2 else 'red'
                         elif player_name == away:
                             result = 'green' if ft_away >= 2 else 'red'
                     except:
                         pass
-                
+
                 if result:
                     tip['status'] = result
-                    
+
                     emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
                     new_text = tip['message_text'] + f"\n{emoji}"
-                    
+
                     try:
                         await bot.edit_message_text(
                             chat_id=CHAT_ID,
@@ -1337,14 +1362,18 @@ async def check_results(bot):
                             parse_mode="HTML",
                             disable_web_page_preview=True
                         )
-                        print(f"[✓] Resultado atualizado: {tip['event_id']} - {result}")
+                        print(
+                            f"[✓] Resultado atualizado: {tip['event_id']} - {result}")
                     except Exception as e:
                         print(f"[ERROR] edit_message: {e}")
-            
-            if tip['status'] == 'green': greens += 1
-            if tip['status'] == 'red': reds += 1
-            if tip['status'] == 'refund': refunds += 1
-        
+
+            if tip['status'] == 'green':
+                greens += 1
+            if tip['status'] == 'red':
+                reds += 1
+            if tip['status'] == 'refund':
+                refunds += 1
+
         total_resolved = greens + reds
         if total_resolved > 0:
             perc = (greens / total_resolved * 100.0)
@@ -1355,53 +1384,56 @@ async def check_results(bot):
                 f"<b>♻️ Push [{refunds}]</b>\n"
                 f"📊 <i>Taxa de acerto: {perc:.1f}%</i>\n\n"
             )
-            
+
             if summary != last_summary:
                 await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
                 last_summary = summary
                 print("[✓] Resumo do dia enviado")
-        
+
         await update_league_stats(bot, recent)
-        
+
     except Exception as e:
         print(f"[ERROR] check_results: {e}")
+
 
 async def update_league_stats(bot, recent_matches):
     """Atualiza e envia resumo das estatísticas das ligas com imagem"""
     global last_league_summary, last_league_message_id, league_stats
-    
+
     try:
         # Ordenar partidas para garantir estabilidade nos cálculos
-        recent_matches.sort(key=lambda x: (x.get('data_realizacao', ''), x.get('id', 0)), reverse=True)
+        recent_matches.sort(key=lambda x: (
+            x.get('data_realizacao', ''), x.get('id', 0)), reverse=True)
 
         league_games = defaultdict(list)
-        
+
         for match in recent_matches[:200]:
             # Os dados já vêm normalizados com league_name mapeado
             league = match.get('league_name', '')
-            
-            if not league or league == 'Unknown': 
+
+            if not league or league == 'Unknown':
                 continue
-            
+
             ht_home = match.get('home_score_ht', 0) or 0
             ht_away = match.get('away_score_ht', 0) or 0
             ft_home = match.get('home_score_ft', 0) or 0
             ft_away = match.get('away_score_ft', 0) or 0
-            
+
             league_games[league].append({
                 'ht_goals': ht_home + ht_away,
                 'ft_goals': ft_home + ft_away,
                 'ht_btts': 1 if ht_home > 0 and ht_away > 0 else 0,
                 'ft_btts': 1 if ft_home > 0 and ft_away > 0 else 0
             })
-        
+
         stats = {}
         for league, games in league_games.items():
-            if len(games) < 5: continue
-            
+            if len(games) < 5:
+                continue
+
             last_n = games[:5]
             total = len(last_n)
-            
+
             def calc_pct(count):
                 return int((count / total) * 100)
 
@@ -1419,40 +1451,42 @@ async def update_league_stats(bot, recent_matches):
                 },
                 'count': total
             }
-        
-        if not stats: return
-        
+
+        if not stats:
+            return
+
         # Comparação exata dos dicionários
         if league_stats and league_stats == stats:
             print(f"[INFO] Resumo de ligas idêntico ao anterior. Ignorando envio.")
             return
-            
+
         league_stats = stats
-        
+
         # ============ GERAR IMAGEM ============
         img = create_league_stats_image(stats)
-        
+
         # Converter para BytesIO
         bio = BytesIO()
         img.save(bio, 'PNG')
         bio.seek(0)
-        
+
         # Enviar imagem
         if last_league_message_id:
             try:
                 await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_message_id)
-            except: pass
-        
+            except:
+                pass
+
         msg = await bot.send_photo(
             chat_id=CHAT_ID,
             photo=bio,
             caption="📊 <b>ANÁLISE DE LIGAS</b> (Últimos 5 jogos)\n<i>🔴&lt;48% 🟠48-77% 🟡78-94% 🟢95%+</i>",
             parse_mode="HTML"
         )
-        
+
         last_league_message_id = msg.message_id
         print("[✓] Resumo das ligas atualizado com imagem")
-    
+
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
         import traceback
@@ -1462,7 +1496,7 @@ async def update_league_stats(bot, recent_matches):
 def create_league_stats_image(stats):
     """Cria imagem com heatmap das estatísticas"""
     import os
-    
+
     # Cores - FUNDO PRETO
     bg_color = (0, 0, 0)  # Preto puro
     card_bg = (20, 20, 20)  # Cinza muito escuro
@@ -1471,11 +1505,11 @@ def create_league_stats_image(stats):
     header_color = (0, 255, 200)  # Cyan/Verde
     gold_color = (255, 200, 50)  # Dourado
     brand_color = (0, 255, 100)  # Verde para RW TIPS
-    
+
     # Configurações
     sorted_leagues = sorted(stats.keys())
     num_leagues = len(sorted_leagues)
-    
+
     # Dimensões GRANDES
     cell_width = 160
     cell_height = 90
@@ -1483,21 +1517,22 @@ def create_league_stats_image(stats):
     logo_height = 80  # Altura para logo + branding
     header_height = 140  # Aumentado para caber logo
     padding = 40
-    
+
     total_width = label_width + (6 * cell_width) + (2 * padding)
-    total_height = header_height + (num_leagues * cell_height) + (2 * padding) + 120
-    
+    total_height = header_height + \
+        (num_leagues * cell_height) + (2 * padding) + 120
+
     # Criar imagem
     img = Image.new('RGB', (total_width, total_height), bg_color)
     draw = ImageDraw.Draw(img)
-    
+
     # Tamanhos das fontes
     size_title = 30
     size_header = 25
     size_cell = 35
     size_league = 25
     size_brand = 35  # Para RW TIPS
-    
+
     # Lista de fontes para tentar (Windows e Linux)
     font_paths = [
         # Windows
@@ -1512,14 +1547,14 @@ def create_league_stats_image(stats):
         "arial.ttf",
         "DejaVuSans-Bold.ttf",
     ]
-    
+
     font_title = None
     font_header = None
     font_cell = None
     font_league = None
     font_brand = None
     font_loaded = False
-    
+
     for font_path in font_paths:
         try:
             font_title = ImageFont.truetype(font_path, size_title)
@@ -1532,7 +1567,7 @@ def create_league_stats_image(stats):
             break
         except Exception as e:
             continue
-    
+
     # Fallback para fonte padrão com tamanho customizado
     if not font_loaded:
         print("[WARN] Usando fonte padrão do sistema")
@@ -1548,15 +1583,15 @@ def create_league_stats_image(stats):
             font_cell = ImageFont.load_default()
             font_league = ImageFont.load_default()
             font_brand = ImageFont.load_default()
-    
+
     # ===== LOGO E BRANDING =====
     logo_size = 50
     brand_text = "RW TIPS"
-    
+
     # Tentar carregar a logo
     logo_path = os.path.join(os.path.dirname(__file__), "app_icon.png")
     logo_loaded = False
-    
+
     try:
         logo = Image.open(logo_path).convert("RGBA")
         logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
@@ -1564,41 +1599,45 @@ def create_league_stats_image(stats):
         print(f"[INFO] Logo carregada: {logo_path}")
     except Exception as e:
         print(f"[WARN] Não foi possível carregar logo: {e}")
-    
+
     # Calcular posição centralizada para logo + texto
     brand_bbox = draw.textbbox((0, 0), brand_text, font=font_brand)
     brand_w = brand_bbox[2] - brand_bbox[0]
-    
+
     if logo_loaded:
         total_brand_width = logo_size + 15 + brand_w
         start_x = (total_width - total_brand_width) // 2
-        
+
         # Colar logo
         logo_y = padding
         img.paste(logo, (start_x, logo_y), logo)
-        
+
         # Texto RW TIPS
         text_x = start_x + logo_size + 15
         text_y = padding + (logo_size - size_brand) // 2
-        draw.text((text_x, text_y), brand_text, fill=brand_color, font=font_brand)
+        draw.text((text_x, text_y), brand_text,
+                  fill=brand_color, font=font_brand)
     else:
         # Só texto se não tiver logo
-        draw.text(((total_width - brand_w) // 2, padding), brand_text, fill=brand_color, font=font_brand)
-    
+        draw.text(((total_width - brand_w) // 2, padding),
+                  brand_text, fill=brand_color, font=font_brand)
+
     # Título secundário
     title = "ANALISE DE LIGAS (5 jogos)"
     title_bbox = draw.textbbox((0, 0), title, font=font_title)
     title_width = title_bbox[2] - title_bbox[0]
     title_y = padding + logo_size + 10
-    draw.text(((total_width - title_width) // 2, title_y), title, fill=header_color, font=font_title)
-    
+    draw.text(((total_width - title_width) // 2, title_y),
+              title, fill=header_color, font=font_title)
+
     # Headers das colunas
-    headers = ["HT 0.5+", "HT 1.5+", "HT BTTS", "FT 1.5+", "FT 2.5+", "FT BTTS"]
+    headers = ["HT 0.5+", "HT 1.5+", "HT BTTS",
+               "FT 1.5+", "FT 2.5+", "FT BTTS"]
     y_pos = title_y + 100  # Espaço maior após o título
-    
+
     for i, header in enumerate(headers):
         x_pos = label_width + (i * cell_width) + padding
-        
+
         # Background do header
         draw.rectangle(
             [x_pos, y_pos - 35, x_pos + cell_width, y_pos - 5],
@@ -1606,7 +1645,7 @@ def create_league_stats_image(stats):
             outline=card_bg,
             width=2
         )
-        
+
         # Texto do header
         header_bbox = draw.textbbox((0, 0), header, font=font_header)
         header_w = header_bbox[2] - header_bbox[0]
@@ -1616,7 +1655,7 @@ def create_league_stats_image(stats):
             fill=header_color,
             font=font_header
         )
-    
+
     # Função para obter cor baseada na porcentagem (novos limites)
     def get_heat_color(pct):
         if pct >= 95:
@@ -1627,12 +1666,12 @@ def create_league_stats_image(stats):
             return (255, 136, 68)  # Laranja
         else:
             return (255, 68, 68)  # Vermelho
-    
+
     # Desenhar linhas de ligas
     for idx, league in enumerate(sorted_leagues):
         s = stats[league]
         row_y = y_pos + (idx * cell_height)
-        
+
         # Nome da liga
         draw.rectangle(
             [padding, row_y, label_width + padding - 10, row_y + cell_height],
@@ -1640,7 +1679,7 @@ def create_league_stats_image(stats):
             outline=card_bg,
             width=2
         )
-        
+
         league_text = f"{league}"
         draw.text(
             (padding + 10, row_y + 15),
@@ -1648,7 +1687,7 @@ def create_league_stats_image(stats):
             fill=gold_color,
             font=font_league
         )
-        
+
         # Células de dados
         values = [
             s['ht']['o05'],
@@ -1658,10 +1697,10 @@ def create_league_stats_image(stats):
             s['ft']['o25'],
             s['ft']['btts']
         ]
-        
+
         for i, val in enumerate(values):
             x_pos = label_width + (i * cell_width) + padding
-            
+
             # Background com cor baseada no valor
             color = get_heat_color(val)
             draw.rectangle(
@@ -1670,33 +1709,34 @@ def create_league_stats_image(stats):
                 outline=card_bg,
                 width=2
             )
-            
+
             # Texto da porcentagem
             text = f"{val}%"
             text_bbox = draw.textbbox((0, 0), text, font=font_cell)
             text_w = text_bbox[2] - text_bbox[0]
-            
+
             # Cor do texto (branco para escuro, preto para claro)
             text_color_cell = (0, 0, 0) if val >= 60 else (255, 255, 255)
-            
+
             draw.text(
                 (x_pos + (cell_width - text_w) // 2, row_y + 15),
                 text,
                 fill=text_color_cell,
                 font=font_cell
             )
-    
+
     # Calcular qual liga é melhor para OVER e UNDER
     league_scores = {}
     for league in sorted_leagues:
         s = stats[league]
         # Média de todos os 6 valores (HT 0.5+, HT 1.5+, HT BTTS, FT 1.5+, FT 2.5+, FT BTTS)
-        avg_over = (s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] + s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']) / 6
+        avg_over = (s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] +
+                    s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']) / 6
         league_scores[league] = avg_over
-    
+
     best_over = max(league_scores, key=league_scores.get)
     best_under = min(league_scores, key=league_scores.get)
-    
+
     # Linha de destaque para OVER (sem emoji)
     highlight_y = y_pos + (num_leagues * cell_height) + 15
     over_text = f">> MELHOR OVER: {best_over} ({league_scores[best_over]:.0f}% media)"
@@ -1708,7 +1748,7 @@ def create_league_stats_image(stats):
         fill=(0, 255, 136),  # Verde
         font=font_header
     )
-    
+
     # Linha de destaque para UNDER (sem emoji) - VERMELHO
     under_y = highlight_y + 28
     under_text = f">> LIGA UNDER: {best_under} ({league_scores[best_under]:.0f}% media)"
@@ -1720,108 +1760,122 @@ def create_league_stats_image(stats):
         fill=(255, 68, 68),  # Vermelho
         font=font_header
     )
-    
+
     return img
 # =============================================================================
 # LOOP PRINCIPAL
 # =============================================================================
 
+
 async def main_loop(bot):
     """Loop principal de análise"""
-    
+
     print("[INFO] Iniciando loop principal...")
-    
+
     while True:
         try:
-            print(f"\n[CICLO] {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
-            
+            print(
+                f"\n[CICLO] {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
+
             live_events = fetch_live_matches()
-            
+
             if not live_events:
                 print("[INFO] Nenhuma partida ao vivo no momento")
                 await asyncio.sleep(10)
                 continue
-            
+
             for event in live_events:
                 event_id = event.get('id')
                 league_name = event.get('leagueName', '')
                 home_player = event.get('homePlayer', '')
                 away_player = event.get('awayPlayer', '')
                 bet365_event_id = event.get('bet365EventId', '')
-                
-                print(f"\n[EVENTO] {event_id}: {home_player} vs {away_player} ({league_name})")
+
+                print(
+                    f"\n[EVENTO] {event_id}: {home_player} vs {away_player} ({league_name})")
                 print(f"[BET365] Event ID: {bet365_event_id}")
-                
+
                 if event_id in sent_match_ids:
                     continue
-                
+
                 home_data = fetch_player_individual_stats(home_player)
                 away_data = fetch_player_individual_stats(away_player)
-                
+
                 if not home_data or not away_data:
-                    print(f"[WARN] Sem dados suficientes para {home_player} ou {away_player}")
+                    print(
+                        f"[WARN] Sem dados suficientes para {home_player} ou {away_player}")
                     continue
-                
+
                 home_matches = home_data.get('matches', [])
                 away_matches = away_data.get('matches', [])
-                
+
                 if len(home_matches) < 5 or len(away_matches) < 5:
-                    print(f"[WARN] Dados insuficientes: {home_player}={len(home_matches)} jogos, {away_player}={len(away_matches)} jogos (mínimo: 5)")
+                    print(
+                        f"[WARN] Dados insuficientes: {home_player}={len(home_matches)} jogos, {away_player}={len(away_matches)} jogos (mínimo: 5)")
                     continue
-                
+
                 # Análise COM detecção de regime change
-                home_stats = analyze_player_with_regime_check(home_matches, home_player)
-                away_stats = analyze_player_with_regime_check(away_matches, away_player)
-                
+                home_stats = analyze_player_with_regime_check(
+                    home_matches, home_player)
+                away_stats = analyze_player_with_regime_check(
+                    away_matches, away_player)
+
                 if not home_stats or not away_stats:
-                    print(f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
+                    print(
+                        f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
-                
+
                 # FILTRO DE CONFIDENCE MÍNIMO (80%)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
-                
+
                 if home_confidence < 80 or away_confidence < 80:
-                    print(f"[BLOCKED] Confidence insuficiente: {home_player}={home_confidence:.0f}%, {away_player}={away_confidence:.0f}% (mínimo: 80%)")
+                    print(
+                        f"[BLOCKED] Confidence insuficiente: {home_player}={home_confidence:.0f}%, {away_player}={away_confidence:.0f}% (mínimo: 80%)")
                     continue
-                
+
                 print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}% | Confidence: {home_confidence:.0f}%")
                 print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}% | Confidence: {away_confidence:.0f}%")
-                
+
                 strategies = []
-                
+
                 # Usar o nome mapeado da liga para selecionar estratégias
                 mapped_league = event.get('mappedLeague', '')
-                
+
                 if mapped_league in ['BATTLE 8 MIN', 'H2H 8 MIN']:
-                    strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
-                
+                    strategies = check_strategies_8mins(
+                        event, home_stats, away_stats, league_stats)
+
                 elif mapped_league == 'GT LEAGUE 12 MIN':
-                    strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
-                
+                    strategies = check_strategies_12mins(
+                        event, home_stats, away_stats, league_stats)
+
                 elif mapped_league == 'VOLTA 6 MIN':
-                    strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
-                
+                    strategies = check_strategies_volta_6mins(
+                        event, home_stats, away_stats, league_stats)
+
                 for strategy in strategies:
-                    print(f"[✓] OPORTUNIDADE ENCONTRADA: {strategy} | Confidence Médio: {avg_confidence:.0f}%")
+                    print(
+                        f"[✓] OPORTUNIDADE ENCONTRADA: {strategy} | Confidence Médio: {avg_confidence:.0f}%")
                     await send_tip(bot, event, strategy, home_stats, away_stats)
                     await asyncio.sleep(1)
-            
+
             print("[INFO] Ciclo concluído, aguardando 10 segundos...")
             await asyncio.sleep(10)
-        
+
         except Exception as e:
             print(f"[ERROR] main_loop: {e}")
             await asyncio.sleep(10)
 
+
 async def results_checker(bot):
     """Loop de verificação de resultados"""
-    
+
     print("[INFO] Iniciando verificador de resultados...")
-    
+
     await asyncio.sleep(30)
-    
+
     while True:
         try:
             await check_results(bot)
@@ -1834,15 +1888,17 @@ async def results_checker(bot):
 # INICIALIZAÇÃO
 # =============================================================================
 
+
 async def main():
     """Função principal"""
-    
+
     print("="*70)
     print("🤖 RW TIPS - BOT FIFA v2.0")
     print("="*70)
-    print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
+    print(
+        f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
     print("="*70)
-    
+
     request = HTTPXRequest(
         connection_pool_size=8,
         connect_timeout=30.0,
@@ -1850,13 +1906,14 @@ async def main():
         write_timeout=30.0,
         pool_timeout=30.0
     )
-    
+
     bot = Bot(token=BOT_TOKEN, request=request)
-    
+
     max_retries = 5
     for attempt in range(max_retries):
         try:
-            print(f"[INFO] Tentando conectar ao Telegram (tentativa {attempt + 1}/{max_retries})...")
+            print(
+                f"[INFO] Tentando conectar ao Telegram (tentativa {attempt + 1}/{max_retries})...")
             me = await bot.get_me()
             print(f"[✓] Bot conectado: @{me.username}")
             break
@@ -1864,17 +1921,19 @@ async def main():
             print(f"[ERROR] Tentativa {attempt + 1} falhou: {e}")
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 5
-                print(f"[INFO] Aguardando {wait_time} segundos antes de tentar novamente...")
+                print(
+                    f"[INFO] Aguardando {wait_time} segundos antes de tentar novamente...")
                 await asyncio.sleep(wait_time)
             else:
-                print("[ERROR] Não foi possível conectar ao Telegram após várias tentativas")
+                print(
+                    "[ERROR] Não foi possível conectar ao Telegram após várias tentativas")
                 print("[INFO] Verifique:")
                 print("  1. Sua conexão com a internet")
                 print("  2. Se o token do bot está correto")
                 print("  3. Se não há firewall bloqueando")
                 print("  4. Tente usar uma VPN se estiver bloqueado")
                 return
-    
+
     await asyncio.gather(
         main_loop(bot),
         results_checker(bot)
