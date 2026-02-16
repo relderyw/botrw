@@ -231,7 +231,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
                 return []
 
             data = response.json()
-            items = data.get('data', [])
+            # API retorna 'results', não 'data'
+            items = data.get('results', [])
             return items
         except Exception as e:
             print(f"[ERROR] Erro ao buscar página {page}: {e}")
@@ -253,12 +254,18 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     normalized_matches = []
 
     for match in all_matches:
-        # A API interna já retorna os dados no formato esperado
+        # A API interna retorna os dados com nomes de campos ligeiramente diferentes
         league_name = match.get('league_name', 'Unknown')
         league_mapped = HISTORY_LEAGUE_MAPPING.get(league_name, league_name)
 
+        # Combinar data e hora para criar timestamp
+        match_date = match.get('match_date', '')
+        match_time = match.get('match_time', '')
+        data_realizacao = f"{match_date}T{match_time}" if match_date and match_time else datetime.now(
+        ).isoformat()
+
         normalized_matches.append({
-            'id': match.get('id'),
+            'id': match.get('id', ''),
             'league_name': league_mapped,
             'home_player': match.get('home_player', ''),
             'away_player': match.get('away_player', ''),
@@ -266,11 +273,11 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             'away_team': match.get('away_team', ''),
             'home_team_logo': match.get('home_team_logo', ''),
             'away_team_logo': match.get('away_team_logo', ''),
-            'data_realizacao': match.get('data_realizacao', datetime.now().isoformat()),
-            'home_score_ht': match.get('halftime_score_home', 0) or 0,
-            'away_score_ht': match.get('halftime_score_away', 0) or 0,
-            'home_score_ft': match.get('score_home', 0) or 0,
-            'away_score_ft': match.get('score_away', 0) or 0
+            'data_realizacao': data_realizacao,
+            'home_score_ht': match.get('home_score_ht', 0) or 0,
+            'away_score_ht': match.get('away_score_ht', 0) or 0,
+            'home_score_ft': match.get('home_score_ft', 0) or 0,
+            'away_score_ft': match.get('away_score_ft', 0) or 0
         })
 
     # Ordenar por data (recente primeiro)
