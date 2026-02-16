@@ -10,6 +10,7 @@ from telegram.request import HTTPXRequest
 import re
 import logging
 from PIL import Image, ImageDraw, ImageFont
+import statistics
 from io import BytesIO
 
 
@@ -31,6 +32,10 @@ CHAT_ID = "-1001981134607"
 LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventCount=0&sportId=66&catIds=2085,1571,1728,1594,2086,1729,2130"
 # Internal History API
 HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
+# Green365 API (for H2H GG and consistent history)
+GREEN365_API_URL = "https://api.green365.cc/api/football/matches/v1/results"
+GREEN365_TOKEN = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
+
 # Legacy URLs (kept for reference/fallback)
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
 H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
@@ -59,13 +64,18 @@ LIVE_LEAGUE_MAPPING = {
     "Cyber Live Arena": "CLA LEAGUE",
 }
 
-# History API format → Internal format
+# History API / Green365 format → Internal format
 HISTORY_LEAGUE_MAPPING = {
     "Battle 6m": "VOLTA 6 MIN",
     "Battle 8m": "BATTLE 8 MIN",
     "H2H 8m": "H2H 8 MIN",
     "GT Leagues 12m": "GT LEAGUE 12 MIN",
     "GT League 12m": "GT LEAGUE 12 MIN",
+    # Green365 specific names
+    "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
+    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
+    "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
+    "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
     # New leagues from internal API
     "Valhalla Cup": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
@@ -162,6 +172,10 @@ def fetch_live_matches():
                 # Obter nome da liga
                 league_name = champs_map.get(champ_id, 'Unknown League')
 
+                # FILTRO GLOBAL: Remover ligas virtuais indesejadas (ECOMP, etc)
+                if "ECOMP" in league_name.upper() or "VIRTUAL" in league_name.upper():
+                    continue
+
                 # Mapear nome da liga
                 mapped_league = LIVE_LEAGUE_MAPPING.get(
                     league_name, league_name)
@@ -205,91 +219,135 @@ def fetch_live_matches():
         return []
 
 
+def fetch_green365_history(num_pages=5):
+    """Busca partidas da API Green365 (especialmente para H2H GG)"""
+    try:
+        print(f"[INFO] Buscando histórico da Green365 ({num_pages} páginas)...")
+        all_matches = []
+
+        headers = {"Authorization": GREEN365_TOKEN}
+
+        for page in range(1, num_pages + 1):
+            params = {"page": page, "limit": 24}
+            response = requests.get(
+                GREEN365_API_URL, params=params, headers=headers, timeout=12)
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+            # Green365 retorna os jogos em 'items'
+            items = data.get('items', [])
+            if not items:
+                break
+
+            for item in items:
+                try:
+                    home_data = item.get('home', {})
+                    away_data = item.get('away', {})
+                    score = item.get('score', {})
+                    score_ht = item.get('scoreHT', {})
+                    competition = item.get('competition', {})
+
+                    match_date = item.get('startTime', '')
+
+                    # Normalizar para o formato interno
+                    all_matches.append({
+                        'id': f"g365_{item.get('id')}",
+                        'league_name': competition.get('name', 'Unknown'),
+                        'home_player': home_data.get('name', ''),
+                        'away_player': away_data.get('name', ''),
+                        'home_team': '',
+                        'away_team': '',
+                        'home_team_logo': home_data.get('imageUrl', ''),
+                        'away_team_logo': away_data.get('imageUrl', ''),
+                        'data_realizacao': match_date,
+                        'home_score_ht': score_ht.get('home', 0),
+                        'away_score_ht': score_ht.get('away', 0),
+                        'home_score_ft': score.get('home', 0),
+                        'away_score_ft': score.get('away', 0)
+                    })
+                except Exception as e:
+                    print(f"[WARN] Erro ao normalizar item Green365: {e}")
+                    continue
+
+        return all_matches
+    except Exception as e:
+        print(f"[ERROR] Green365 History API falhou: {e}")
+        return []
+
+
 def fetch_recent_matches(num_pages=10, use_cache=True):
-    """Busca partidas recentes finalizadas - Internal History API com Fetch Paralelo"""
+    """Busca partidas recentes finalizadas - Unifica Internal API e Green365"""
     global global_history_cache
 
     # Verificar cache global
     if use_cache and global_history_cache['matches']:
         cache_age = time.time() - global_history_cache['timestamp']
         if cache_age < HISTORY_CACHE_TTL:
-            print(
-                f"[CACHE] Usando histórico do cache global ({len(global_history_cache['matches'])} partidas)")
             return global_history_cache['matches']
 
-    print(
-        f"[INFO] Buscando histórico via Internal API ({num_pages} páginas) em paralelo...")
+    print(f"[INFO] Atualizando histórico completo (Internal + Green365)...")
 
-    all_matches = []
-
-    def fetch_page(page):
+    def fetch_internal_page(page):
         try:
             params = {'page': page, 'limit': 24}
             response = requests.get(HISTORY_API_URL, params=params, timeout=10)
             if response.status_code != 200:
-                print(f"[WARN] Erro na página {page}: {response.status_code}")
                 return []
-
             data = response.json()
-            # API retorna 'results', não 'data'
-            items = data.get('results', [])
-            return items
-        except Exception as e:
-            print(f"[ERROR] Erro ao buscar página {page}: {e}")
+            return data.get('results', [])
+        except:
             return []
 
-    # Executar requisições em paralelo
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_page = {executor.submit(
-            fetch_page, page): page for page in range(1, num_pages + 1)}
-        for future in concurrent.futures.as_completed(future_to_page):
-            items = future.result()
-            all_matches.extend(items)
+    # 1. Buscar da API Interna em paralelo
+    internal_matches = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        pages = range(1, num_pages + 1)
+        results = list(executor.map(fetch_internal_page, pages))
+        for r in results:
+            internal_matches.extend(r)
 
-    if not all_matches:
-        print("[WARN] Nenhuma partida encontrada no histórico (Internal API)")
-        return []
+    # 2. Buscar da Green365 (historicamente mais estável para H2H GG)
+    green_matches = fetch_green365_history(num_pages=5)
 
-    # Normalizar dados (API interna já retorna no formato correto, apenas mapear nomes)
-    normalized_matches = []
+    # 3. Processar e unificar
+    all_combined = []
 
-    for match in all_matches:
-        # A API interna retorna os dados com nomes de campos ligeiramente diferentes
-        league_name = match.get('league_name', 'Unknown')
-        league_mapped = HISTORY_LEAGUE_MAPPING.get(league_name, league_name)
-
-        # Combinar data e hora para criar timestamp
-        match_date = match.get('match_date', '')
-        match_time = match.get('match_time', '')
-        data_realizacao = f"{match_date}T{match_time}" if match_date and match_time else datetime.now(
-        ).isoformat()
-
-        normalized_matches.append({
-            'id': match.get('id', ''),
-            'league_name': league_mapped,
-            'home_player': match.get('home_player', ''),
-            'away_player': match.get('away_player', ''),
-            'home_team': match.get('home_team', ''),
-            'away_team': match.get('away_team', ''),
-            'home_team_logo': match.get('home_team_logo', ''),
-            'away_team_logo': match.get('away_team_logo', ''),
-            'data_realizacao': data_realizacao,
-            'home_score_ht': match.get('home_score_ht', 0) or 0,
-            'away_score_ht': match.get('away_score_ht', 0) or 0,
-            'home_score_ft': match.get('home_score_ft', 0) or 0,
-            'away_score_ft': match.get('away_score_ft', 0) or 0
+    # Processar Internal
+    for m in internal_matches:
+        league = m.get('league_name', 'Unknown')
+        all_combined.append({
+            'id': f"int_{m.get('id')}",
+            'league_name': HISTORY_LEAGUE_MAPPING.get(league, league),
+            'home_player': m.get('home_player', ''),
+            'away_player': m.get('away_player', ''),
+            'home_team': m.get('home_team', ''),
+            'away_team': m.get('away_team', ''),
+            'home_team_logo': m.get('home_team_logo', ''),
+            'away_team_logo': m.get('away_team_logo', ''),
+            'data_realizacao': f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat(),
+            'home_score_ht': m.get('home_score_ht', 0) or 0,
+            'away_score_ht': m.get('away_score_ht', 0) or 0,
+            'home_score_ft': m.get('home_score_ft', 0) or 0,
+            'away_score_ft': m.get('away_score_ft', 0) or 0
         })
 
-    # Ordenar por data (recente primeiro)
-    normalized_matches.sort(key=lambda x: x['data_realizacao'], reverse=True)
+    # Processar Green365 (já normalizados mas mapear liga)
+    for m in green_matches:
+        league = m['league_name']
+        m['league_name'] = HISTORY_LEAGUE_MAPPING.get(league, league)
+        all_combined.append(m)
+
+    # 4. Remover duplicatas por jogadores + score + data_truncada (se necessário)
+    # Por simplicidade e volume, apenas ordenar por data e confiar na unificação
+    all_combined.sort(key=lambda x: x['data_realizacao'], reverse=True)
 
     # Atualizar cache global
-    global_history_cache['matches'] = normalized_matches
+    global_history_cache['matches'] = all_combined
     global_history_cache['timestamp'] = time.time()
 
-    print(
-        f"[INFO] {len(normalized_matches)} partidas recentes carregadas e cacheadas (Internal API)")
-    return normalized_matches
+    print(f"[INFO] Histórico atualizado: {len(all_combined)} partidas unificadas.")
+    return all_combined
 
 
 def fetch_player_individual_stats(player_name, use_cache=True):
@@ -622,7 +680,6 @@ def calculate_confidence_score(last_5_matches, player_name, stats, regime):
             'away_score_ft', 0)
         goals_list.append(goals or 0)
 
-    import statistics
     if len(goals_list) >= 2:
         std_dev = statistics.stdev(goals_list)
         # Baixa volatilidade = alta consistência
