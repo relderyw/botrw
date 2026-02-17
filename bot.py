@@ -34,8 +34,8 @@ LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEve
 # Internal History API
 HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
 # Green365 API (for H2H GG and consistent history)
-GREEN365_API_URL = "https://api.green365.cc/api/football/matches/v1/results"
-GREEN365_TOKEN = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
+GREEN365_API_URL = "https://api-v2.green365.com.br/api/v2/sport-events"
+GREEN365_TOKEN = "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImY1MzMwMzNhMTMzYWQyM2EyYzlhZGNmYzE4YzRlM2E3MWFmYWY2MjkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vZXVncmVlbi0yZTljMCIsImF1ZCI6ImV1Z3JlZW4tMmU5YzAiLCJhdXRoX3RpbWUiOjE3NjM4NzY2NTcsInVzZXJfaWQiOiJwM09CaFI3Wmd3VENwNnFBWFpFZWl0RGt4T0czIiwic3ViIjoicDNPQmhSN1pnd1RDcDZxQVhaRWVpdERreE9HMyIsImlhdCI6MTc3MTI0ODI2NiwiZXhwIjoxNzcxMjUxODI2LCJlbWFpbCI6InJlbGRlcnkxNDIyQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7ImVtYWlsIjpbInJlbGRlcnkxNDIyQGdtYWlsLmNvbSJdfSwic2lnbl9pbl9wcm92aWRlciI6InBhc3N3b3JkIn19.yHo_igBbWbi8PUrKpUFpH9yB7mf4E3gW2eg1tVnHDJ7isFiI66Vyde2oCttLXlYLtYZMoU_Epl1Lu_OBAfoaa3IoBO359Cb5cf1gFd-E9wS8pBiZB-QVh0xMHmf29va0CURg3zvlwnpE-MChlmVj2zNzlAhj818VMnsTB3DKPzqIa-n-WklIUYbAWkwVj6qpjAOCWgPUs22mas_-mSbjV6og5OvA-6yKWELWDzAqtjnm0Vpcg92V-YOZ96ymFVqB4t5DlLQmrS53byAYa_uwNRtKB8NdzVVJlm5hjjpfUWYNDnIbZRchroIcpk081R5fqfS6WJ0vDbrCh_E2XCTGgA"
 
 # Legacy URLs (kept for reference/fallback)
 PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
@@ -73,8 +73,13 @@ LIVE_LEAGUE_MAPPING = {
     "ESportsBattle. RSL (2x6 mins)": "GT LEAGUE 12 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+    "International": "INT 8 MIN",
+    "Europa League": "GT LEAGUE 12 MIN",
+    "Bundesliga": "GT LEAGUE 12 MIN",
+    "Champions Cyber League": "CLA 10 MIN",
+    "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    "Premier League": "GT LEAGUE 12 MIN",  # Usado para 12 min padrão
+    "Premier League": "GT LEAGUE 12 MIN",
 }
 
 # History API / Green365 format → Internal format
@@ -126,6 +131,21 @@ league_stats = {}
 last_league_update_time = 0  # Timestamp do último envio do resumo das ligas
 
 
+def map_league_name(name):
+    """Mapeia o nome da liga de forma consistente (por prefixo)"""
+    if not name: return "Unknown"
+    
+    # Tentar match exato primeiro
+    if name in LIVE_LEAGUE_MAPPING:
+        return LIVE_LEAGUE_MAPPING[name]
+    
+    # Tentar match por prefixo
+    for key, value in LIVE_LEAGUE_MAPPING.items():
+        if name.upper().startswith(key.upper()):
+            return value
+            
+    return name
+
 def save_state():
     """Salva o estado do bot em um arquivo JSON"""
     try:
@@ -165,30 +185,66 @@ def load_state():
 
 
 def clean_player_name(name):
-    """Extrai nome do jogador de 'Team (PlayerName)', 'PlayerName (Team)' ou 'Team - Player'"""
-    if not name:
+    """Extrai nome do jogador de forma inteligente (sem lista estática de times)"""
+    if not name or not isinstance(name, str):
         return ""
     
-    # Se tiver parênteses, precisamos decidir o que é o jogador
-    match = re.search(r'\((.*?)\)', name)
-    if match:
-        content = match.group(1).strip()
-        # Se o conteúdo dentro dos parênteses for curto (provável nome de jogador)
-        # OU se o nome fora dos parênteses parecer um time conhecido
-        # Por heurística: se o fora for longo e o dentro for curto, o dentro é o jogador.
-        outside = name.replace(f"({content})", "").strip()
-        
-        # Se o de fora for muito longo ou o de dentro for 1-2 palavras, geralmente o de dentro é o jogador (ex: Real Madrid (Drake))
-        if len(outside) > len(content) or len(content.split()) <= 2:
-            return content
-        else:
-            return outside
+    # Se já parece um nome de jogador (uma palavra curta em maiúsculas ou sem espaços), não mexe
+    if name.isupper() and ' ' not in name and 2 <= len(name) <= 15:
+        return name
 
-    # Fallback for "Team - Player" format
-    if ' - ' in name:
-        return name.split(' - ')[-1].strip()
+    match = re.search(r'\((.*?)\)', name)
+    if not match:
+        # Se não tem parênteses, tenta split por " - ", " vs " ou " / "
+        for sep in [' - ', ' vs ', ' / ']:
+            if sep in name:
+                parts = name.split(sep)
+                p1, p2 = parts[0].strip(), parts[1].strip()
+                if ' ' in p1 and ' ' not in p2: return p2
+                if ' ' in p2 and ' ' not in p1: return p1
+                return p2 # Fallback
+        return name.strip()
+
+    content_match = match.group(1).strip()
+    outside = name.replace(f"({content_match})", "").strip()
     
-    return name.strip()
+    # Se o conteúdo dos parênteses parecer informação de liga/tempo, ignora
+    league_words = ['MINS', 'PLAY', 'LEAGUE', 'GT', 'BATTLE', 'VOLTA', 'ESOCCER', 'INTERNATIONAL', 'PART']
+    if any(word in content_match.upper() for word in league_words):
+        return outside.strip()
+
+    def get_player_score(s):
+        """Atribui uma pontuação de 'probabilidade de ser jogador'"""
+        score = 0
+        if not s: return -50
+        
+        # Jogadores costumam ser uma única palavra (sem espaços)
+        if ' ' not in s: score += 20
+        # Jogadores costumam ser ALL CAPS (ex: ALIBI) ou CamelCase com underscores
+        if s.isupper() and len(s) > 1: score += 25
+        # Nicks com underscore costumam ser jogadores (ex: Jur_Kr, xoma_1)
+        if '_' in s: score += 35
+        # Jogadores costumam ter números (ex: D3VA)
+        if any(char.isdigit() for char in s): 
+            # Mas cuidado com "04", "09" no final (comum em times alemães)
+            if re.search(r'\s(04|09|II|III)$', s) or s.endswith('04') or s.endswith('09'):
+                score -= 15
+            else:
+                score += 20
+        
+        # Nomes de times costumam ser mais longos
+        score -= len(s) * 1.0
+        
+        return score
+
+    score_content = get_player_score(content_match)
+    score_outside = get_player_score(outside)
+
+    # Se estiver nos parênteses e for razoável, prioriza (quase sempre é o nick na Altenar)
+    if score_content > score_outside - 10:
+        return content_match
+    return outside
+
 
 
 # =============================================================================
@@ -209,8 +265,8 @@ def fetch_live_matches():
         competitors_list = data.get('competitors', [])
         champs_list = data.get('champs', [])
 
-        # Criar mapas para lookup rápido
-        competitors_map = {c['id']: c['name'] for c in competitors_list}
+        # Criar mapa completo de competidores para acessar campos extras se existirem
+        competitors_map = {c['id']: c for c in competitors_list}
         champs_map = {c['id']: c['name'] for c in champs_list}
 
         print(
@@ -237,19 +293,61 @@ def fetch_live_matches():
                 live_time = event.get('liveTime', '')
 
                 # Obter nomes dos competidores
-                if len(competitor_ids) >= 2:
-                    home_competitor_name = competitors_map.get(
-                        competitor_ids[0], '')
-                    away_competitor_name = competitors_map.get(
-                        competitor_ids[1], '')
-                else:
-                    print(
-                        f"[WARN] Evento {event_id} sem competidores suficientes")
+                home_comp = competitors_map.get(competitor_ids[0], {}) if len(competitor_ids) > 0 else {}
+                away_comp = competitors_map.get(competitor_ids[1], {}) if len(competitor_ids) > 1 else {}
+                
+                home_competitor_name = home_comp.get('name', '')
+                away_competitor_name = away_comp.get('name', '')
+
+                if not home_competitor_name or not away_competitor_name:
+                    print(f"[WARN] Evento {event_id} sem nomes de competidores")
                     continue
 
-                # Extrair nomes dos jogadores
-                home_player = clean_player_name(home_competitor_name)
-                away_player = clean_player_name(away_competitor_name)
+                # Priorizar extração dos parênteses se existirem (mais confiável nesta API)
+                name_from_full_home = clean_player_name(home_competitor_name)
+                check_home_player = (home_comp.get('playerName') or 
+                                    home_comp.get('player_name') or 
+                                    home_comp.get('player') or 
+                                    home_comp.get('nickName') or 
+                                    event.get('home_player'))
+                
+                # Armazenar o texto bruto original usado para a extração
+                home_raw_text = home_competitor_name if '(' in home_competitor_name else (check_home_player or home_competitor_name)
+
+                if '(' in home_competitor_name and name_from_full_home != home_competitor_name:
+                    home_player = name_from_full_home
+                    home_source = "Full-Name-Parentheses"
+                else:
+                    home_player = clean_player_name(check_home_player or home_competitor_name)
+                    home_source = "API-Field" if check_home_player else "Full-Name-Cleaning"
+                               
+                name_from_full_away = clean_player_name(away_competitor_name)
+                check_away_player = (away_comp.get('playerName') or 
+                                    away_comp.get('player_name') or 
+                                    away_comp.get('player') or 
+                                    away_comp.get('nickName') or 
+                                    event.get('away_player'))
+                
+                away_raw_text = away_competitor_name if '(' in away_competitor_name else (check_away_player or away_competitor_name)
+
+                if '(' in away_competitor_name and name_from_full_away != away_competitor_name:
+                    away_player = name_from_full_away
+                    away_source = "Full-Name-Parentheses"
+                else:
+                    away_player = clean_player_name(check_away_player or away_competitor_name)
+                    away_source = "API-Field" if check_away_player else "Full-Name-Cleaning"
+                
+                home_team = (home_comp.get('teamName') or 
+                             home_comp.get('team_name') or 
+                             home_comp.get('team') or 
+                             event.get('home_team') or 
+                             (home_competitor_name.split('(')[0].strip() if '(' in home_competitor_name else home_competitor_name))
+                             
+                away_team = (away_comp.get('teamName') or 
+                             away_comp.get('team_name') or 
+                             away_comp.get('team') or 
+                             event.get('away_team') or 
+                             (away_competitor_name.split('(')[0].strip() if '(' in away_competitor_name else away_competitor_name))
 
                 # Obter nome da liga
                 league_name = champs_map.get(champ_id, 'Unknown League')
@@ -258,9 +356,8 @@ def fetch_live_matches():
                 if "ECOMP" in league_name.upper() or "VIRTUAL" in league_name.upper():
                     continue
 
-                # Mapear nome da liga
-                mapped_league = LIVE_LEAGUE_MAPPING.get(
-                    league_name, league_name)
+                # Mapear nome da liga (com suporte a prefixos/limpeza)
+                mapped_league = map_league_name(league_name)
 
                 # Parsear tempo
                 minute, second = parse_live_time(live_time)
@@ -271,8 +368,12 @@ def fetch_live_matches():
                     'mappedLeague': mapped_league,
                     'homePlayer': home_player,
                     'awayPlayer': away_player,
-                    'homeTeamName': home_competitor_name.split('(')[0].strip() if '(' in home_competitor_name else home_competitor_name,
-                    'awayTeamName': away_competitor_name.split('(')[0].strip() if '(' in away_competitor_name else away_competitor_name,
+                    'homeSource': home_source,
+                    'awaySource': away_source,
+                    'homeRaw': home_raw_text,
+                    'awayRaw': away_raw_text,
+                    'homeTeamName': home_team,
+                    'awayTeamName': away_team,
                     'timer': {
                         'minute': minute,
                         'second': second,
@@ -310,7 +411,12 @@ def fetch_green365_history(num_pages=5):
         headers = {"Authorization": GREEN365_TOKEN}
 
         for page in range(1, num_pages + 1):
-            params = {"page": page, "limit": 24}
+            params = {
+                "page": page, 
+                "limit": 24,
+                "sport": "esoccer",
+                "status": "ended"
+            }
             response = requests.get(
                 GREEN365_API_URL, params=params, headers=headers, timeout=12)
             if response.status_code != 200:
@@ -332,14 +438,22 @@ def fetch_green365_history(num_pages=5):
 
                     match_date = item.get('startTime', '')
 
-                    # Normalizar para o formato interno
+                    # Normalizar para o formato interno (Green365 já costuma ter campos separados se bem configurado)
+                    # Se não tiver, o fallback clean_player_name é usado
+                    normalized_home = clean_player_name(home_data.get('player_name') or 
+                                                        home_data.get('playerName') or 
+                                                        home_data.get('name', ''))
+                    normalized_away = clean_player_name(away_data.get('player_name') or 
+                                                        away_data.get('playerName') or 
+                                                        away_data.get('name', ''))
+
                     all_matches.append({
                         'id': f"g365_{item.get('id')}",
                         'league_name': competition.get('name', 'Unknown'),
-                        'home_player': clean_player_name(home_data.get('name', '')),
-                        'away_player': clean_player_name(away_data.get('name', '')),
-                        'home_team': '',
-                        'away_team': '',
+                        'home_player': normalized_home,
+                        'away_player': normalized_away,
+                        'home_team': home_data.get('team_name') or home_data.get('teamName') or '',
+                        'away_team': away_data.get('team_name') or away_data.get('teamName') or '',
                         'home_team_logo': home_data.get('imageUrl', ''),
                         'away_team_logo': away_data.get('imageUrl', ''),
                         'data_realizacao': match_date,
@@ -369,9 +483,9 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    # Se pediram poucas páginas, aumentamos para 15 para manter o cache robusto
-    fetch_pages = max(num_pages, 15)
-    print(f"[INFO] Atualizando histórico completo (Internal + Green365) - {fetch_pages} páginas...")
+    # Se pediram poucas páginas, aumentamos para 40 para garantir cobertura de jogadores menos frequentes
+    fetch_pages = max(num_pages, 40)
+    print(f"[INFO] Atualizando histórico completo (Deep Fetch) - {fetch_pages} páginas...")
 
     def fetch_internal_page(page):
         try:
@@ -401,11 +515,24 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     # Processar Internal
     for m in internal_matches:
         league = m.get('league_name', 'Unknown')
+        # Priorizar campos separados da API Interna se existirem
+        home_player = clean_player_name(m.get('home_player') or 
+                                        m.get('player_home') or 
+                                        m.get('home_player_name') or 
+                                        m.get('home_player_raw') or 
+                                        m.get('home_competitor_name', ''))
+        
+        away_player = clean_player_name(m.get('away_player') or 
+                                        m.get('player_away') or 
+                                        m.get('away_player_name') or 
+                                        m.get('away_player_raw') or 
+                                        m.get('away_competitor_name', ''))
+        
         all_combined.append({
             'id': f"int_{m.get('id')}",
-            'league_name': HISTORY_LEAGUE_MAPPING.get(league, league),
-            'home_player': clean_player_name(m.get('home_player', '')),
-            'away_player': clean_player_name(m.get('away_player', '')),
+            'league_name': map_league_name(league),
+            'home_player': home_player,
+            'away_player': away_player,
             'home_team': m.get('home_team', ''),
             'away_team': m.get('away_team', ''),
             'home_team_logo': m.get('home_team_logo', ''),
@@ -420,7 +547,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     # Processar Green365 (já normalizados mas mapear liga)
     for m in green_matches:
         league = m['league_name']
-        m['league_name'] = HISTORY_LEAGUE_MAPPING.get(league, league)
+        m['league_name'] = map_league_name(league)
         all_combined.append(m)
 
     # 4. Remover duplicatas por jogadores + score + data_truncada (se necessário)
@@ -438,10 +565,11 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
 def fetch_player_individual_stats(player_name, use_cache=True):
     """Busca estatísticas individuais de um jogador - Usa cache global de histórico"""
 
-    if use_cache and player_name in player_stats_cache:
-        cached = player_stats_cache[player_name]
+    name_key = player_name.upper().strip()
+
+    if use_cache and name_key in player_stats_cache:
+        cached = player_stats_cache[name_key]
         if time.time() - cached['timestamp'] < CACHE_TTL:
-            print(f"[CACHE] Stats de {player_name} do cache")
             return cached['stats']
 
     # Buscar histórico global (usa cache se disponível)
@@ -458,9 +586,9 @@ def fetch_player_individual_stats(player_name, use_cache=True):
         home_player = match.get('home_player', '')
         away_player = match.get('away_player', '')
 
-        # Verificar se o jogador participou da partida
-        if (home_player.upper() == player_name.upper() or
-                away_player.upper() == player_name.upper()):
+        # Verificar se o jogador participou da partida (Case Insensitive)
+        if (home_player.upper().strip() == name_key or
+                away_player.upper().strip() == name_key):
             player_matches.append(match)
 
     # Limitar aos últimos 20 jogos do jogador
@@ -471,13 +599,11 @@ def fetch_player_individual_stats(player_name, use_cache=True):
         'total_count': len(player_matches)
     }
 
-    player_stats_cache[player_name] = {
+    player_stats_cache[name_key] = {
         'stats': final_data,
         'timestamp': time.time()
     }
 
-    print(
-        f"[INFO] Stats de {player_name} carregadas ({final_data['total_count']} jogos)")
     return final_data
 
 
@@ -515,9 +641,9 @@ def analyze_last_5_games(matches, player_name):
         print(f"[WARN] {player_name}: Nenhum jogo encontrado")
         return None
 
-    if len(matches) < 5:
+    if len(matches) < 4:
         print(
-            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
+            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 4)")
         return None
 
     last_5 = matches[:5]
@@ -639,7 +765,7 @@ def detect_regime_change(matches):
     Detecta mudança de estado do jogador (hot→cold ou cold→hot)
     Previne situações como: 2 semanas over → 15 reds seguidos
     """
-    if len(matches) < 8:
+    if len(matches) < 6:
         return {'regime_change': False}
 
     # Últimos 3 jogos (MOMENTO ATUAL)
@@ -708,10 +834,10 @@ def analyze_player_with_regime_check(matches, player_name):
         print(f"[WARN] {player_name}: Nenhum jogo encontrado")
         return None
 
-    # Mínimo de 5 jogos
-    if len(matches) < 5:
+    # Mínimo de 4 jogos
+    if len(matches) < 4:
         print(
-            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 5)")
+            f"[WARN] {player_name}: Apenas {len(matches)} jogos encontrados (mínimo: 4)")
         return None
 
     # 1. DETECTAR REGIME CHANGE (crítico!)
@@ -830,9 +956,12 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
 
     # Se não tiver dados da liga, não entra nas estratégias
     if not league_key or league_key not in all_league_stats:
+        print(f"[BLOCK] Liga {league_key} sem estatísticas no momento.")
         return strategies
 
     l_stats = all_league_stats[league_key]
+    # DEBUG: Mostrar status da liga
+    print(f"[DEBUG STRATEGY] Liga {league_key}: HT O0.5={l_stats['ht']['o05']}% (min 85), HT O1.5={l_stats['ht']['o15']}% (min 80), FT O1.5={l_stats['ft']['o15']}% (min 80)")
 
     timer = event.get('timer', {})
     minute = timer.get('minute', 0)
@@ -848,51 +977,74 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
     away_player = event.get('awayPlayer', 'Player 2')
 
     # HT (60s - 180s)
+    if time_seconds < 60:
+        print(f"[BLOCK] Tempo {time_seconds}s insuficiente para estratégias HT (mínimo 60s).")
+
     if 60 <= time_seconds <= 180:
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ht']['o05'] >= 100):
+                l_stats['ht']['o05'] >= 85): # Reduzido de 100 para 85
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
                 avg_btts >= 45 and
                 home_stats['ht_over_05_pct'] >= 90 and
                     away_stats['ht_over_05_pct'] >= 90):
                 strategies.append("⚽ +0.5 GOL HT")
+            else:
+                print(f"[BLOCK] +0.5 HT: Estatísticas de jogadores insuficientes")
+        elif home_goals == 0 and away_goals == 0:
+             print(f"[BLOCK] +0.5 HT: Liga O0.5 ({l_stats['ht']['o05']}%) abaixo de 85%")
 
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ht']['o15'] >= 95):
+                l_stats['ht']['o15'] >= 75): # Reduzido de 95 para 75
             if (home_stats['avg_goals_scored_ft'] >= 1.0 and
                 away_stats['avg_goals_scored_ft'] >= 1.0 and
                 avg_btts >= 45 and
-                home_stats['ht_over_15_pct'] >= 80 and
-                    away_stats['ht_over_15_pct'] >= 80):
+                home_stats['ht_over_15_pct'] >= 75 and # Reduzido de 80 para 75
+                    away_stats['ht_over_15_pct'] >= 75):
                 strategies.append("⚽ +1.5 GOLS HT")
+            else:
+                print(f"[BLOCK] +1.5 HT: Estatísticas de jogadores insuficientes")
+        elif home_goals == 0 and away_goals == 0:
+             print(f"[BLOCK] +1.5 HT: Liga O1.5 ({l_stats['ht']['o15']}%) abaixo de 75%")
 
         if ((home_goals == 1 and away_goals == 0) or (home_goals == 0 and away_goals == 1)):
-            if (l_stats['ht']['o25'] >= 90):
+            if (l_stats['ht']['o25'] >= 75): # Reduzido de 90 para 75
                 if (home_stats['avg_goals_scored_ft'] >= 1.5 and
                     away_stats['avg_goals_scored_ft'] >= 1.5 and
-                    avg_btts >= 75 and
-                    home_stats['ht_over_15_pct'] == 100 and
-                        away_stats['ht_over_15_pct'] == 100):
+                    avg_btts >= 65 and # Reduzido de 75 para 65
+                    home_stats['ht_over_15_pct'] >= 90 and # Reduzido de 100 para 90
+                        away_stats['ht_over_15_pct'] >= 90):
                     strategies.append("⚽ +2.5 GOLS HT")
+                else:
+                    print(f"[BLOCK] +2.5 HT: Estatísticas de jogadores insuficientes")
+            else:
+                 print(f"[BLOCK] +2.5 HT: Liga O2.5 ({l_stats['ht']['o25']}%) abaixo de 75%")
 
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ht']['btts'] >= 90):
-            if (home_stats['avg_goals_scored_ft'] >= 1.3 and
-                away_stats['avg_goals_scored_ft'] >= 1.3 and
-                avg_btts >= 85 and
-                home_stats['ht_over_05_pct'] == 100 and
-                    away_stats['ht_over_05_pct'] == 100):
+                l_stats['ht']['btts'] >= 75): # Reduzido de 90 para 75
+            if (home_stats['avg_goals_scored_ft'] >= 1.2 and
+                away_stats['avg_goals_scored_ft'] >= 1.2 and
+                avg_btts >= 75 and # Reduzido de 85 para 75
+                home_stats['ht_over_05_pct'] >= 90 and # Reduzido de 100 para 90
+                    away_stats['ht_over_05_pct'] >= 90):
                 strategies.append("⚽ BTTS HT")
+            else:
+                print(f"[BLOCK] BTTS HT: Estatísticas de jogadores insuficientes")
+        elif home_goals == 0 and away_goals == 0:
+             print(f"[BLOCK] BTTS HT: Liga BTTS ({l_stats['ht']['btts']}%) abaixo de 75%")
 
     # FT (180s - 360s)
     if 180 <= time_seconds <= 360:
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ft']['o15'] >= 95):
+                l_stats['ft']['o15'] >= 80): # Reduzido de 95 para 80
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
-                    avg_btts >= 75):
+                    avg_btts >= 65): # Reduzido de 75 para 65
                 strategies.append("⚽ +1.5 GOLS FT")
+            else:
+                print(f"[BLOCK] +1.5 FT: Estatísticas de jogadores insuficientes")
+        elif home_goals == 0 and away_goals == 0:
+             print(f"[BLOCK] +1.5 FT: Liga FT O1.5 ({l_stats['ft']['o15']}%) abaixo de 80%")
 
         if (home_goals == 0 and away_goals == 0 and
                 l_stats['ft']['o25'] >= 90):
@@ -1712,7 +1864,10 @@ async def update_league_stats(bot, recent_matches):
         print("[✓] Resumo das ligas atualizado com imagem")
 
     except Exception as e:
-        print(f"[ERROR] update_league_stats: {e}")
+        if "getaddrinfo failed" in str(e):
+            print(f"[WARN] Falha de DNS: api.green365.cc está inacessível no momento.")
+        else:
+            print(f"[ERROR] update_league_stats: {e}")
         import traceback
         traceback.print_exc()
 
@@ -2015,9 +2170,13 @@ async def main_loop(bot):
                 away_player = event.get('awayPlayer', '')
                 bet365_event_id = event.get('bet365EventId', '')
 
+                home_source = event.get('homeSource', '?')
+                away_source = event.get('awaySource', '?')
+                home_raw = event.get('homeRaw', '?')
+                away_raw = event.get('awayRaw', '?')
+
                 print(
-                    f"\n[EVENTO] {event_id}: {home_player} vs {away_player} ({league_name})")
-                print(f"[BET365] Event ID: {bet365_event_id}")
+                    f"\n[EVENTO] {event_id}: {home_player} vs {away_player} - {league_name}")
 
                 if event_id in sent_match_ids:
                     continue
@@ -2033,9 +2192,11 @@ async def main_loop(bot):
                 home_matches = home_data.get('matches', [])
                 away_matches = away_data.get('matches', [])
 
-                if len(home_matches) < 5 or len(away_matches) < 5:
+                print(f"[INFO] {home_player} ({len(home_matches)} jogos) vs {away_player} ({len(away_matches)} jogos)")
+
+                if len(home_matches) < 4 or len(away_matches) < 4:
                     print(
-                        f"[WARN] Dados insuficientes: {home_player}={len(home_matches)} jogos, {away_player}={len(away_matches)} jogos (mínimo: 5)")
+                        f"[WARN] Dados insuficientes (mínimo: 4)")
                     continue
 
                 # Análise COM detecção de regime change
@@ -2049,12 +2210,12 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (Média de 85% - Pedido do Usuário)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 75% - Ajustado para maior cobertura)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 85:
+                if avg_confidence < 65:
                     print(
                         f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
@@ -2069,14 +2230,14 @@ async def main_loop(bot):
                 mapped_league = event.get('mappedLeague', '')
                 raw_league = league_name.upper()
 
-                # 1. Tentar por mapping explícito
-                if mapped_league in ['BATTLE 8 MIN', 'H2H 8 MIN', 'VALHALLA CUP', 'VALKYRIE CUP']:
+                # 1. Tentar por mapping explícito (com suporte a prefixo)
+                if any(mapped_league.startswith(l) for l in ['BATTLE 8 MIN', 'H2H 8 MIN', 'VALHALLA CUP', 'VALKYRIE CUP']):
                     strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league == 'GT LEAGUE 12 MIN':
+                elif mapped_league.startswith('GT LEAGUE 12 MIN'):
                     strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league == 'VOLTA 6 MIN':
+                elif mapped_league.startswith('VOLTA 6 MIN'):
                     strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league == 'CLA 10 MIN':
+                elif mapped_league.startswith('CLA 10 MIN'):
                     strategies = check_strategies_10mins(event, home_stats, away_stats, league_stats)
                 
                 # 2. Fallback: Auto-detecção por palavras-chave se não houver estratégias
@@ -2173,6 +2334,10 @@ async def main():
     
     # Carregar estado persistido
     load_state()
+
+    print("[INFO] Pré-carregando dados para análise imediata...")
+    recent = fetch_recent_matches(num_pages=15)
+    await update_league_stats(bot, recent)
 
     await asyncio.gather(
         main_loop(bot),
