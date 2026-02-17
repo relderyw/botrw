@@ -12,6 +12,7 @@ import logging
 from PIL import Image, ImageDraw, ImageFont
 import statistics
 from io import BytesIO
+import json
 
 
 # Configurar logging
@@ -56,6 +57,8 @@ LIVE_LEAGUE_MAPPING = {
     "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
     "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
     "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
+    "H2H GG - E-football": "H2H 8 MIN",
+    "H2H GG": "H2H 8 MIN",
     # New Altenar leagues
     "Valhalla Cup": "VALHALLA CUP",
     "Valhalla League": "VALHALLA CUP",
@@ -63,9 +66,15 @@ LIVE_LEAGUE_MAPPING = {
     "CLA": "CLA 10 MIN",
     "Cyber Live Arena": "CLA 10 MIN",
     "Champions League B 2×6": "GT LEAGUE 12 MIN",
+    "Champions League B 2x6": "GT LEAGUE 12 MIN",
     "Champions League": "GT LEAGUE 12 MIN",
     "Super Lig": "GT LEAGUE 12 MIN",
     "Super Lig • E-battles": "GT LEAGUE 12 MIN",
+    "ESportsBattle. RSL (2x6 mins)": "GT LEAGUE 12 MIN",
+    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
+    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
+    "Premier League": "GT LEAGUE 12 MIN",  # Usado para 12 min padrão
 }
 
 # History API / Green365 format → Internal format
@@ -87,6 +96,12 @@ HISTORY_LEAGUE_MAPPING = {
     "CLA": "CLA 10 MIN",
     "Champions League": "GT LEAGUE 12 MIN",
     "Super Lig": "GT LEAGUE 12 MIN",
+    "Champions League B 2x6": "GT LEAGUE 12 MIN",
+    "Champions League B 2×6": "GT LEAGUE 12 MIN",
+    "ESportsBattle. RSL (2x6 mins)": "GT LEAGUE 12 MIN",
+    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
+    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
 }
 
 # =============================================================================
@@ -108,6 +123,73 @@ last_summary = None
 last_league_summary = None
 last_league_message_id = None
 league_stats = {}
+last_league_update_time = 0  # Timestamp do último envio do resumo das ligas
+
+
+def save_state():
+    """Salva o estado do bot em um arquivo JSON"""
+    try:
+        state = {
+            'last_league_message_id': last_league_message_id,
+            'league_stats': league_stats,
+            'last_league_update_time': last_league_update_time,
+            'last_summary': last_summary,
+            'sent_match_ids': list(sent_match_ids)
+        }
+        with open('bot_state.json', 'w') as f:
+            json.dump(state, f)
+        print("[DEBUG] Estado salvo com sucesso")
+    except Exception as e:
+        print(f"[ERROR] save_state: {e}")
+
+
+def load_state():
+    """Carrega o estado do bot de um arquivo JSON"""
+    global last_league_message_id, league_stats, last_league_update_time, last_summary, sent_match_ids
+    try:
+        if os.path.exists('bot_state.json'):
+            with open('bot_state.json', 'r') as f:
+                state = json.load(f)
+                last_league_message_id = state.get('last_league_message_id')
+                league_stats = state.get('league_stats', {})
+                last_league_update_time = state.get('last_league_update_time', 0)
+                last_summary = state.get('last_summary')
+                sent_match_ids = set(state.get('sent_match_ids', []))
+            print("[DEBUG] Estado carregado com sucesso")
+    except Exception as e:
+        print(f"[ERROR] load_state: {e}")
+
+# =============================================================================
+# UTILITÁRIOS
+# =============================================================================
+
+
+def clean_player_name(name):
+    """Extrai nome do jogador de 'Team (PlayerName)', 'PlayerName (Team)' ou 'Team - Player'"""
+    if not name:
+        return ""
+    
+    # Se tiver parênteses, precisamos decidir o que é o jogador
+    match = re.search(r'\((.*?)\)', name)
+    if match:
+        content = match.group(1).strip()
+        # Se o conteúdo dentro dos parênteses for curto (provável nome de jogador)
+        # OU se o nome fora dos parênteses parecer um time conhecido
+        # Por heurística: se o fora for longo e o dentro for curto, o dentro é o jogador.
+        outside = name.replace(f"({content})", "").strip()
+        
+        # Se o de fora for muito longo ou o de dentro for 1-2 palavras, geralmente o de dentro é o jogador (ex: Real Madrid (Drake))
+        if len(outside) > len(content) or len(content.split()) <= 2:
+            return content
+        else:
+            return outside
+
+    # Fallback for "Team - Player" format
+    if ' - ' in name:
+        return name.split(' - ')[-1].strip()
+    
+    return name.strip()
+
 
 # =============================================================================
 # FUNÇÕES DE REQUISIÇÃO
@@ -138,13 +220,6 @@ def fetch_live_matches():
         football_events = [e for e in events if e.get('sportId') == 66]
         print(f"[DEBUG] {len(football_events)} eventos de futebol após filtro")
 
-        def extract_player_name(competitor_name):
-            """Extrai nome do jogador de 'Team (PlayerName)'"""
-            if not competitor_name:
-                return ""
-            match = re.search(r'\((.*?)\)', competitor_name)
-            return match.group(1).strip() if match else competitor_name.strip()
-
         def parse_live_time(live_time_str):
             """Parseia tempo ao vivo (ex: '1ª parte', '2ª parte')"""
             # Altenar não fornece minuto exato, apenas período
@@ -173,8 +248,8 @@ def fetch_live_matches():
                     continue
 
                 # Extrair nomes dos jogadores
-                home_player = extract_player_name(home_competitor_name)
-                away_player = extract_player_name(away_competitor_name)
+                home_player = clean_player_name(home_competitor_name)
+                away_player = clean_player_name(away_competitor_name)
 
                 # Obter nome da liga
                 league_name = champs_map.get(champ_id, 'Unknown League')
@@ -261,8 +336,8 @@ def fetch_green365_history(num_pages=5):
                     all_matches.append({
                         'id': f"g365_{item.get('id')}",
                         'league_name': competition.get('name', 'Unknown'),
-                        'home_player': home_data.get('name', ''),
-                        'away_player': away_data.get('name', ''),
+                        'home_player': clean_player_name(home_data.get('name', '')),
+                        'away_player': clean_player_name(away_data.get('name', '')),
                         'home_team': '',
                         'away_team': '',
                         'home_team_logo': home_data.get('imageUrl', ''),
@@ -288,12 +363,15 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     global global_history_cache
 
     # Verificar cache global
-    if use_cache and global_history_cache['matches']:
+    # Se o cache tiver pelo menos 200 jogos, consideramos "quente" o suficiente
+    if use_cache and len(global_history_cache['matches']) > 200:
         cache_age = time.time() - global_history_cache['timestamp']
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    print(f"[INFO] Atualizando histórico completo (Internal + Green365)...")
+    # Se pediram poucas páginas, aumentamos para 15 para manter o cache robusto
+    fetch_pages = max(num_pages, 15)
+    print(f"[INFO] Atualizando histórico completo (Internal + Green365) - {fetch_pages} páginas...")
 
     def fetch_internal_page(page):
         try:
@@ -309,7 +387,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     # 1. Buscar da API Interna em paralelo
     internal_matches = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        pages = range(1, num_pages + 1)
+        pages = range(1, fetch_pages + 1)
         results = list(executor.map(fetch_internal_page, pages))
         for r in results:
             internal_matches.extend(r)
@@ -326,8 +404,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         all_combined.append({
             'id': f"int_{m.get('id')}",
             'league_name': HISTORY_LEAGUE_MAPPING.get(league, league),
-            'home_player': m.get('home_player', ''),
-            'away_player': m.get('away_player', ''),
+            'home_player': clean_player_name(m.get('home_player', '')),
+            'away_player': clean_player_name(m.get('away_player', '')),
             'home_team': m.get('home_team', ''),
             'away_team': m.get('away_team', ''),
             'home_team_logo': m.get('home_team_logo', ''),
@@ -594,7 +672,7 @@ def detect_regime_change(matches):
         ratio = avg_last_3 / avg_previous
 
         # COOLING (jogador esfriou) - BLOQUEIO CRÍTICO
-        # Ajustado para ser mais sensível e detectar cooling mais cedo
+        # Ajustado para ser mais sensível e detectar cooling com mais facilidade (Pedido do Usuário)
         if ratio < 0.6 and avg_last_3 < 2.0:
             return {
                 'regime_change': True,
@@ -1334,6 +1412,7 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
             )
 
             sent_match_ids.add(event_id)
+            save_state()  # Persistir IDs enviados
 
             sent_tips.append({
                 'event_id': event_id,
@@ -1533,7 +1612,7 @@ async def check_results(bot):
 
 async def update_league_stats(bot, recent_matches):
     """Atualiza e envia resumo das estatísticas das ligas com imagem"""
-    global last_league_summary, last_league_message_id, league_stats
+    global last_league_summary, last_league_message_id, league_stats, last_league_update_time
 
     try:
         # Ordenar partidas para garantir estabilidade nos cálculos
@@ -1592,10 +1671,19 @@ async def update_league_stats(bot, recent_matches):
 
         # Comparação exata dos dicionários
         if league_stats and league_stats == stats:
-            print(f"[INFO] Resumo de ligas idêntico ao anterior. Ignorando envio.")
+            # print(f"[INFO] Resumo de ligas idêntico ao anterior. Ignorando envio.")
+            return
+
+        # VERIFICAR THROTTLE (Apenas 1 vez a cada 30 minutos)
+        current_time = time.time()
+        time_since_last = current_time - last_league_update_time
+        
+        if time_since_last < 1800: # 30 minutos
+            # print(f"[INFO] Resumo das ligas atualizado há pouco tempo ({time_since_last/60:.1f} min). Aguardando próxima janela.")
             return
 
         league_stats = stats
+        last_league_update_time = current_time
 
         # ============ GERAR IMAGEM ============
         img = create_league_stats_image(stats)
@@ -1620,6 +1708,7 @@ async def update_league_stats(bot, recent_matches):
         )
 
         last_league_message_id = msg.message_id
+        save_state()  # Salvar estado após atualizar a mensagem
         print("[✓] Resumo das ligas atualizado com imagem")
 
     except Exception as e:
@@ -1960,12 +2049,12 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (Média de 70%)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 85% - Pedido do Usuário)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 70:
+                if avg_confidence < 85:
                     print(
                         f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
@@ -1975,30 +2064,33 @@ async def main_loop(bot):
                 print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}% | Confidence: {home_confidence:.0f}%")
                 print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}% | Confidence: {away_confidence:.0f}%")
 
+                # DETERMINAR ESTRATÉGIAS PELO TEMPO (Mapeamento ou Auto-detecção)
                 strategies = []
-
-                # Usar o nome mapeado da liga para selecionar estratégias
                 mapped_league = event.get('mappedLeague', '')
+                raw_league = league_name.upper()
 
-                if mapped_league in ['BATTLE 8 MIN', 'H2H 8 MIN']:
-                    strategies = check_strategies_8mins(
-                        event, home_stats, away_stats, league_stats)
-
+                # 1. Tentar por mapping explícito
+                if mapped_league in ['BATTLE 8 MIN', 'H2H 8 MIN', 'VALHALLA CUP', 'VALKYRIE CUP']:
+                    strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
                 elif mapped_league == 'GT LEAGUE 12 MIN':
-                    strategies = check_strategies_12mins(
-                        event, home_stats, away_stats, league_stats)
-
-                elif mapped_league in ['VOLTA 6 MIN']:
-                    strategies = check_strategies_volta_6mins(
-                        event, home_stats, away_stats, league_stats)
-
-                elif mapped_league in ['VALHALLA CUP', 'VALKYRIE CUP']:
-                    strategies = check_strategies_8mins(
-                        event, home_stats, away_stats, league_stats)
-
+                    strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
+                elif mapped_league == 'VOLTA 6 MIN':
+                    strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
                 elif mapped_league == 'CLA 10 MIN':
-                    strategies = check_strategies_10mins(
-                        event, home_stats, away_stats, league_stats)
+                    strategies = check_strategies_10mins(event, home_stats, away_stats, league_stats)
+                
+                # 2. Fallback: Auto-detecção por palavras-chave se não houver estratégias
+                if not strategies:
+                    if '2X6' in raw_league or '12 MIN' in raw_league or 'GT LEAGUE' in raw_league or 'CHAMPIONS LEAGUE' in raw_league:
+                        strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
+                    elif '2X4' in raw_league or '8 MIN' in raw_league or 'BATTLE' in raw_league or 'H2H' in raw_league or 'PREMIER LEAGUE' in raw_league:
+                        strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
+                    elif '2X3' in raw_league or '6 MIN' in raw_league or 'VOLTA' in raw_league:
+                        strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
+                    elif 'CLA' in raw_league or '10 MIN' in raw_league:
+                        strategies = check_strategies_10mins(event, home_stats, away_stats, league_stats)
+                    elif 'VALHALLA' in raw_league or 'VALKYRIE' in raw_league:
+                        strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
 
                 for strategy in strategies:
                     print(
@@ -2078,6 +2170,9 @@ async def main():
                 print("  3. Se não há firewall bloqueando")
                 print("  4. Tente usar uma VPN se estiver bloqueado")
                 return
+    
+    # Carregar estado persistido
+    load_state()
 
     await asyncio.gather(
         main_loop(bot),
