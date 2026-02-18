@@ -276,22 +276,39 @@ def fetch_live_matches():
         football_events = [e for e in events if e.get('sportId') == 66]
         print(f"[DEBUG] {len(football_events)} eventos de futebol após filtro")
 
-        def parse_live_time(live_time_str):
-            """Parseia tempo ao vivo (ex: '1ª parte', '2ª parte')"""
-            # Altenar não fornece minuto exato, apenas período
-            # Vamos estimar o tempo para permitir que as estratégias triggerem
-            if not live_time_str: return 0, 0
-            
+        def parse_live_time(live_time_str, start_date_str=None):
+            """
+            Calcula o minuto real da partida usando startDate.
+            Fallback: estimativa por período (liveTime).
+            """
+            now_utc = datetime.now(timezone.utc)
+
+            # --- Método principal: calcular pelo startDate ---
+            if start_date_str:
+                try:
+                    start_dt = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+                    elapsed_seconds = (now_utc - start_dt).total_seconds()
+                    # Partida ainda não começou
+                    if elapsed_seconds < 0:
+                        return 0, 0
+                    elapsed_min = int(elapsed_seconds // 60)
+                    elapsed_sec = int(elapsed_seconds % 60)
+                    return elapsed_min, elapsed_sec
+                except Exception as e:
+                    print(f"[WARN] parse_live_time: erro ao calcular por startDate: {e}")
+
+            # --- Fallback: estimativa por período ---
+            if not live_time_str:
+                return 0, 0
             lt_upper = live_time_str.upper()
             if '1ª PARTE' in lt_upper or '1ST HALF' in lt_upper:
-                return 2, 0 # Estima 2 minutos para estratégias de HT
+                return 2, 0
             elif 'INTERVALO' in lt_upper or 'HALFTIME' in lt_upper:
-                return 4, 0 # Final do HT
+                return 4, 0
             elif '2ª PARTE' in lt_upper or '2ND HALF' in lt_upper:
-                return 6, 0 # Estima 6 minutos para estratégias de FT
+                return 6, 0
             elif 'FINAL' in lt_upper:
                 return 8, 0
-                
             return 0, 0
 
         normalized_events = []
@@ -301,8 +318,31 @@ def fetch_live_matches():
                 event_id = event.get('id')
                 champ_id = event.get('champId')
                 competitor_ids = event.get('competitorIds', [])
-                score = event.get('score', [0, 0])
+                score_raw = event.get('score', [0, 0])
                 live_time = event.get('liveTime', '')
+
+                # Parse robusto do score — Altenar retorna lista [home, away]
+                # mas pode variar: None, string "1:0", dict {home:1, away:0}
+                def parse_score_value(s):
+                    if s is None:
+                        return [0, 0]
+                    if isinstance(s, list):
+                        h = int(s[0]) if len(s) > 0 else 0
+                        a = int(s[1]) if len(s) > 1 else 0
+                        return [h, a]
+                    if isinstance(s, dict):
+                        return [int(s.get('home', 0)), int(s.get('away', 0))]
+                    if isinstance(s, str):
+                        for sep in [':', '-', ' ']:
+                            if sep in s:
+                                parts = s.split(sep)
+                                try:
+                                    return [int(parts[0].strip()), int(parts[1].strip())]
+                                except:
+                                    pass
+                    return [0, 0]
+
+                score = parse_score_value(score_raw)
 
                 # Obter nomes dos competidores
                 home_comp = competitors_map.get(competitor_ids[0], {}) if len(competitor_ids) > 0 else {}
@@ -371,8 +411,11 @@ def fetch_live_matches():
                 # Mapear nome da liga (com suporte a prefixos/limpeza)
                 mapped_league = map_league_name(league_name)
 
-                # Parsear tempo
-                minute, second = parse_live_time(live_time)
+                start_date = event.get('startDate', '')
+
+                # Parsear tempo real usando startDate
+                minute, second = parse_live_time(live_time, start_date_str=start_date)
+                print(f"[DEBUG] Evento {event_id} | liveTime='{live_time}' | startDate={start_date} | Minuto calculado: {minute}:{second:02d}")
 
                 normalized_event = {
                     'id': str(event_id),
@@ -1507,7 +1550,7 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     msg += f"💎 <b>{strategy}</b>\n\n"
 
     # Informações do jogo
-    msg += f"⏱ <b>Tempo:</b> {time_str} | 📊 <b>Placar:</b> {scoreboard}\n"
+    msg += f"⏱️ Tempo: {time_str} | 📊 Placar: {scoreboard}\n"
     msg += f"🎮 <b>{home_player}</b> vs <b>{away_player}</b>\n\n"
 
     # Estatísticas formatadas
@@ -1612,8 +1655,9 @@ async def check_results(bot):
     global last_summary, last_league_summary, last_league_message_id
 
     try:
-        # Buscar 3 páginas para ter ~72 partidas recentes (limit=24 por página)
-        recent = fetch_recent_matches(num_pages=3)
+        # Buscar 8 páginas para ter ~192 partidas recentes (limit=24 por página)
+        # Esoccer tem alta frequência de jogos, precisamos de mais histórico
+        recent = fetch_recent_matches(num_pages=8)
 
         # Agrupar partidas por jogadores, mantendo múltiplas partidas
         finished_matches = defaultdict(list)
@@ -1656,12 +1700,13 @@ async def check_results(bot):
                             tip_time = tip['sent_time']
 
                             # A partida deve ter sido realizada DEPOIS do envio da tip
-                            # Margem: 5 min antes (tolerância) até 30 min depois do envio
+                            # Margem: 5 min antes (tolerância) até 15 min depois do envio
+                            # Esoccer: partidas de 6-12min, janela apertada para evitar match errado
                             time_diff = (match_time_local -
                                          tip_time).total_seconds()
 
-                            # Partida ocorreu entre 5 min antes e 30 min depois do envio
-                            if -300 <= time_diff <= 1800:
+                            # Partida ocorreu entre 5 min antes e 15 min depois do envio
+                            if -300 <= time_diff <= 900:
                                 match = m
                                 print(
                                     f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
@@ -1671,61 +1716,94 @@ async def check_results(bot):
                                 f"[WARN] Erro ao parsear data da partida: {e}")
                             continue
 
-                # Se não encontrou pelo horário, NÃO usar partida antiga
+                # Se não encontrou pelo horário, logar e continuar
                 if not match:
+                    print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}). Total de partidas no histórico para esse par: {len(matches_for_players)}")
                     continue
 
-                ht_home = match.get('home_score_ht', 0) or 0
-                ht_away = match.get('away_score_ht', 0) or 0
+                ht_home = int(match.get('home_score_ht', 0) or 0)
+                ht_away = int(match.get('away_score_ht', 0) or 0)
                 ht_total = ht_home + ht_away
 
-                ft_home = match.get('home_score_ft', 0) or 0
-                ft_away = match.get('away_score_ft', 0) or 0
+                ft_home = int(match.get('home_score_ft', 0) or 0)
+                ft_away = int(match.get('away_score_ft', 0) or 0)
                 ft_total = ft_home + ft_away
+
+                print(f"[DEBUG] check_results: {key} | HT {ht_home}-{ht_away} ({ht_total} gols) | FT {ft_home}-{ft_away} ({ft_total} gols) | Estratégia: {strategy}")
 
                 strategy = tip['strategy']
 
+                # -------------------------------------------------------
+                # LÓGICA DE AVALIAÇÃO DE RESULTADO
+                # Ordem de prioridade: estratégias individuais ANTES das genéricas
+                # para evitar conflito de elif com '+1.5 GOLS FT' etc.
+                # -------------------------------------------------------
                 result = None
+
+                # --- HT ---
                 if '+0.5 GOL HT' in strategy:
                     result = 'green' if ht_total >= 1 else 'red'
+
                 elif '+1.5 GOLS HT' in strategy:
                     result = 'green' if ht_total >= 2 else 'red'
+
                 elif '+2.5 GOLS HT' in strategy:
                     result = 'green' if ht_total >= 3 else 'red'
+
                 elif 'BTTS HT' in strategy:
-                    result = 'green' if (
-                        ht_home > 0 and ht_away > 0) else 'red'
+                    result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
+
+                # --- FT Individual (deve vir ANTES das genéricas) ---
+                elif '+1.5 GOLS FT' in strategy and not strategy.startswith('⚽ +1.5 GOLS FT'):
+                    # Estratégia individual: "⚽ JOGADOR +1.5 GOLS FT"
+                    try:
+                        player_name = strategy.replace('⚽ ', '').replace(' +1.5 GOLS FT', '').strip().upper()
+                        if player_name == home:
+                            result = 'green' if ft_home >= 2 else 'red'
+                            print(f"[DEBUG] Individual +1.5 FT: {player_name} (home) marcou {ft_home} gols → {result}")
+                        elif player_name == away:
+                            result = 'green' if ft_away >= 2 else 'red'
+                            print(f"[DEBUG] Individual +1.5 FT: {player_name} (away) marcou {ft_away} gols → {result}")
+                        else:
+                            # Nome não bateu, fallback para total
+                            print(f"[WARN] Individual +1.5 FT: jogador '{player_name}' não encontrado (home='{home}', away='{away}'). Usando total.")
+                            result = 'green' if ft_total >= 2 else 'red'
+                    except Exception as e:
+                        print(f"[WARN] Erro ao avaliar individual +1.5 FT: {e}")
+                        result = 'green' if ft_total >= 2 else 'red'
+
+                elif '+2.5 GOLS FT' in strategy and not strategy.startswith('⚽ +2.5 GOLS FT'):
+                    # Estratégia individual: "⚽ JOGADOR +2.5 GOLS FT"
+                    try:
+                        player_name = strategy.replace('⚽ ', '').replace(' +2.5 GOLS FT', '').strip().upper()
+                        if player_name == home:
+                            result = 'green' if ft_home >= 3 else 'red'
+                            print(f"[DEBUG] Individual +2.5 FT: {player_name} (home) marcou {ft_home} gols → {result}")
+                        elif player_name == away:
+                            result = 'green' if ft_away >= 3 else 'red'
+                            print(f"[DEBUG] Individual +2.5 FT: {player_name} (away) marcou {ft_away} gols → {result}")
+                        else:
+                            print(f"[WARN] Individual +2.5 FT: jogador '{player_name}' não encontrado (home='{home}', away='{away}'). Usando total.")
+                            result = 'green' if ft_total >= 3 else 'red'
+                    except Exception as e:
+                        print(f"[WARN] Erro ao avaliar individual +2.5 FT: {e}")
+                        result = 'green' if ft_total >= 3 else 'red'
+
+                # --- FT Genérico ---
                 elif '+1.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 2 else 'red'
+
                 elif '+2.5 GOLS FT' in strategy:
-                    if "⚽ Player" in strategy or "⚽ " in strategy and "GOLS FT" in strategy and not strategy.startswith("⚽ +2.5 GOLS FT"):
-                        try:
-                            player_name = strategy.replace("⚽ ", "").replace(
-                                " +2.5 GOLS FT", "").strip().upper()
-                            if player_name == home:
-                                result = 'green' if ft_home >= 3 else 'red'
-                            elif player_name == away:
-                                result = 'green' if ft_away >= 3 else 'red'
-                        except:
-                            pass
-                    else:
-                        result = 'green' if ft_total >= 3 else 'red'
+                    result = 'green' if ft_total >= 3 else 'red'
 
                 elif '+3.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 4 else 'red'
+
                 elif '+4.5 GOLS FT' in strategy:
                     result = 'green' if ft_total >= 5 else 'red'
 
-                elif '+1.5 GOLS FT' in strategy and ("⚽ Player" in strategy or "⚽ " in strategy and not strategy.startswith("⚽ +1.5 GOLS FT")):
-                    try:
-                        player_name = strategy.replace("⚽ ", "").replace(
-                            " +1.5 GOLS FT", "").strip().upper()
-                        if player_name == home:
-                            result = 'green' if ft_home >= 2 else 'red'
-                        elif player_name == away:
-                            result = 'green' if ft_away >= 2 else 'red'
-                    except:
-                        pass
+                if result is None:
+                    print(f"[WARN] check_results: Estratégia não reconhecida: '{strategy}'")
 
                 if result:
                     tip['status'] = result
@@ -2223,12 +2301,12 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (Média de 56% - Ajustado para liberar mais tips)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 60%)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 56:
+                if avg_confidence < 60:
                     print(
                         f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
