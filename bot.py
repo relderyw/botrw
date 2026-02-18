@@ -279,7 +279,19 @@ def fetch_live_matches():
         def parse_live_time(live_time_str):
             """Parseia tempo ao vivo (ex: '1ª parte', '2ª parte')"""
             # Altenar não fornece minuto exato, apenas período
-            # Retornar 0 por enquanto (pode ser melhorado)
+            # Vamos estimar o tempo para permitir que as estratégias triggerem
+            if not live_time_str: return 0, 0
+            
+            lt_upper = live_time_str.upper()
+            if '1ª PARTE' in lt_upper or '1ST HALF' in lt_upper:
+                return 2, 0 # Estima 2 minutos para estratégias de HT
+            elif 'INTERVALO' in lt_upper or 'HALFTIME' in lt_upper:
+                return 4, 0 # Final do HT
+            elif '2ª PARTE' in lt_upper or '2ND HALF' in lt_upper:
+                return 6, 0 # Estima 6 minutos para estratégias de FT
+            elif 'FINAL' in lt_upper:
+                return 8, 0
+                
             return 0, 0
 
         normalized_events = []
@@ -798,8 +810,8 @@ def detect_regime_change(matches):
         ratio = avg_last_3 / avg_previous
 
         # COOLING (jogador esfriou) - BLOQUEIO CRÍTICO
-        # Ajustado para ser mais sensível e detectar cooling com mais facilidade (Pedido do Usuário)
-        if ratio < 0.6 and avg_last_3 < 2.0:
+        # Ajustado para ser menos sensível e permitir mais tips (Conforme pedido do Usuário)
+        if ratio < 0.45 and avg_last_3 < 1.2:
             return {
                 'regime_change': True,
                 'direction': 'COOLING',
@@ -982,7 +994,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
 
     if 60 <= time_seconds <= 180:
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ht']['o05'] >= 85): # Reduzido de 100 para 85
+                l_stats['ht']['o05'] >= 72): # Reduzido de 85 para 72
             if (home_stats['avg_goals_scored_ft'] >= 0.7 and
                 away_stats['avg_goals_scored_ft'] >= 0.7 and
                 avg_btts >= 45 and
@@ -995,7 +1007,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
              print(f"[BLOCK] +0.5 HT: Liga O0.5 ({l_stats['ht']['o05']}%) abaixo de 85%")
 
         if (home_goals == 0 and away_goals == 0 and
-                l_stats['ht']['o15'] >= 75): # Reduzido de 95 para 75
+                l_stats['ht']['o15'] >= 65): # Reduzido de 75 para 65
             if (home_stats['avg_goals_scored_ft'] >= 1.0 and
                 away_stats['avg_goals_scored_ft'] >= 1.0 and
                 avg_btts >= 45 and
@@ -1432,6 +1444,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
 
 def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
     """Formata mensagem da dica"""
+    event_id = event.get('id')
     league = event.get('leagueName', 'Desconhecida')
 
     league_mapping = {
@@ -2210,12 +2223,12 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (Média de 75% - Ajustado para maior cobertura)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 56% - Ajustado para liberar mais tips)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 65:
+                if avg_confidence < 56:
                     print(
                         f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
