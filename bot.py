@@ -161,7 +161,7 @@ def save_state():
             ]
         }
         with open('bot_state.json', 'w') as f:
-            json.dump(state, f)
+            json.dump(state, f, indent=4)
         print("[DEBUG] Estado salvo com sucesso")
     except Exception as e:
         print(f"[ERROR] save_state: {e}")
@@ -1704,8 +1704,7 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
             )
 
             sent_match_ids.add(sent_key)
-            save_state()  # Persistir IDs enviados
-
+            
             sent_tips.append({
                 'event_id': event_id,
                 'strategy': strategy,
@@ -1716,6 +1715,8 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'home_player': event.get('homePlayer'),
                 'away_player': event.get('awayPlayer')
             })
+
+            save_state()  # Persistir IDs e tips enviadas
 
             print(f"[✓] Dica enviada: {event_id} - {strategy}")
             break
@@ -1739,9 +1740,9 @@ async def check_results(bot):
     global last_summary, last_league_summary, last_league_message_id
 
     try:
-        # Buscar 8 páginas para ter ~192 partidas recentes (limit=24 por página)
-        # Esoccer tem alta frequência de jogos, precisamos de mais histórico
         recent = fetch_recent_matches(num_pages=8)
+        
+        print(f"[DEBUG] check_results: Analisando {len(sent_tips)} tips no total. {len([t for t in sent_tips if t['status'] == 'pending'])} pendentes.")
 
         # Agrupar partidas por jogadores, mantendo múltiplas partidas
         finished_matches = defaultdict(list)
@@ -1788,14 +1789,9 @@ async def check_results(bot):
 
                             tip_time = tip['sent_time']
 
-                            # A partida deve ter sido realizada DEPOIS do envio da tip
-                            # Margem: 5 min antes (tolerância) até 15 min depois do envio
-                            # Esoccer: partidas de 6-12min, janela apertada para evitar match errado
-                            time_diff = (match_time_local -
-                                         tip_time).total_seconds()
-
-                            # Partida ocorreu entre 5 min antes e 15 min depois do envio
-                            if -300 <= time_diff <= 900:
+                            # Partida deve ocorrer entre 5 min antes e 25 min depois do envio
+                            # Estendido para 25 min para garantir captura de jogos atrasados na API
+                            if -300 <= time_diff <= 1500:
                                 match = m
                                 print(
                                     f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
@@ -2010,8 +2006,7 @@ async def update_league_stats(bot, recent_matches):
         current_time = time.time()
         time_since_last = current_time - last_league_update_time
         
-        if time_since_last < 1800: # 30 minutos
-            # print(f"[INFO] Resumo das ligas atualizado há pouco tempo ({time_since_last/60:.1f} min). Aguardando próxima janela.")
+        if time_since_last < 600: # 10 minutos
             return
 
         league_stats = stats
@@ -2358,7 +2353,9 @@ async def main_loop(bot):
                 print(
                     f"\n[EVENTO] {event_id}: {home_player} vs {away_player} - {league_name}")
 
-                if event_id in sent_match_ids:
+                # Skip apenas se já processamos todas as possibilidades para este ID
+                # (HT e FT). Se apenas um foi enviado, permitimos re-analisar para o outro.
+                if f"{event_id}_HT" in sent_match_ids and f"{event_id}_FT" in sent_match_ids:
                     continue
 
                 home_data = fetch_player_individual_stats(home_player)
