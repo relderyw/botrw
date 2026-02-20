@@ -1758,7 +1758,7 @@ async def check_results(bot):
         cutoff_date = today - timedelta(days=2)
         sent_tips[:] = [tip for tip in sent_tips if tip['sent_time'].date() >= cutoff_date]
         
-        greens = reds = refunds = 0
+        greens = reds = 0
 
         for tip in sent_tips:
             if tip['sent_time'].date() != today:
@@ -1788,6 +1788,7 @@ async def check_results(bot):
                             match_time_local = match_time.astimezone(MANAUS_TZ)
 
                             tip_time = tip['sent_time']
+                            time_diff = (match_time_local - tip_time).total_seconds()
 
                             # Partida deve ocorrer entre 5 min antes e 25 min depois do envio
                             # Estendido para 25 min para garantir captura de jogos atrasados na API
@@ -1913,8 +1914,6 @@ async def check_results(bot):
                 greens += 1
             if tip['status'] == 'red':
                 reds += 1
-            if tip['status'] == 'refund':
-                refunds += 1
 
         total_resolved = greens + reds
         if total_resolved > 0:
@@ -1923,7 +1922,6 @@ async def check_results(bot):
                 f"\n\n<b>👑 RW TIPS - FIFA 🎮</b>\n\n"
                 f"<b>✅ Green [{greens}]</b>\n"
                 f"<b>❌ Red [{reds}]</b>\n"
-                f"<b>♻️ Push [{refunds}]</b>\n"
                 f"📊 <i>Taxa de acerto: {perc:.1f}%</i>\n\n"
             )
 
