@@ -1781,10 +1781,10 @@ async def check_results(bot):
                             match_time = datetime.fromisoformat(
                                 match_time_str.replace('Z', '+00:00'))
 
-                            # Converter para timezone de Manaus
+                            # Se não tiver timezone explícito, assumir horário local de Manaus
                             if match_time.tzinfo is None:
                                 match_time = match_time.replace(
-                                    tzinfo=timezone.utc)
+                                    tzinfo=MANAUS_TZ)
                             match_time_local = match_time.astimezone(MANAUS_TZ)
 
                             tip_time = tip['sent_time']
