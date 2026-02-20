@@ -1893,7 +1893,17 @@ async def check_results(bot):
                     tip['status'] = result
 
                     emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
-                    new_text = tip['message_text'] + f"\n{emoji}"
+                    base_text = tip['message_text']
+                    header = "━━━━━━━━━━━━━━━━━━━━\n📈 ANÁLISE - ÚLTIMOS 5 JOGOS\n━━━━━━━━━━━━━━━━━━━━"
+                    idx = base_text.find(header)
+                    if idx != -1:
+                        next_sep = base_text.find("━━━━━━━━━━━━━━━━━━━━", idx + len(header))
+                        if next_sep != -1:
+                            base_text = base_text[:idx] + base_text[next_sep:]
+                        else:
+                            base_text = base_text[:idx]
+                    result_block = f"\n\n📊 Resultado: HT {ht_home}-{ht_away} | FT {ft_home}-{ft_away}\n{emoji}"
+                    new_text = base_text + result_block
 
                     try:
                         await bot.edit_message_text(
