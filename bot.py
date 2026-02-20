@@ -1790,9 +1790,7 @@ async def check_results(bot):
                             tip_time = tip['sent_time']
                             time_diff = (match_time_local - tip_time).total_seconds()
 
-                            # Partida deve ocorrer entre 5 min antes e 25 min depois do envio
-                            # Estendido para 25 min para garantir captura de jogos atrasados na API
-                            if -300 <= time_diff <= 1500:
+                            if -1200 <= time_diff <= 2400:
                                 match = m
                                 print(
                                     f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
