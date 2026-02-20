@@ -1803,7 +1803,46 @@ async def check_results(bot):
                 # Se não encontrou pelo horário, logar e continuar
                 if not match:
                     print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}). Total de partidas no histórico para esse par: {len(matches_for_players)}")
-                    continue
+                    
+                    # Fallback: tentar por horário em todo o histórico (caso nomes não coincidam exatamente)
+                    try:
+                        best_candidate = None
+                        best_abs_diff = None
+                        for m in recent:
+                            match_time_str = m.get('data_realizacao', '')
+                            if not match_time_str:
+                                continue
+                            try:
+                                mt = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
+                                if mt.tzinfo is None:
+                                    mt = mt.replace(tzinfo=MANAUS_TZ)
+                                mt_local = mt.astimezone(MANAUS_TZ)
+                                diff = (mt_local - tip['sent_time']).total_seconds()
+                                
+                                # Dentro da janela ampliada
+                                if -1200 <= diff <= 2400:
+                                    # Preferir candidato que tenha pelo menos um jogador igual
+                                    m_home = (m.get('home_player') or '').upper()
+                                    m_away = (m.get('away_player') or '').upper()
+                                    name_match = (home == m_home) or (away == m_away) or (home == m_away) or (away == m_home)
+                                    
+                                    abs_diff = abs(diff)
+                                    # Critério: menor diferença de tempo; desempate favorece name_match
+                                    if best_abs_diff is None or abs_diff < best_abs_diff or (abs_diff == best_abs_diff and name_match):
+                                        best_candidate = m
+                                        best_abs_diff = abs_diff
+                            except:
+                                continue
+                        
+                        if best_candidate:
+                            match = best_candidate
+                            print(f"[DEBUG] Fallback por horário: partida '{best_candidate.get('home_player','?')}' vs '{best_candidate.get('away_player','?')}' selecionada (Δ {best_abs_diff/60:.1f} min)")
+                        else:
+                            # Sem candidato viável
+                            continue
+                    except Exception as e:
+                        print(f"[WARN] Fallback de horário falhou: {e}")
+                        continue
 
                 ht_home = int(match.get('home_score_ht', 0) or 0)
                 ht_away = int(match.get('away_score_ht', 0) or 0)
