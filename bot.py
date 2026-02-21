@@ -1804,44 +1804,43 @@ async def check_results(bot):
                 if not match:
                     print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}). Total de partidas no histórico para esse par: {len(matches_for_players)}")
                     
-                    # Fallback: tentar por horário em todo o histórico (caso nomes não coincidam exatamente)
-                    try:
-                        best_candidate = None
-                        best_abs_diff = None
-                        for m in recent:
-                            match_time_str = m.get('data_realizacao', '')
-                            if not match_time_str:
-                                continue
-                            try:
-                                mt = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
-                                if mt.tzinfo is None:
-                                    mt = mt.replace(tzinfo=MANAUS_TZ)
-                                mt_local = mt.astimezone(MANAUS_TZ)
-                                diff = (mt_local - tip['sent_time']).total_seconds()
-                                
-                                # Dentro da janela ampliada
-                                if -1200 <= diff <= 2400:
-                                    # Preferir candidato que tenha pelo menos um jogador igual
-                                    m_home = (m.get('home_player') or '').upper()
-                                    m_away = (m.get('away_player') or '').upper()
-                                    name_match = (home == m_home) or (away == m_away) or (home == m_away) or (away == m_home)
+                    # Fallback de horário apenas se não houver nenhum jogo com esse par de jogadores no histórico
+                    if not matches_for_players:
+                        try:
+                            best_candidate = None
+                            best_abs_diff = None
+                            for m in recent:
+                                match_time_str = m.get('data_realizacao', '')
+                                if not match_time_str:
+                                    continue
+                                try:
+                                    mt = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
+                                    if mt.tzinfo is None:
+                                        mt = mt.replace(tzinfo=MANAUS_TZ)
+                                    mt_local = mt.astimezone(MANAUS_TZ)
+                                    diff = (mt_local - tip['sent_time']).total_seconds()
                                     
-                                    abs_diff = abs(diff)
-                                    # Critério: menor diferença de tempo; desempate favorece name_match
-                                    if best_abs_diff is None or abs_diff < best_abs_diff or (abs_diff == best_abs_diff and name_match):
-                                        best_candidate = m
-                                        best_abs_diff = abs_diff
-                            except:
+                                    if -1200 <= diff <= 2400:
+                                        m_home = (m.get('home_player') or '').upper()
+                                        m_away = (m.get('away_player') or '').upper()
+                                        name_match = (home == m_home) or (away == m_away) or (home == m_away) or (away == m_home)
+                                        
+                                        abs_diff = abs(diff)
+                                        if best_abs_diff is None or abs_diff < best_abs_diff or (abs_diff == best_abs_diff and name_match):
+                                            best_candidate = m
+                                            best_abs_diff = abs_diff
+                                except:
+                                    continue
+                            
+                            if best_candidate:
+                                match = best_candidate
+                                print(f"[DEBUG] Fallback por horário: partida '{best_candidate.get('home_player','?')}' vs '{best_candidate.get('away_player','?')}' selecionada (Δ {best_abs_diff/60:.1f} min)")
+                            else:
                                 continue
-                        
-                        if best_candidate:
-                            match = best_candidate
-                            print(f"[DEBUG] Fallback por horário: partida '{best_candidate.get('home_player','?')}' vs '{best_candidate.get('away_player','?')}' selecionada (Δ {best_abs_diff/60:.1f} min)")
-                        else:
-                            # Sem candidato viável
+                        except Exception as e:
+                            print(f"[WARN] Fallback de horário falhou: {e}")
                             continue
-                    except Exception as e:
-                        print(f"[WARN] Fallback de horário falhou: {e}")
+                    else:
                         continue
 
                 ht_home = int(match.get('home_score_ht', 0) or 0)
@@ -1933,16 +1932,33 @@ async def check_results(bot):
 
                     emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
                     base_text = tip['message_text']
-                    header = "━━━━━━━━━━━━━━━━━━━━\n📈 ANÁLISE - ÚLTIMOS 5 JOGOS\n━━━━━━━━━━━━━━━━━━━━"
-                    idx = base_text.find(header)
-                    if idx != -1:
-                        next_sep = base_text.find("━━━━━━━━━━━━━━━━━━━━", idx + len(header))
-                        if next_sep != -1:
-                            base_text = base_text[:idx] + base_text[next_sep:]
-                        else:
-                            base_text = base_text[:idx]
-                    result_block = f"\n\n📊 Resultado: HT {ht_home}-{ht_away} | FT {ft_home}-{ft_away}\n{emoji}"
-                    new_text = base_text + result_block
+                    lines = base_text.splitlines()
+                    league_line = ""
+                    strategy_line = ""
+                    players_line = ""
+                    for ln in lines:
+                        s = ln.strip()
+                        if s.startswith("🏆"):
+                            league_line = s
+                        elif s.startswith("💎"):
+                            strategy_line = s
+                        elif s.startswith("🎮"):
+                            players_line = s
+                    if not league_line:
+                        league_line = f"🏆 {match.get('league_name', '')}"
+                    if not strategy_line:
+                        strategy_line = f"💎 {strategy}"
+                    if not players_line:
+                        players_line = f"🎮 {home} vs {away}"
+
+                    new_text = "━━━━━━━━━━━━━━━━━━━━\n"
+                    new_text += "📊 RESULTADO DA OPERAÇÃO\n"
+                    new_text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    new_text += f"{league_line}\n"
+                    new_text += f"{strategy_line}\n"
+                    new_text += f"{players_line}\n\n"
+                    new_text += f"📊 Resultado: HT {ht_home}-{ht_away} | FT {ft_home}-{ft_away}\n\n"
+                    new_text += emoji
 
                     try:
                         await bot.edit_message_text(

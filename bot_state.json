@@ -1,12 +1,12 @@
 {
-    "last_league_message_id": 62726,
+    "last_league_message_id": 62977,
     "league_stats": {
         "VALHALLA CUP": {
             "ht": {
-                "o05": 80,
+                "o05": 100,
                 "o15": 60,
-                "o25": 60,
-                "btts": 60
+                "o25": 20,
+                "btts": 40
             },
             "ft": {
                 "o15": 100,
@@ -17,10 +17,24 @@
         },
         "CLA 10 MIN": {
             "ht": {
-                "o05": 100,
-                "o15": 100,
+                "o05": 80,
+                "o15": 80,
+                "o25": 40,
+                "btts": 60
+            },
+            "ft": {
+                "o15": 80,
                 "o25": 80,
-                "btts": 100
+                "btts": 80
+            },
+            "count": 5
+        },
+        "EAL - LaLiga": {
+            "ht": {
+                "o05": 100,
+                "o15": 80,
+                "o25": 80,
+                "btts": 60
             },
             "ft": {
                 "o15": 100,
@@ -31,10 +45,10 @@
         },
         "VALKYRIE CUP": {
             "ht": {
-                "o05": 100,
-                "o15": 100,
-                "o25": 100,
-                "btts": 60
+                "o05": 80,
+                "o15": 80,
+                "o25": 40,
+                "btts": 40
             },
             "ft": {
                 "o15": 100,
@@ -42,13 +56,27 @@
                 "btts": 100
             },
             "count": 5
+        },
+        "EAL - Liga dos Campe\u00f5es": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "o25": 60,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 80
+            },
+            "count": 5
         }
     },
-    "last_league_update_time": 1771612090.7636008,
+    "last_league_update_time": 1771690820.043287,
     "last_summary": null,
     "sent_match_ids": [
-        "15678302_HT",
         "15669072_HT",
+        "15678302_HT",
         "15644475"
     ],
     "sent_tips": [
