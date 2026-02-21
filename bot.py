@@ -1713,7 +1713,8 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'message_id': message_obj.message_id,
                 'message_text': msg,
                 'home_player': event.get('homePlayer'),
-                'away_player': event.get('awayPlayer')
+                'away_player': event.get('awayPlayer'),
+                'league': event.get('mappedLeague')
             })
 
             save_state()  # Persistir IDs e tips enviadas
@@ -1790,7 +1791,17 @@ async def check_results(bot):
                             tip_time = tip['sent_time']
                             time_diff = (match_time_local - tip_time).total_seconds()
 
-                            if -1200 <= time_diff <= 2400:
+                            # Janela mais rigorosa: -5 min a +20 min (300s a 1200s)
+                            # E-soccer dura de 8 a 12 min, então 20 min é seguro para o fim do jogo.
+                            if -300 <= time_diff <= 1200:
+                                # Adicionado: Verificação de liga para evitar falsos positivos
+                                tip_league = (tip.get('league') or '').upper()
+                                match_league = (m.get('league_name') or '').upper()
+                                
+                                # Se a tip tem liga, ela DEVE bater com a do jogo
+                                if tip_league and tip_league != match_league:
+                                    continue
+
                                 match = m
                                 print(
                                     f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
@@ -1800,48 +1811,10 @@ async def check_results(bot):
                                 f"[WARN] Erro ao parsear data da partida: {e}")
                             continue
 
-                # Se não encontrou pelo horário, logar e continuar
+                # Se não encontrou pelo horário e jogadores, logar e continuar
                 if not match:
-                    print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}). Total de partidas no histórico para esse par: {len(matches_for_players)}")
-                    
-                    # Fallback de horário apenas se não houver nenhum jogo com esse par de jogadores no histórico
-                    if not matches_for_players:
-                        try:
-                            best_candidate = None
-                            best_abs_diff = None
-                            for m in recent:
-                                match_time_str = m.get('data_realizacao', '')
-                                if not match_time_str:
-                                    continue
-                                try:
-                                    mt = datetime.fromisoformat(match_time_str.replace('Z', '+00:00'))
-                                    if mt.tzinfo is None:
-                                        mt = mt.replace(tzinfo=MANAUS_TZ)
-                                    mt_local = mt.astimezone(MANAUS_TZ)
-                                    diff = (mt_local - tip['sent_time']).total_seconds()
-                                    
-                                    if -1200 <= diff <= 2400:
-                                        m_home = (m.get('home_player') or '').upper()
-                                        m_away = (m.get('away_player') or '').upper()
-                                        name_match = (home == m_home) or (away == m_away) or (home == m_away) or (away == m_home)
-                                        
-                                        abs_diff = abs(diff)
-                                        if best_abs_diff is None or abs_diff < best_abs_diff or (abs_diff == best_abs_diff and name_match):
-                                            best_candidate = m
-                                            best_abs_diff = abs_diff
-                                except:
-                                    continue
-                            
-                            if best_candidate:
-                                match = best_candidate
-                                print(f"[DEBUG] Fallback por horário: partida '{best_candidate.get('home_player','?')}' vs '{best_candidate.get('away_player','?')}' selecionada (Δ {best_abs_diff/60:.1f} min)")
-                            else:
-                                continue
-                        except Exception as e:
-                            print(f"[WARN] Fallback de horário falhou: {e}")
-                            continue
-                    else:
-                        continue
+                    print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}).")
+                    continue
 
                 ht_home = int(match.get('home_score_ht', 0) or 0)
                 ht_away = int(match.get('away_score_ht', 0) or 0)
