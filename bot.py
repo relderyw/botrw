@@ -1736,7 +1736,8 @@ async def check_results(bot):
     """Versão ultra segura - evita green prematuro e matching errado"""
     global last_summary, last_league_message_id
     try:
-        recent = fetch_recent_matches(num_pages=8)
+        # 3. Aumentar número de páginas (mudei de 8 para 25 para garantir)
+        recent = fetch_recent_matches(num_pages=25)
         finished_matches = defaultdict(list)
         for match in recent:
             home = match.get('home_player', '').upper().strip()
@@ -1754,9 +1755,14 @@ async def check_results(bot):
                 if tip['status'] == 'red': reds += 1
                 continue
 
-            # DELAY MÍNIMO (evita avaliar cedo)
+            # 2. Diminuir delay para HT em ligas rápidas
             elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
-            min_wait = 240 if tip.get('tip_period') == 'HT' else 480  # 4 min HT / 8 min FT
+            league_upper = tip.get('league', '').upper()
+            if any(l in league_upper for l in ["CLA", "H2H", "BATTLE", "VALKYRIE"]):
+                min_wait = 180 if tip.get('tip_period') == 'HT' else 420  # 3 min HT / 7 min FT
+            else:
+                min_wait = 240 if tip.get('tip_period') == 'HT' else 480
+                
             if elapsed < min_wait:
                 continue
 
@@ -1768,9 +1774,14 @@ async def check_results(bot):
             candidates = finished_matches.get(key, [])
             matched = None
             for m in sorted(candidates, key=lambda x: x.get('data_realizacao',''), reverse=True):
+                # 1. Filtro de liga mais tolerante (resolve CLA, Valkyrie, etc)
                 match_league = m.get('league_name','').upper().strip()
-                if tip_league and tip_league not in match_league and match_league not in tip_league:
-                    continue
+                if tip_league:
+                    tip_key = tip_league.split()[0].upper() # ex: "CLA"
+                    if tip_key not in match_league:
+                        # Log quando descarta por liga
+                        # print(f"[DEBUG LIGA DESCARTADA] tip={tip_league} | match={match_league}")
+                        continue
                 try:
                     dt_str = m.get('data_realizacao','')
                     # BUG FIX: Lidar com datas sem timezone de forma mais inteligente
@@ -1793,8 +1804,15 @@ async def check_results(bot):
                 matched = m
                 break
 
+            # 4. Logs de debug para casagem
             if not matched:
+                if candidates:
+                    print(f"[DEBUG MATCH] {key} - Encontrou {len(candidates)} candidatos, mas fuso/liga não bateram")
+                else:
+                    print(f"[DEBUG MATCH] {key} - ZERO candidatos no histórico recente")
                 continue
+            
+            print(f"[DEBUG MATCH] {key} - CASADO com {matched.get('data_realizacao')} | Liga: {matched.get('league_name')}")
 
             ht_total = int(matched.get('home_score_ht',0)) + int(matched.get('away_score_ht',0))
             ft_total = int(matched.get('home_score_ft',0)) + int(matched.get('away_score_ft',0))
