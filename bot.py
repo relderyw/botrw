@@ -44,6 +44,7 @@ H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{play
 AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
 
 MANAUS_TZ = timezone(timedelta(hours=-4))
+SAO_PAULO_TZ = timezone(timedelta(hours=-3))
 
 # League Name Mappings
 # Live API format → Internal format
@@ -1802,14 +1803,14 @@ async def check_results(bot):
                 try:
                     dt_str = m.get('data_realizacao','')
                     # BUG FIX: Lidar com datas sem timezone de forma mais inteligente
-                    match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
-                    
-                    if match_dt.tzinfo is None:
-                        # Se não tem TZ, assumimos que é o horário local da API (Manaus/UTC-4)
-                        # ou ao menos não fazemos o shift reverso que causa o erro de 4h
-                        match_local = match_dt.replace(tzinfo=MANAUS_TZ)
-                    else:
+                    if 'Z' in dt_str or 'T' in dt_str:
+                        match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
                         match_local = match_dt.astimezone(MANAUS_TZ)
+                    else:
+                        # Se não tem TZ/Z/T, é a Internal API (horário de Brasília/UTC-3)
+                        match_dt = datetime.fromisoformat(dt_str)
+                        # Converte de Brasília para Manaus
+                        match_local = match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
                     
                     diff = (match_local - tip['sent_time']).total_seconds()
                     
