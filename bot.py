@@ -1736,10 +1736,10 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
 
 
 async def check_results(bot):
-    """VERSÃO FINAL - matching ultra tolerante (resolve Valkyrie/CLA)"""
+    """VERSÃO FINAL BLINDADA - só aceita jogo que começou DEPOIS da tip"""
     global last_summary, last_league_message_id
     try:
-        recent = fetch_recent_matches(num_pages=30)   # aumentado para 30 páginas
+        recent = fetch_recent_matches(num_pages=30)
         finished_matches = defaultdict(list)
         for match in recent:
             home = match.get('home_player', '').upper().strip()
@@ -1757,11 +1757,11 @@ async def check_results(bot):
                 if tip['status'] == 'red': reds += 1
                 continue
 
-            # Delay mínimo (mais curto para Valkyrie/CLA)
+            # Delay mínimo ajustado
             elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
             league_upper = tip.get('league', '').upper()
             if any(x in league_upper for x in ["VALKYRIE", "CLA", "H2H", "BATTLE"]):
-                min_wait = 150 if tip.get('tip_period') == 'HT' else 400   # 2.5 min HT
+                min_wait = 150 if tip.get('tip_period') == 'HT' else 400
             else:
                 min_wait = 240 if tip.get('tip_period') == 'HT' else 480
 
@@ -1776,7 +1776,6 @@ async def check_results(bot):
             candidates = finished_matches.get(key, [])
             matched = None
 
-            # Ordena por menor diferença de tempo (o mais importante!)
             def get_time_delta(x):
                 try:
                     dt_str = x.get('data_realizacao', '')
@@ -1790,13 +1789,30 @@ async def check_results(bot):
                 except:
                     return float('inf')
 
+            # Ordena por menor diferença de tempo
             for m in sorted(candidates, key=get_time_delta):
-                # 1. Liga tolerante
                 match_league = m.get('league_name', '').upper().strip()
+
+                # 1. Liga tolerante
                 if tip_league and tip_league.split()[0] not in match_league:
                     continue
 
-                # 2. Times - VERIFICAÇÃO ULTRA TOLERANTE (o que você pediu)
+                # 2. TEMPO CRÍTICO: só aceita jogo que começou DEPOIS da tip (ou no máximo 2 min antes)
+                try:
+                    dt_str = m.get('data_realizacao', '')
+                    if 'Z' in dt_str or 'T' in dt_str:
+                        match_dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+                    else:
+                        match_dt = datetime.fromisoformat(dt_str)
+                    match_local = match_dt.astimezone(MANAUS_TZ) if match_dt.tzinfo else match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
+
+                    if match_local < tip['sent_time'] - timedelta(minutes=2):
+                        print(f"[DEBUG ANTERIOR] Ignorado jogo antigo: {match_local}")
+                        continue
+                except:
+                    continue
+
+                # 3. Times ultra tolerante
                 tip_home = tip.get('homeTeamName', '').lower()
                 tip_away = tip.get('awayTeamName', '').lower()
                 match_home = (m.get('home_team') or m.get('homeTeamName') or '').lower()
@@ -1809,11 +1825,10 @@ async def check_results(bot):
                 if tip_away and match_away:
                     if not (tip_away in match_away or match_away in tip_away or tip_away.split()[0] in match_away):
                         team_ok = False
-
-                if not team_ok and get_time_delta(m) > 900:  # se diferença > 15 min, exige time
+                if not team_ok:
                     continue
 
-                # 3. Placar inicial deve ser possível
+                # 4. Placar inicial compatível
                 sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
                 final_h = int(m.get('home_score_ft', 0))
                 final_a = int(m.get('away_score_ft', 0))
@@ -1821,14 +1836,14 @@ async def check_results(bot):
                     continue
 
                 matched = m
-                print(f"[MATCH OK] {key} | delta={get_time_delta(m)/60:.1f}min | times={match_home} vs {match_away}")
+                print(f"[MATCH OK] {key} | delta={get_time_delta(m)/60:.1f}min | times OK")
                 break
 
             if not matched:
-                print(f"[NO MATCH] {key} - {len(candidates)} candidatos, nenhum passou nos filtros")
+                print(f"[NO MATCH] {key} - nenhum candidato válido")
                 continue
 
-            # === AVALIAÇÃO DO RESULTADO ===
+            # Avaliação do resultado
             ht_total = int(matched.get('home_score_ht',0)) + int(matched.get('away_score_ht',0))
             ft_total = int(matched.get('home_score_ft',0)) + int(matched.get('away_score_ft',0))
             strategy = tip['strategy']
