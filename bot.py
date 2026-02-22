@@ -291,38 +291,33 @@ def fetch_live_matches():
         print(f"[DEBUG] {len(football_events)} eventos de futebol após filtro")
 
         def parse_live_time(live_time_str, start_date_str=None):
-            """
-            Calcula o minuto real da partida usando startDate.
-            Fallback: estimativa por período (liveTime).
-            """
-            now_utc = datetime.now(timezone.utc)
-
-            # --- Método principal: calcular pelo startDate ---
+            """Versão robusta - prioriza liveTime da Altenar"""
+            if live_time_str:
+                # Tenta extrair "02:45" se existir no texto
+                m = re.search(r'(\d{1,2}):(\d{2})', live_time_str)
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+                
+                lt = live_time_str.upper()
+                if any(x in lt for x in ['1ª PARTE', '1ST HALF', '1°', 'PRIMEIRO TEMPO']):
+                    return 2, 30
+                if any(x in lt for x in ['INTERVALO', 'HALFTIME', 'MEIO TEMPO']):
+                    return 4, 0
+                if any(x in lt for x in ['2ª PARTE', '2ND HALF', '2°', 'SEGUNDO TEMPO']):
+                    return 7, 0
+                if any(x in lt for x in ['FINAL', 'ENDED', 'FIM', 'TERMINADO']):
+                    return 9, 0
+            
+            # Só usa startDate se liveTime estiver vazio
             if start_date_str:
                 try:
                     start_dt = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
-                    elapsed_seconds = (now_utc - start_dt).total_seconds()
-                    # Partida ainda não começou
-                    if elapsed_seconds < 0:
+                    elapsed = (datetime.now(timezone.utc) - start_dt).total_seconds()
+                    if elapsed < 0:
                         return 0, 0
-                    elapsed_min = int(elapsed_seconds // 60)
-                    elapsed_sec = int(elapsed_seconds % 60)
-                    return elapsed_min, elapsed_sec
-                except Exception as e:
-                    print(f"[WARN] parse_live_time: erro ao calcular por startDate: {e}")
-
-            # --- Fallback: estimativa por período ---
-            if not live_time_str:
-                return 0, 0
-            lt_upper = live_time_str.upper()
-            if '1ª PARTE' in lt_upper or '1ST HALF' in lt_upper:
-                return 2, 0
-            elif 'INTERVALO' in lt_upper or 'HALFTIME' in lt_upper:
-                return 4, 0
-            elif '2ª PARTE' in lt_upper or '2ND HALF' in lt_upper:
-                return 6, 0
-            elif 'FINAL' in lt_upper:
-                return 8, 0
+                    return int(elapsed // 60), int(elapsed % 60)
+                except:
+                    pass
             return 0, 0
 
         normalized_events = []
@@ -452,7 +447,9 @@ def fetch_live_matches():
                         'home': score[0] if len(score) > 0 else 0,
                         'away': score[1] if len(score) > 1 else 0
                     },
-                    'scoreboard': f"{score[0] if len(score) > 0 else 0}-{score[1] if len(score) > 1 else 0}"
+                    'scoreboard': f"{score[0] if len(score) > 0 else 0}-{score[1] if len(score) > 1 else 0}",
+                    'liveTimeRaw': live_time,      # NOVO
+                    'startDateRaw': start_date,    # NOVO
                 }
 
                 normalized_events.append(normalized_event)
@@ -1677,20 +1674,15 @@ def get_trend_emoji(perc, inverse=False):
 
 
 async def send_tip(bot, event, strategy, home_stats, away_stats):
-    """Envia uma dica para o Telegram"""
+    """Envia dica com metadados extras para evitar falsos greens"""
     event_id = event.get('id')
-
-    # Detectar o período (HT ou FT) da estratégia
-    period = 'FT'
-    if 'HT' in strategy.upper():
-        period = 'HT'
-    
-    # Criar chave única para id_tempo (ex: 12345_HT)
-    # Isso permite enviar uma tip HT e depois outra FT para o mesmo jogo
+    period = 'HT' if 'HT' in strategy.upper() else 'FT'
     sent_key = f"{event_id}_{period}"
-
     if sent_key in sent_match_ids:
         return
+
+    timer = event.get('timer', {})
+    sent_minute = timer.get('minute', 0)
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -1702,7 +1694,6 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 parse_mode="HTML",
                 disable_web_page_preview=True
             )
-
             sent_match_ids.add(sent_key)
             
             sent_tips.append({
@@ -1714,22 +1705,20 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'message_text': msg,
                 'home_player': event.get('homePlayer'),
                 'away_player': event.get('awayPlayer'),
-                'league': event.get('mappedLeague')
+                'league': event.get('mappedLeague'),
+                'tip_period': period,
+                'sent_minute': sent_minute,
+                'liveTimeRaw': event.get('liveTimeRaw', ''),
+                'startDateRaw': event.get('startDateRaw', ''),
+                'sent_scoreboard': event.get('scoreboard', '0-0')
             })
-
-            save_state()  # Persistir IDs e tips enviadas
-
-            print(f"[✓] Dica enviada: {event_id} - {strategy}")
+            save_state()
+            print(f"[✓] Dica enviada: {event_id} - {strategy} ({period}) @ {sent_minute} min")
             break
-
         except Exception as e:
-            print(
-                f"[ERROR] send_tip (tentativa {attempt + 1}/{max_retries}): {e}")
+            print(f"[ERROR] send_tip tentativa {attempt+1}: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2)
-            else:
-                print(
-                    f"[ERROR] Falha ao enviar dica após {max_retries} tentativas")
 
 # =============================================================================
 # VERIFICAÇÃO DE RESULTADOS
@@ -1737,239 +1726,101 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
 
 
 async def check_results(bot):
-    """Verifica resultados das tips e atualiza mensagens"""
-    global last_summary, last_league_summary, last_league_message_id
-
+    """Versão ultra segura - evita green prematuro e matching errado"""
+    global last_summary, last_league_message_id
     try:
         recent = fetch_recent_matches(num_pages=8)
-        
-        print(f"[DEBUG] check_results: Analisando {len(sent_tips)} tips no total. {len([t for t in sent_tips if t['status'] == 'pending'])} pendentes.")
-
-        # Agrupar partidas por jogadores, mantendo múltiplas partidas
         finished_matches = defaultdict(list)
         for match in recent:
-            home = match.get('home_player', '').upper()
-            away = match.get('away_player', '').upper()
+            home = match.get('home_player', '').upper().strip()
+            away = match.get('away_player', '').upper().strip()
             key = f"{home}_{away}"
             finished_matches[key].append(match)
 
         today = datetime.now(MANAUS_TZ).date()
-        
-        # Limpar tips muito antigas (mais de 2 dias) para não crescer infinitamente
-        cutoff_date = today - timedelta(days=2)
-        sent_tips[:] = [tip for tip in sent_tips if tip['sent_time'].date() >= cutoff_date]
-        
-        greens = reds = 0
+        sent_tips[:] = [t for t in sent_tips if t['sent_time'].date() >= today - timedelta(days=2)]
 
+        greens = reds = 0
         for tip in sent_tips:
-            if tip['sent_time'].date() != today:
+            if tip['status'] != 'pending':
+                if tip['status'] == 'green': greens += 1
+                if tip['status'] == 'red': reds += 1
                 continue
 
-            if tip['status'] == 'pending':
-                home = (tip.get('home_player') or '').upper()
-                away = (tip.get('away_player') or '').upper()
-                key = f"{home}_{away}"
+            # DELAY MÍNIMO (evita avaliar cedo)
+            elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
+            min_wait = 240 if tip.get('tip_period') == 'HT' else 480  # 4 min HT / 8 min FT
+            if elapsed < min_wait:
+                continue
 
-                # Buscar a partida correta baseada no horário
-                matches_for_players = finished_matches.get(key, [])
-                match = None
+            home = tip.get('home_player', '').upper().strip()
+            away = tip.get('away_player', '').upper().strip()
+            key = f"{home}_{away}"
+            tip_league = tip.get('league', '').upper().strip()
 
-                for m in matches_for_players:
-                    match_time_str = m.get('data_realizacao', '')
-                    if match_time_str:
-                        try:
-                            # Parse da data da partida
-                            match_time = datetime.fromisoformat(
-                                match_time_str.replace('Z', '+00:00'))
-
-                            # Se não tiver timezone explícito, assumir horário local de Manaus
-                            if match_time.tzinfo is None:
-                                match_time = match_time.replace(
-                                    tzinfo=MANAUS_TZ)
-                            match_time_local = match_time.astimezone(MANAUS_TZ)
-
-                            tip_time = tip['sent_time']
-                            time_diff = (match_time_local - tip_time).total_seconds()
-
-                            # Janela mais rigorosa: -5 min a +20 min (300s a 1200s)
-                            # E-soccer dura de 8 a 12 min, então 20 min é seguro para o fim do jogo.
-                            if -300 <= time_diff <= 1200:
-                                # Adicionado: Verificação de liga para evitar falsos positivos
-                                tip_league = (tip.get('league') or '').upper()
-                                match_league = (m.get('league_name') or '').upper()
-                                
-                                # Se a tip tem liga, ela DEVE bater com a do jogo
-                                if tip_league and tip_league != match_league:
-                                    continue
-
-                                match = m
-                                print(
-                                    f"[DEBUG] Partida encontrada para {key}: {match_time_str} (diff: {time_diff/60:.1f} min)")
-                                break
-                        except Exception as e:
-                            print(
-                                f"[WARN] Erro ao parsear data da partida: {e}")
-                            continue
-
-                # Se não encontrou pelo horário e jogadores, logar e continuar
-                if not match:
-                    print(f"[DEBUG] check_results: Nenhuma partida encontrada para {key} (tip enviada às {tip['sent_time'].strftime('%H:%M')}).")
+            candidates = finished_matches.get(key, [])
+            matched = None
+            for m in sorted(candidates, key=lambda x: x.get('data_realizacao',''), reverse=True):
+                match_league = m.get('league_name','').upper().strip()
+                if tip_league and tip_league not in match_league and match_league not in tip_league:
                     continue
+                try:
+                    dt_str = m.get('data_realizacao','')
+                    match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
+                    if match_dt.tzinfo is None:
+                        match_dt = match_dt.replace(tzinfo=timezone.utc)
+                    match_local = match_dt.astimezone(MANAUS_TZ)
+                    diff = (match_local - tip['sent_time']).total_seconds()
+                    if not (-180 <= diff <= 600):   # -3 a +10 minutos
+                        continue
+                except:
+                    continue
+                matched = m
+                break
 
-                ht_home = int(match.get('home_score_ht', 0) or 0)
-                ht_away = int(match.get('away_score_ht', 0) or 0)
-                ht_total = ht_home + ht_away
+            if not matched:
+                continue
 
-                ft_home = int(match.get('home_score_ft', 0) or 0)
-                ft_away = int(match.get('away_score_ft', 0) or 0)
-                ft_total = ft_home + ft_away
+            ht_total = int(matched.get('home_score_ht',0)) + int(matched.get('away_score_ht',0))
+            ft_total = int(matched.get('home_score_ft',0)) + int(matched.get('away_score_ft',0))
+            strategy = tip['strategy']
+            result = None
 
-                strategy = tip['strategy']
-                
-                print(f"[DEBUG] check_results: {key} | HT {ht_home}-{ht_away} ({ht_total} gols) | FT {ft_home}-{ft_away} ({ft_total} gols) | Estratégia: {strategy}")
+            if '+0.5 GOL HT' in strategy: result = 'green' if ht_total >= 1 else 'red'
+            elif '+1.5 GOLS HT' in strategy: result = 'green' if ht_total >= 2 else 'red'
+            elif 'BTTS HT' in strategy: result = 'green' if (matched.get('home_score_ht',0)>0 and matched.get('away_score_ht',0)>0) else 'red'
+            elif '+1.5 GOLS FT' in strategy: result = 'green' if ft_total >= 2 else 'red'
+            elif '+2.5 GOLS FT' in strategy: result = 'green' if ft_total >= 3 else 'red'
+            elif '+3.5 GOLS FT' in strategy: result = 'green' if ft_total >= 4 else 'red'
 
-                # -------------------------------------------------------
-                # LÓGICA DE AVALIAÇÃO DE RESULTADO
-                # Ordem de prioridade: estratégias individuais ANTES das genéricas
-                # para evitar conflito de elif com '+1.5 GOLS FT' etc.
-                # -------------------------------------------------------
-                result = None
+            if result:
+                tip['status'] = result
+                emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
+                new_text = "━━━━━━━━━━━━━━━━━━━━\n📊 RESULTADO DA OPERAÇÃO\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                new_text += f"🏆 {tip.get('league','')}\n"
+                new_text += f"💎 {strategy}\n"
+                new_text += f"🎮 {home} vs {away}\n\n"
+                new_text += f"📊 Resultado: HT {matched.get('home_score_ht',0)}-{matched.get('away_score_ht',0)} | FT {matched.get('home_score_ft',0)}-{matched.get('away_score_ft',0)}\n\n"
+                new_text += emoji
+                await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
+                print(f"[✓] {result.upper()} aplicado com segurança")
 
-                # --- HT ---
-                if '+0.5 GOL HT' in strategy:
-                    result = 'green' if ht_total >= 1 else 'red'
+            if tip['status'] == 'green': greens += 1
+            if tip['status'] == 'red': reds += 1
 
-                elif '+1.5 GOLS HT' in strategy:
-                    result = 'green' if ht_total >= 2 else 'red'
-
-                elif '+2.5 GOLS HT' in strategy:
-                    result = 'green' if ht_total >= 3 else 'red'
-
-                elif 'BTTS HT' in strategy:
-                    result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
-
-                # --- FT Individual (deve vir ANTES das genéricas) ---
-                elif '+1.5 GOLS FT' in strategy and not strategy.startswith('⚽ +1.5 GOLS FT'):
-                    # Estratégia individual: "⚽ JOGADOR +1.5 GOLS FT"
-                    try:
-                        player_name = strategy.replace('⚽ ', '').replace(' +1.5 GOLS FT', '').strip().upper()
-                        if player_name == home:
-                            result = 'green' if ft_home >= 2 else 'red'
-                            print(f"[DEBUG] Individual +1.5 FT: {player_name} (home) marcou {ft_home} gols → {result}")
-                        elif player_name == away:
-                            result = 'green' if ft_away >= 2 else 'red'
-                            print(f"[DEBUG] Individual +1.5 FT: {player_name} (away) marcou {ft_away} gols → {result}")
-                        else:
-                            # Nome não bateu, fallback para total
-                            print(f"[WARN] Individual +1.5 FT: jogador '{player_name}' não encontrado (home='{home}', away='{away}'). Usando total.")
-                            result = 'green' if ft_total >= 2 else 'red'
-                    except Exception as e:
-                        print(f"[WARN] Erro ao avaliar individual +1.5 FT: {e}")
-                        result = 'green' if ft_total >= 2 else 'red'
-
-                elif '+2.5 GOLS FT' in strategy and not strategy.startswith('⚽ +2.5 GOLS FT'):
-                    # Estratégia individual: "⚽ JOGADOR +2.5 GOLS FT"
-                    try:
-                        player_name = strategy.replace('⚽ ', '').replace(' +2.5 GOLS FT', '').strip().upper()
-                        if player_name == home:
-                            result = 'green' if ft_home >= 3 else 'red'
-                            print(f"[DEBUG] Individual +2.5 FT: {player_name} (home) marcou {ft_home} gols → {result}")
-                        elif player_name == away:
-                            result = 'green' if ft_away >= 3 else 'red'
-                            print(f"[DEBUG] Individual +2.5 FT: {player_name} (away) marcou {ft_away} gols → {result}")
-                        else:
-                            print(f"[WARN] Individual +2.5 FT: jogador '{player_name}' não encontrado (home='{home}', away='{away}'). Usando total.")
-                            result = 'green' if ft_total >= 3 else 'red'
-                    except Exception as e:
-                        print(f"[WARN] Erro ao avaliar individual +2.5 FT: {e}")
-                        result = 'green' if ft_total >= 3 else 'red'
-
-                # --- FT Genérico ---
-                elif '+1.5 GOLS FT' in strategy:
-                    result = 'green' if ft_total >= 2 else 'red'
-
-                elif '+2.5 GOLS FT' in strategy:
-                    result = 'green' if ft_total >= 3 else 'red'
-
-                elif '+3.5 GOLS FT' in strategy:
-                    result = 'green' if ft_total >= 4 else 'red'
-
-                elif '+4.5 GOLS FT' in strategy:
-                    result = 'green' if ft_total >= 5 else 'red'
-
-                if result is None:
-                    print(f"[WARN] check_results: Estratégia não reconhecida: '{strategy}'")
-
-                if result:
-                    tip['status'] = result
-
-                    emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
-                    base_text = tip['message_text']
-                    lines = base_text.splitlines()
-                    league_line = ""
-                    strategy_line = ""
-                    players_line = ""
-                    for ln in lines:
-                        s = ln.strip()
-                        if s.startswith("🏆"):
-                            league_line = s
-                        elif s.startswith("💎"):
-                            strategy_line = s
-                        elif s.startswith("🎮"):
-                            players_line = s
-                    if not league_line:
-                        league_line = f"🏆 {match.get('league_name', '')}"
-                    if not strategy_line:
-                        strategy_line = f"💎 {strategy}"
-                    if not players_line:
-                        players_line = f"🎮 {home} vs {away}"
-
-                    new_text = "━━━━━━━━━━━━━━━━━━━━\n"
-                    new_text += "📊 RESULTADO DA OPERAÇÃO\n"
-                    new_text += "━━━━━━━━━━━━━━━━━━━━\n\n"
-                    new_text += f"{league_line}\n"
-                    new_text += f"{strategy_line}\n"
-                    new_text += f"{players_line}\n\n"
-                    new_text += f"📊 Resultado: HT {ht_home}-{ht_away} | FT {ft_home}-{ft_away}\n\n"
-                    new_text += emoji
-
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=CHAT_ID,
-                            message_id=tip['message_id'],
-                            text=new_text,
-                            parse_mode="HTML",
-                            disable_web_page_preview=True
-                        )
-                        print(
-                            f"[✓] Resultado atualizado: {tip['event_id']} - {result}")
-                    except Exception as e:
-                        print(f"[ERROR] edit_message: {e}")
-
-            if tip['status'] == 'green':
-                greens += 1
-            if tip['status'] == 'red':
-                reds += 1
-
+        # Resumo diário
         total_resolved = greens + reds
         if total_resolved > 0:
-            perc = (greens / total_resolved * 100.0)
-            summary = (
-                f"\n\n<b>👑 RW TIPS - FIFA 🎮</b>\n\n"
-                f"<b>✅ Green [{greens}]</b>\n"
-                f"<b>❌ Red [{reds}]</b>\n"
-                f"📊 <i>Taxa de acerto: {perc:.1f}%</i>\n\n"
-            )
-
+            perc = (greens / total_resolved) * 100
+            summary = f"<b>👑 RW TIPS - FIFA 🎮</b>\n✅ Green [{greens}]\n❌ Red [{reds}]\n📊 {perc:.1f}%"
             if summary != last_summary:
                 await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
                 last_summary = summary
-                print("[✓] Resumo do dia enviado")
 
         await update_league_stats(bot, recent)
 
     except Exception as e:
-        print(f"[ERROR] check_results: {e}")
+        print(f"[ERROR check_results] {e}")
 
 
 async def update_league_stats(bot, recent_matches):
