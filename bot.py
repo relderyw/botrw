@@ -1715,6 +1715,8 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
                 'league': event.get('mappedLeague'),
                 'tip_period': period,
                 'sent_minute': sent_minute,
+                'homeTeamName': event.get('homeTeamName', ''),
+                'awayTeamName': event.get('awayTeamName', ''),
                 'liveTimeRaw': event.get('liveTimeRaw', ''),
                 'startDateRaw': event.get('startDateRaw', ''),
                 'sent_scoreboard': event.get('scoreboard', '0-0')
@@ -1782,6 +1784,21 @@ async def check_results(bot):
                         # Log quando descarta por liga
                         # print(f"[DEBUG LIGA DESCARTADA] tip={tip_league} | match={match_league}")
                         continue
+
+                # FIX: Verificar também os TIMES (equipes) para evitar casar com partida anterior dos mesmos players
+                tip_home_team = tip.get('homeTeamName', '').strip().lower()
+                tip_away_team = tip.get('awayTeamName', '').strip().lower()
+                match_home_team = m.get('homeTeamName', '').strip().lower()
+                match_away_team = m.get('awayTeamName', '').strip().lower()
+
+                if tip_home_team and match_home_team and tip_home_team not in match_home_team and match_home_team not in tip_home_team:
+                    print(f"[DEBUG TIME DESCARTADO] tip home={tip_home_team} vs match home={match_home_team}")
+                    continue
+
+                if tip_away_team and match_away_team and tip_away_team not in match_away_team and match_away_team not in tip_away_team:
+                    print(f"[DEBUG TIME DESCARTADO] tip away={tip_away_team} vs match away={match_away_team}")
+                    continue
+
                 try:
                     dt_str = m.get('data_realizacao','')
                     # BUG FIX: Lidar com datas sem timezone de forma mais inteligente
