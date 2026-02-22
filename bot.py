@@ -1736,11 +1736,10 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
 
 
 async def check_results(bot):
-    """Versão ultra segura - evita green prematuro e matching errado"""
+    """VERSÃO FINAL - matching ultra tolerante (resolve Valkyrie/CLA)"""
     global last_summary, last_league_message_id
     try:
-        # 3. Aumentar número de páginas (mudei de 8 para 25 para garantir)
-        recent = fetch_recent_matches(num_pages=25)
+        recent = fetch_recent_matches(num_pages=30)   # aumentado para 30 páginas
         finished_matches = defaultdict(list)
         for match in recent:
             home = match.get('home_player', '').upper().strip()
@@ -1758,14 +1757,14 @@ async def check_results(bot):
                 if tip['status'] == 'red': reds += 1
                 continue
 
-            # 2. Diminuir delay para HT em ligas rápidas
+            # Delay mínimo (mais curto para Valkyrie/CLA)
             elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
             league_upper = tip.get('league', '').upper()
-            if any(l in league_upper for l in ["CLA", "H2H", "BATTLE", "VALKYRIE"]):
-                min_wait = 180 if tip.get('tip_period') == 'HT' else 420  # 3 min HT / 7 min FT
+            if any(x in league_upper for x in ["VALKYRIE", "CLA", "H2H", "BATTLE"]):
+                min_wait = 150 if tip.get('tip_period') == 'HT' else 400   # 2.5 min HT
             else:
                 min_wait = 240 if tip.get('tip_period') == 'HT' else 480
-                
+
             if elapsed < min_wait:
                 continue
 
@@ -1776,96 +1775,60 @@ async def check_results(bot):
 
             candidates = finished_matches.get(key, [])
             matched = None
-            
-            # Helper para sort por delta de tempo
+
+            # Ordena por menor diferença de tempo (o mais importante!)
             def get_time_delta(x):
                 try:
-                    dt_str = x.get('data_realizacao','')
+                    dt_str = x.get('data_realizacao', '')
+                    if not dt_str: return float('inf')
                     if 'Z' in dt_str or 'T' in dt_str:
-                        match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
-                        match_local = match_dt.astimezone(MANAUS_TZ)
+                        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
                     else:
-                        match_dt = datetime.fromisoformat(dt_str)
-                        match_local = match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
-                    return abs((match_local - tip['sent_time']).total_seconds())
+                        dt = datetime.fromisoformat(dt_str)
+                    local = dt.astimezone(MANAUS_TZ) if dt.tzinfo else dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
+                    return abs((local - tip['sent_time']).total_seconds())
                 except:
                     return float('inf')
 
             for m in sorted(candidates, key=get_time_delta):
-                # 1. Filtro de liga mais tolerante (resolve CLA, Valkyrie, etc)
-                match_league = m.get('league_name','').upper().strip()
-                if tip_league:
-                    tip_key = tip_league.split()[0].upper() # ex: "CLA"
-                    if tip_key not in match_league:
-                        # Log quando descarta por liga
-                        # print(f"[DEBUG LIGA DESCARTADA] tip={tip_league} | match={match_league}")
-                        continue
-
-                # FIX MELHORADO: Verificação de times com fuzzy (contém parte do nome)
-                tip_home_team = tip.get('homeTeamName', '').strip().lower()
-                tip_away_team = tip.get('awayTeamName', '').strip().lower()
-
-                match_home = (m.get('home_team') or m.get('homeTeamName') or m.get('home_player') or '').strip().lower()
-                match_away = (m.get('away_team') or m.get('awayTeamName') or m.get('away_player') or '').strip().lower()
-
-                # Se tip tem time, match deve conter pelo menos parte dele (ex: "arsenal" em "arsenal (alicia)")
-                team_match_ok = True
-                if tip_home_team:
-                    if not (tip_home_team in match_home or match_home in tip_home_team):
-                        team_match_ok = False
-                        print(f"[DEBUG TIME HOME FALHOU] tip={tip_home_team} | match={match_home}")
-                if tip_away_team:
-                    if not (tip_away_team in match_away or match_away in tip_away_team):
-                        team_match_ok = False
-                        print(f"[DEBUG TIME AWAY FALHOU] tip={tip_away_team} | match={match_away}")
-
-                if not team_match_ok:
+                # 1. Liga tolerante
+                match_league = m.get('league_name', '').upper().strip()
+                if tip_league and tip_league.split()[0] not in match_league:
                     continue
 
-                try:
-                    dt_str = m.get('data_realizacao','')
-                    # BUG FIX: Lidar com datas sem timezone de forma mais inteligente
-                    if 'Z' in dt_str or 'T' in dt_str:
-                        match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
-                        match_local = match_dt.astimezone(MANAUS_TZ)
-                    else:
-                        # Se não tem TZ/Z/T, é a Internal API (horário de Brasília/UTC-3)
-                        match_dt = datetime.fromisoformat(dt_str)
-                        # Converte de Brasília para Manaus
-                        match_local = match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
-                    
-                    diff = (match_local - tip['sent_time']).total_seconds()
-                    
-                    # Janela mais generosa: -5 min (atraso api) a +45 min (fim do jogo + delay)
-                    if not (-300 <= diff <= 2700): 
-                        continue
-                except:
-                    continue
-                
-                # FIX PREMATURO: placar da tip deve ser "prefixo" do placar final
-                sent_score = tip.get('sent_scoreboard', '0-0')
-                sent_home, sent_away = map(int, sent_score.split('-')) if '-' in sent_score else (0, 0)
+                # 2. Times - VERIFICAÇÃO ULTRA TOLERANTE (o que você pediu)
+                tip_home = tip.get('homeTeamName', '').lower()
+                tip_away = tip.get('awayTeamName', '').lower()
+                match_home = (m.get('home_team') or m.get('homeTeamName') or '').lower()
+                match_away = (m.get('away_team') or m.get('awayTeamName') or '').lower()
 
-                final_home = int(m.get('home_score_ft', 0))
-                final_away = int(m.get('away_score_ft', 0))
+                team_ok = True
+                if tip_home and match_home:
+                    if not (tip_home in match_home or match_home in tip_home or tip_home.split()[0] in match_home):
+                        team_ok = False
+                if tip_away and match_away:
+                    if not (tip_away in match_away or match_away in tip_away or tip_away.split()[0] in match_away):
+                        team_ok = False
 
-                if sent_home > final_home or sent_away > final_away:
-                    print(f"[DEBUG PLACAR IMPOSSÍVEL] tip {sent_score} > final {final_home}-{final_away}")
+                if not team_ok and get_time_delta(m) > 900:  # se diferença > 15 min, exige time
                     continue
-                
+
+                # 3. Placar inicial deve ser possível
+                sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
+                final_h = int(m.get('home_score_ft', 0))
+                final_a = int(m.get('away_score_ft', 0))
+                if sent_h > final_h or sent_a > final_a:
+                    continue
+
                 matched = m
+                print(f"[MATCH OK] {key} | delta={get_time_delta(m)/60:.1f}min | times={match_home} vs {match_away}")
                 break
 
-            # 4. Logs de debug para casagem
             if not matched:
-                if candidates:
-                    print(f"[DEBUG MATCH] {key} - Encontrou {len(candidates)} candidatos, mas fuso/liga não bateram")
-                else:
-                    print(f"[DEBUG MATCH] {key} - ZERO candidatos no histórico recente")
+                print(f"[NO MATCH] {key} - {len(candidates)} candidatos, nenhum passou nos filtros")
                 continue
-            
-            print(f"[DEBUG MATCH] {key} - CASADO com {matched.get('data_realizacao')} | Liga: {matched.get('league_name')}")
 
+            # === AVALIAÇÃO DO RESULTADO ===
             ht_total = int(matched.get('home_score_ht',0)) + int(matched.get('away_score_ht',0))
             ft_total = int(matched.get('home_score_ft',0)) + int(matched.get('away_score_ft',0))
             strategy = tip['strategy']
@@ -1888,7 +1851,7 @@ async def check_results(bot):
                 new_text += f"📊 Resultado: HT {matched.get('home_score_ht',0)}-{matched.get('away_score_ht',0)} | FT {matched.get('home_score_ft',0)}-{matched.get('away_score_ft',0)}\n\n"
                 new_text += emoji
                 await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
-                print(f"[✓] {result.upper()} aplicado com segurança")
+                print(f"[✓] {result.upper()} APLICADO COM SUCESSO")
 
             if tip['status'] == 'green': greens += 1
             if tip['status'] == 'red': reds += 1
