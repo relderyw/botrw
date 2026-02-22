@@ -52,6 +52,8 @@ LIVE_LEAGUE_MAPPING = {
     "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
     "E-Soccer - H2H GG League - 8 minutos de jogo": "H2H 8 MIN",
     "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
+    "H2H GG LEAGUE - E-FOOTBALL": "H2H 8 MIN",  # NOVO
+    "H2H GG LEAGUE": "H2H 8 MIN",  # NOVO
     "E-Soccer - GT Leagues - 12 minutos de jogo": "GT LEAGUE 12 MIN",
     "Esoccer GT Leagues - 12 mins play": "GT LEAGUE 12 MIN",
     "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
@@ -614,6 +616,9 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     for m in green_matches:
         league = m['league_name']
         m['league_name'] = map_league_name(league)
+        # Log para depuração de liga H2H GG
+        if "H2H" in m['league_name']:
+            print(f"[DEBUG G365] Partida unificada: {m['home_player']} vs {m['away_player']} - Liga: {m['league_name']}")
         all_combined.append(m)
 
     # 4. Remover duplicatas por jogadores + score + data_truncada (se necessário)
