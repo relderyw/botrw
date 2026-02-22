@@ -1789,8 +1789,10 @@ async def check_results(bot):
                 # FIX: Verificar também os TIMES (equipes) para evitar casar com partida anterior dos mesmos players
                 tip_home_team = tip.get('homeTeamName', '').strip().lower()
                 tip_away_team = tip.get('awayTeamName', '').strip().lower()
-                match_home_team = m.get('homeTeamName', '').strip().lower()
-                match_away_team = m.get('awayTeamName', '').strip().lower()
+                
+                # A API de histórico interno retorna 'home_team', o Live retorna 'homeTeamName'
+                match_home_team = (m.get('home_team') or m.get('homeTeamName') or '').strip().lower()
+                match_away_team = (m.get('away_team') or m.get('awayTeamName') or '').strip().lower()
 
                 if tip_home_team and match_home_team and tip_home_team not in match_home_team and match_home_team not in tip_home_team:
                     print(f"[DEBUG TIME DESCARTADO] tip home={tip_home_team} vs match home={match_home_team}")
