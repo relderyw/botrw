@@ -1847,6 +1847,7 @@ async def update_league_stats(bot, recent_matches):
         recent_matches.sort(key=lambda x: (
             x.get('data_realizacao', ''), x.get('id', 0)), reverse=True)
 
+        league_games = defaultdict(list)
         for match in recent_matches: # Analisar TODO o histórico para métricas, não só os primeiros 200
             league = match.get('league_name', '')
 
