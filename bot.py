@@ -134,17 +134,19 @@ last_league_update_time = 0  # Timestamp do último envio do resumo das ligas
 
 
 def map_league_name(name):
-    """Mapeia o nome da liga de forma consistente (por prefixo)"""
+    """Mapeia o nome da liga unificando Live e History"""
     if not name: return "Unknown"
     
-    # Tentar match exato primeiro
-    if name in LIVE_LEAGUE_MAPPING:
-        return LIVE_LEAGUE_MAPPING[name]
+    # 1. Tentar match exato em ambas as listas
+    if name in LIVE_LEAGUE_MAPPING: return LIVE_LEAGUE_MAPPING[name]
+    if name in HISTORY_LEAGUE_MAPPING: return HISTORY_LEAGUE_MAPPING[name]
     
-    # Tentar match por prefixo
+    # 2. Tentar match por prefixo (mais comum na Altenar)
+    n_upper = name.upper()
     for key, value in LIVE_LEAGUE_MAPPING.items():
-        if name.upper().startswith(key.upper()):
-            return value
+        if n_upper.startswith(key.upper()): return value
+    for key, value in HISTORY_LEAGUE_MAPPING.items():
+        if n_upper.startswith(key.upper()): return value
             
     return name
 
@@ -551,8 +553,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    # Se pediram poucas páginas, aumentamos para 40 para garantir cobertura de jogadores menos frequentes
-    fetch_pages = max(num_pages, 40)
+    # Se pediram poucas páginas, aumentamos muito para garantir cobertura (Deep Fetch)
+    fetch_pages = max(num_pages, 15)  # Aumentado de 40 para 100 páginas (~2400 jogos)
     print(f"[INFO] Atualizando histórico completo (Deep Fetch) - {fetch_pages} páginas...")
 
     def fetch_internal_page(page):
@@ -917,8 +919,8 @@ def analyze_player_with_regime_check(matches, player_name):
     if regime['regime_change'] and regime['action'] == 'AVOID':
         print(
             f"[ALERT] {player_name}: REGIME CHANGE DETECTADO - {regime['reason']}")
-        print(f"[ALERT] Bloqueando análise para evitar tips perigosas")
-        return None  # VETO! Não analisa jogador que esfriou
+        print(f"[INFO] Continuando análise apesar do alerta (conforme solicitado)")
+        # Agora retorna os stats em vez de None para não bloquear a tip
 
     # 2. Análise normal dos últimos 5 jogos
     stats = analyze_last_5_games(matches, player_name)
@@ -1771,12 +1773,20 @@ async def check_results(bot):
                     continue
                 try:
                     dt_str = m.get('data_realizacao','')
+                    # BUG FIX: Lidar com datas sem timezone de forma mais inteligente
                     match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
+                    
                     if match_dt.tzinfo is None:
-                        match_dt = match_dt.replace(tzinfo=timezone.utc)
-                    match_local = match_dt.astimezone(MANAUS_TZ)
+                        # Se não tem TZ, assumimos que é o horário local da API (Manaus/UTC-4)
+                        # ou ao menos não fazemos o shift reverso que causa o erro de 4h
+                        match_local = match_dt.replace(tzinfo=MANAUS_TZ)
+                    else:
+                        match_local = match_dt.astimezone(MANAUS_TZ)
+                    
                     diff = (match_local - tip['sent_time']).total_seconds()
-                    if not (-180 <= diff <= 600):   # -3 a +10 minutos
+                    
+                    # Janela mais generosa: -5 min (atraso api) a +45 min (fim do jogo + delay)
+                    if not (-300 <= diff <= 2700): 
                         continue
                 except:
                     continue
@@ -1837,10 +1847,7 @@ async def update_league_stats(bot, recent_matches):
         recent_matches.sort(key=lambda x: (
             x.get('data_realizacao', ''), x.get('id', 0)), reverse=True)
 
-        league_games = defaultdict(list)
-
-        for match in recent_matches[:200]:
-            # Os dados já vêm normalizados com league_name mapeado
+        for match in recent_matches: # Analisar TODO o histórico para métricas, não só os primeiros 200
             league = match.get('league_name', '')
 
             if not league or league == 'Unknown':
@@ -2326,7 +2333,8 @@ async def main_loop(bot):
                     await send_tip(bot, event, strategy, home_stats, away_stats)
                     await asyncio.sleep(1)
 
-            print("[INFO] Ciclo concluído, aguardando 10 segundos...")
+            print("[INFO] Ciclo concluído, salvando estado e aguardando 10 segundos...")
+            save_state()  # Salvar estado ao fim de cada ciclo para máxima segurança
             await asyncio.sleep(10)
 
         except Exception as e:
