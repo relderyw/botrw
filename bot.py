@@ -1776,7 +1776,22 @@ async def check_results(bot):
 
             candidates = finished_matches.get(key, [])
             matched = None
-            for m in sorted(candidates, key=lambda x: x.get('data_realizacao',''), reverse=True):
+            
+            # Helper para sort por delta de tempo
+            def get_time_delta(x):
+                try:
+                    dt_str = x.get('data_realizacao','')
+                    if 'Z' in dt_str or 'T' in dt_str:
+                        match_dt = datetime.fromisoformat(dt_str.replace('Z','+00:00'))
+                        match_local = match_dt.astimezone(MANAUS_TZ)
+                    else:
+                        match_dt = datetime.fromisoformat(dt_str)
+                        match_local = match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
+                    return abs((match_local - tip['sent_time']).total_seconds())
+                except:
+                    return float('inf')
+
+            for m in sorted(candidates, key=get_time_delta):
                 # 1. Filtro de liga mais tolerante (resolve CLA, Valkyrie, etc)
                 match_league = m.get('league_name','').upper().strip()
                 if tip_league:
@@ -1786,20 +1801,25 @@ async def check_results(bot):
                         # print(f"[DEBUG LIGA DESCARTADA] tip={tip_league} | match={match_league}")
                         continue
 
-                # FIX: Verificar também os TIMES (equipes) para evitar casar com partida anterior dos mesmos players
+                # FIX MELHORADO: Verificação de times com fuzzy (contém parte do nome)
                 tip_home_team = tip.get('homeTeamName', '').strip().lower()
                 tip_away_team = tip.get('awayTeamName', '').strip().lower()
-                
-                # A API de histórico interno retorna 'home_team', o Live retorna 'homeTeamName'
-                match_home_team = (m.get('home_team') or m.get('homeTeamName') or '').strip().lower()
-                match_away_team = (m.get('away_team') or m.get('awayTeamName') or '').strip().lower()
 
-                if tip_home_team and match_home_team and tip_home_team not in match_home_team and match_home_team not in tip_home_team:
-                    print(f"[DEBUG TIME DESCARTADO] tip home={tip_home_team} vs match home={match_home_team}")
-                    continue
+                match_home = (m.get('home_team') or m.get('homeTeamName') or m.get('home_player') or '').strip().lower()
+                match_away = (m.get('away_team') or m.get('awayTeamName') or m.get('away_player') or '').strip().lower()
 
-                if tip_away_team and match_away_team and tip_away_team not in match_away_team and match_away_team not in tip_away_team:
-                    print(f"[DEBUG TIME DESCARTADO] tip away={tip_away_team} vs match away={match_away_team}")
+                # Se tip tem time, match deve conter pelo menos parte dele (ex: "arsenal" em "arsenal (alicia)")
+                team_match_ok = True
+                if tip_home_team:
+                    if not (tip_home_team in match_home or match_home in tip_home_team):
+                        team_match_ok = False
+                        print(f"[DEBUG TIME HOME FALHOU] tip={tip_home_team} | match={match_home}")
+                if tip_away_team:
+                    if not (tip_away_team in match_away or match_away in tip_away_team):
+                        team_match_ok = False
+                        print(f"[DEBUG TIME AWAY FALHOU] tip={tip_away_team} | match={match_away}")
+
+                if not team_match_ok:
                     continue
 
                 try:
@@ -1821,6 +1841,18 @@ async def check_results(bot):
                         continue
                 except:
                     continue
+                
+                # FIX PREMATURO: placar da tip deve ser "prefixo" do placar final
+                sent_score = tip.get('sent_scoreboard', '0-0')
+                sent_home, sent_away = map(int, sent_score.split('-')) if '-' in sent_score else (0, 0)
+
+                final_home = int(m.get('home_score_ft', 0))
+                final_away = int(m.get('away_score_ft', 0))
+
+                if sent_home > final_home or sent_away > final_away:
+                    print(f"[DEBUG PLACAR IMPOSSÍVEL] tip {sent_score} > final {final_home}-{final_away}")
+                    continue
+                
                 matched = m
                 break
 
