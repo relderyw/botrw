@@ -135,6 +135,10 @@ last_league_message_id = None
 league_stats = {}
 last_league_update_time = 0  # Timestamp do último envio do resumo das ligas
 
+# NOVO ESTADO
+daily_stats = {} # formato: 'YYYY-MM-DD': {'green': 0, 'red': 0}
+last_daily_message_date = None
+
 
 def map_league_name(name):
     """Mapeia o nome da liga unificando Live e History"""
@@ -161,6 +165,8 @@ def save_state():
             'league_stats': league_stats,
             'last_league_update_time': last_league_update_time,
             'last_summary': last_summary,
+            'daily_stats': daily_stats,
+            'last_daily_message_date': last_daily_message_date,
             'sent_match_ids': list(sent_match_ids),
             'sent_tips': [
                 {**tip, 'sent_time': tip['sent_time'].isoformat()}
@@ -177,6 +183,7 @@ def save_state():
 def load_state():
     """Carrega o estado do bot de um arquivo JSON"""
     global last_league_message_id, league_stats, last_league_update_time, last_summary, sent_match_ids, sent_tips
+    global daily_stats, last_daily_message_date
     try:
         if os.path.exists('bot_state.json'):
             with open('bot_state.json', 'r') as f:
@@ -185,6 +192,8 @@ def load_state():
                 league_stats = state.get('league_stats', {})
                 last_league_update_time = state.get('last_league_update_time', 0)
                 last_summary = state.get('last_summary')
+                daily_stats = state.get('daily_stats', {})
+                last_daily_message_date = state.get('last_daily_message_date')
                 sent_match_ids = set(state.get('sent_match_ids', []))
                 
                 # Carregar sent_tips e converter datas de volta
@@ -1955,7 +1964,7 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
 
 async def check_results(bot):
     """VERSÃO FINAL BLINDADA - só aceita jogo que começou DEPOIS da tip"""
-    global last_summary, last_league_message_id
+    global last_summary, last_league_message_id, daily_stats, last_daily_message_date
     try:
         recent = fetch_recent_matches(num_pages=30)
         finished_matches = defaultdict(list)
@@ -1965,14 +1974,15 @@ async def check_results(bot):
             key = f"{home}_{away}"
             finished_matches[key].append(match)
 
-        today = datetime.now(MANAUS_TZ).date()
-        sent_tips[:] = [t for t in sent_tips if t['sent_time'].date() >= today - timedelta(days=2)]
+        today_date = datetime.now(MANAUS_TZ)
+        today = today_date.date()
+        today_str = today_date.strftime('%Y-%m-%d')
 
-        greens = reds = 0
+        # Manter 5 dias no array por segurança para atualizações tardias
+        sent_tips[:] = [t for t in sent_tips if t['sent_time'].date() >= today - timedelta(days=5)]
+
         for tip in sent_tips:
             if tip['status'] != 'pending':
-                if tip['status'] == 'green': greens += 1
-                if tip['status'] == 'red': reds += 1
                 continue
 
             # Delay mínimo ajustado
@@ -2011,8 +2021,8 @@ async def check_results(bot):
             for m in sorted(candidates, key=get_time_delta):
                 match_league = m.get('league_name', '').upper().strip()
 
-                # 1. Liga tolerante
-                if tip_league and tip_league.split()[0] not in match_league:
+                # 1. Liga tolerante (Aceitar 'UNKNOWN' vindo do histórico)
+                if tip_league and match_league != 'UNKNOWN' and tip_league.split()[0] not in match_league:
                     continue
 
                 # 2. TEMPO CRÍTICO: só aceita jogo que começou DEPOIS da tip (ou no máximo 2 min antes)
@@ -2043,8 +2053,12 @@ async def check_results(bot):
                 if tip_away and match_away:
                     if not (tip_away in match_away or match_away in tip_away or tip_away.split()[0] in match_away):
                         team_ok = False
+                        
+                # PERMISSIVO: Se os times não baterem por nome diferente (ex: PSG vs Paris Saint-Germain), 
+                # perdoamos se a diferença de tempo for pequena (< 15 minutos).
                 if not team_ok:
-                    continue
+                    if get_time_delta(m) > 900:
+                        continue
 
                 # 4. Placar inicial compatível
                 sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
@@ -2086,17 +2100,50 @@ async def check_results(bot):
                 await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
                 print(f"[✓] {result.upper()} APLICADO COM SUCESSO")
 
-            if tip['status'] == 'green': greens += 1
-            if tip['status'] == 'red': reds += 1
+        # Recalcular daily_stats para os dias presentes no sent_tips
+        dates_in_sent_tips = {t['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d') for t in sent_tips}
+        for d_str in dates_in_sent_tips:
+            daily_stats[d_str] = {'green': 0, 'red': 0}
+            
+        for tip in sent_tips:
+            if tip['status'] in ('green', 'red'):
+                d_str = tip['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
+                daily_stats[d_str][tip['status']] += 1
 
-        # Resumo diário
-        total_resolved = greens + reds
+        # Resumo contínuo do dia HOJE
+        today_greens = daily_stats.get(today_str, {}).get('green', 0)
+        today_reds = daily_stats.get(today_str, {}).get('red', 0)
+
+        total_resolved = today_greens + today_reds
         if total_resolved > 0:
-            perc = (greens / total_resolved) * 100
-            summary = f"<b>👑 RW TIPS - FIFA 🎮</b>\n✅ Green [{greens}]\n❌ Red [{reds}]\n📊 {perc:.1f}%"
+            perc = (today_greens / total_resolved) * 100
+            summary = f"<b>👑 RW TIPS - FIFA 🎮</b>\n✅ Green [{today_greens}]\n❌ Red [{today_reds}]\n📊 {perc:.1f}%"
             if summary != last_summary:
                 await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
                 last_summary = summary
+                
+        # 🚨 MENSAGEM CONSOLIDADA (No início de um novo dia) 🚨
+        if last_daily_message_date and last_daily_message_date != today_str:
+            sorted_dates = sorted(daily_stats.keys())
+            if sorted_dates:
+                msg = "🚨 <b>Resumo Geral:</b>\n\n"
+                for date_str in sorted_dates[-7:]: # Mostra até os ultimos 7 dias
+                    ds = daily_stats[date_str]
+                    g = ds['green']
+                    r = ds['red']
+                    t = g + r
+                    if t == 0: continue
+                    pct = (g/t)*100
+                    
+                    fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m')
+                    msg += f"📅 {fmt_date} --> ✅ Green [{g}]  | ❌ Red [{r}] | 📊 Assertividade [{pct:.1f}%]\n"
+                
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
+            
+        # Atualiza a data de envio para não enviar novamente hoje
+        if last_daily_message_date != today_str:
+            last_daily_message_date = today_str
+            save_state()
 
         await update_league_stats(bot, recent)
 
