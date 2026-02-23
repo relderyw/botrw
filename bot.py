@@ -31,6 +31,8 @@ CHAT_ID = "-1001981134607"
 # APIs
 # Altenar Live API (same as frontend) - includes auth parameters
 LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventCount=0&sportId=66&catIds=2085,1571,1728,1594,2086,1729,2130"
+# Event API (to get open markets)
+EVENT_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
 # Internal History API
 HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
 # Green365 API (for H2H GG and consistent history)
@@ -472,6 +474,55 @@ def fetch_live_matches():
         print(f"[ERROR] Altenar Live API falhou: {e}")
         return []
 
+def fetch_event_markets(event_id):
+    """Busca os mercados e odds abertas de um evento específico"""
+    try:
+        url = EVENT_API_URL.format(event_id)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.estrelabet.bet.br/"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        markets = data.get('markets', [])
+        odds = data.get('odds', [])
+        
+        # Mapear odds por ID para acesso rápido
+        odds_map = {odd['id']: odd for odd in odds}
+        
+        open_lines = []
+        
+        for market in markets:
+            market_name = market.get('name', '')
+            
+            # Buscar os IDs das odds em desktopOddIds (tem de ser array de arrays na API Altenar)
+            desktop_odds = market.get('desktopOddIds', [])
+            odd_ids_to_check = []
+            for group in desktop_odds:
+                if isinstance(group, list):
+                    odd_ids_to_check.extend(group)
+                else:
+                    odd_ids_to_check.append(group)
+                    
+            for odd_id in odd_ids_to_check:
+                odd = odds_map.get(odd_id)
+                if odd:
+                    # oddStatus == 0 significa ABERTA
+                    if odd.get('oddStatus') == 0:
+                        open_lines.append({
+                            'market_name': market_name,
+                            'odd_name': odd.get('name', ''),
+                            'odd_sv': odd.get('sv', ''),
+                            'price': odd.get('price', 0)
+                        })
+                        
+        return open_lines
+        
+    except Exception as e:
+        print(f"[WARN] Erro ao buscar mercados para o evento {event_id}: {e}")
+        return []
 
 def fetch_green365_history(num_pages=5):
     """Busca partidas da API Green365 (especialmente para H2H GG)"""
@@ -1560,6 +1611,173 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
 
     return strategies
 
+def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines):
+    """
+    Avalia as linhas abertas na EstrelaBet cruzando com o histórico dos jogadores.
+    Segue rigorosamente a ordem de prioridade estipulada.
+    """
+    strategies = []
+    
+    timer = event.get('timer', {})
+    minute = timer.get('minute', 0)
+    second = timer.get('second', 0)
+    time_seconds = minute * 60 + second
+    
+    score = event.get('score', {})
+    home_goals = score.get('home', 0)
+    away_goals = score.get('away', 0)
+    total_goals_now = home_goals + away_goals
+    
+    home_raw = event.get('homeRaw', '').strip()
+    away_raw = event.get('awayRaw', '').strip()
+    
+    avg_btts = (home_stats['btts_pct'] + away_stats['btts_pct']) / 2
+    
+    # --- HELPER: Extrair número da linha float (sv) ---
+    def parse_line(sv_str):
+        try:
+            # Pega o último pedaço do "sv", por exemplo "home|1.5" -> "1.5" ou "2.5" -> "2.5"
+            return float(sv_str.split('|')[-1])
+        except:
+            return None
+            
+    # Filtra as odds de Mais (Over)
+    def find_over_line(market_name_query):
+        best_line = None
+        for line in open_lines:
+            # Procurar pelo mercado e garantir que não é "Menos de"
+            if market_name_query.lower() in line['market_name'].lower():
+                if "mais de" in line['odd_name'].lower() or line['price'] > 0:
+                    # Garantir que é a linha "Mais", geralmente odd_name="Mais de 1.5" ou só "Mais"
+                    if "menos" in line['odd_name'].lower(): continue
+                    sv_val = parse_line(line['odd_sv'])
+                    if sv_val is not None:
+                        # Priorizar a menor linha possível que está aberta
+                        if best_line is None or sv_val < best_line['value']:
+                            best_line = {'value': sv_val, 'odd_name': line['odd_name'], 'price': line['price']}
+        return best_line
+        
+    def find_btts_line(market_name_query):
+        for line in open_lines:
+            if market_name_query.lower() in line['market_name'].lower():
+                if line['odd_name'].lower() == 'sim':
+                    return True
+        return False
+
+    print(f"[DEBUG EVAL] Avaliando linhas abertas {event['id']} ({time_seconds}s)")
+
+    # ==========================================
+    # 1. 1º TEMPO - TOTAL DE GOLS (HT)
+    # ==========================================
+    # Só analisa HT se estiver no 1º tempo! (Varia por liga, geralmente até 4 mins max). 
+    # Aqui, para segurança, filtramos por tempo_seconds <= 240 (4 min)
+    if time_seconds <= 240:
+        ht_line = find_over_line("1ª tempo - Total de gols") or find_over_line("1º tempo - total")
+        if ht_line:
+            val = ht_line['value']
+            # Requisito para HT
+            if val == 0.5:
+                # Exigência para 0.5 HT (Geralmente 1 gol no jogo todo)
+                if (home_stats['ht_over_05_pct'] >= 90 and away_stats['ht_over_05_pct'] >= 90):
+                    strategies.append(f"⚽ +0.5 GOL HT")
+                    return strategies # Retorna imediato: a primeira a bater ganha!
+            elif val == 1.5:
+                if (home_stats['ht_over_15_pct'] >= 90 and away_stats['ht_over_15_pct'] >= 90):
+                    strategies.append(f"⚽ +1.5 GOLS HT")
+                    return strategies
+            elif val == 2.5:
+                if (home_stats['ht_over_25_pct'] >= 90 and away_stats['ht_over_25_pct'] >= 90):
+                    strategies.append(f"⚽ +2.5 GOLS HT")
+                    return strategies
+
+    # Para FT strategies precisamos dar um tempinho para o odd maturar 
+    # ou já disparar caso esteja muito bom.
+    
+    # ==========================================
+    # 2. GOLS JOGADOR CASA FT
+    # ==========================================
+    home_ft_line = find_over_line(f"{home_raw} total")
+    if home_ft_line:
+        val = home_ft_line['value']
+        if val == 1.5:
+            if home_stats['ft_scored_15_pct'] >= 95 and home_stats['avg_goals_scored_ft'] >= 1.8:
+                strategies.append(f"⚽ {home_raw} +1.5 GOLS FT")
+                return strategies
+        elif val == 2.5:
+            if home_stats['ft_scored_25_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 2.8:
+                strategies.append(f"⚽ {home_raw} +2.5 GOLS FT")
+                return strategies
+        elif val == 3.5:
+            if home_stats['ft_scored_35_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 3.8:
+                strategies.append(f"⚽ {home_raw} +3.5 GOLS FT")
+                return strategies
+
+    # ==========================================
+    # 3. GOLS JOGADOR FORA FT
+    # ==========================================
+    away_ft_line = find_over_line(f"{away_raw} total")
+    if away_ft_line:
+        val = away_ft_line['value']
+        if val == 1.5:
+            if away_stats['ft_scored_15_pct'] >= 95 and away_stats['avg_goals_scored_ft'] >= 1.8:
+                strategies.append(f"⚽ {away_raw} +1.5 GOLS FT")
+                return strategies
+        elif val == 2.5:
+            if away_stats['ft_scored_25_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 2.8:
+                strategies.append(f"⚽ {away_raw} +2.5 GOLS FT")
+                return strategies
+        elif val == 3.5:
+            if away_stats['ft_scored_35_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 3.8:
+                strategies.append(f"⚽ {away_raw} +3.5 GOLS FT")
+                return strategies
+
+    # ==========================================
+    # 4. TOTAL DE GOLS FT (JOGO COMPLETO)
+    # ==========================================
+    total_ft_line = find_over_line("Total de Gols")
+    if total_ft_line:
+        val = total_ft_line['value']
+        # Validar o somatório/conjunto
+        avg_combined_scored = home_stats['avg_goals_scored_ft'] + away_stats['avg_goals_scored_ft']
+        if val == 1.5:
+            if (home_stats['ft_over_15_pct'] >= 95 and away_stats['ft_over_15_pct'] >= 95):
+                strategies.append(f"⚽ +1.5 GOLS FT")
+                return strategies
+        elif val == 2.5:
+            if (home_stats['ft_over_25_pct'] >= 90 and away_stats['ft_over_25_pct'] >= 90):
+                strategies.append(f"⚽ +2.5 GOLS FT")
+                return strategies
+        elif val == 3.5:
+            if (home_stats['ft_over_35_pct'] >= 90 and away_stats['ft_over_35_pct'] >= 90 and avg_combined_scored >= 4.0):
+                strategies.append(f"⚽ +3.5 GOLS FT")
+                return strategies
+        elif val == 4.5:
+            if (home_stats['ft_over_45_pct'] >= 90 and away_stats['ft_over_45_pct'] >= 90 and avg_combined_scored >= 5.0):
+                strategies.append(f"⚽ +4.5 GOLS FT")
+                return strategies
+
+    # ==========================================
+    # 5. BTTS HT
+    # ==========================================
+    if time_seconds <= 240:
+        btts_ht_open = find_btts_line("1º tempo - ambas equipes marcam") or find_btts_line("1ª tempo - ambas equipes marcam")
+        if btts_ht_open:
+            if home_stats['ht_btts_pct'] >= 85 and away_stats['ht_btts_pct'] >= 85:
+                strategies.append(f"⚽ BTTS HT")
+                return strategies
+
+    # ==========================================
+    # 6. BTTS FT
+    # ==========================================
+    btts_ft_open = find_btts_line("Ambas equipes marcam")
+    if btts_ft_open:
+        if home_stats['btts_pct'] >= 90 and away_stats['btts_pct'] >= 90:
+            if home_stats['ft_scored_05_pct'] == 100 and away_stats['ft_scored_05_pct'] == 100:
+                strategies.append(f"⚽ BTTS FT")
+                return strategies
+
+    return strategies
+
 # =============================================================================
 # FORMATAÇÃO DE MENSAGENS
 # =============================================================================
@@ -2303,6 +2521,12 @@ async def main_loop(bot):
                 # (HT e FT). Se apenas um foi enviado, permitimos re-analisar para o outro.
                 if f"{event_id}_HT" in sent_match_ids and f"{event_id}_FT" in sent_match_ids:
                     continue
+                    
+                # BUSCAR MERCADOS ABERTOS (NOVO FLUXO DINÂMICO)
+                open_lines = fetch_event_markets(event_id)
+                if not open_lines:
+                    print(f"[INFO] Evento {event_id}: Sem mercados abertos ou fechados no momento.")
+                    continue
 
                 home_data = fetch_player_individual_stats(home_player)
                 away_data = fetch_player_individual_stats(away_player)
@@ -2348,33 +2572,14 @@ async def main_loop(bot):
                 print(f"[STATS] {home_player} (últimos 5 jogos): HT O0.5={home_stats['ht_over_05_pct']:.0f}% O1.5={home_stats['ht_over_15_pct']:.0f}% O2.5={home_stats['ht_over_25_pct']:.0f}% | Confidence: {home_confidence:.0f}%")
                 print(f"[STATS] {away_player} (últimos 5 jogos): HT O0.5={away_stats['ht_over_05_pct']:.0f}% O1.5={away_stats['ht_over_15_pct']:.0f}% O2.5={away_stats['ht_over_25_pct']:.0f}% | Confidence: {away_confidence:.0f}%")
 
-                # DETERMINAR ESTRATÉGIAS PELO TEMPO (Mapeamento ou Auto-detecção)
-                strategies = []
                 mapped_league = event.get('mappedLeague', '')
-                raw_league = league_name.upper()
+                if mapped_league and mapped_league in league_stats:
+                    all_league_stats = league_stats
+                else:
+                    all_league_stats = {} # Fallback
 
-                # 1. Tentar por mapping explícito (com suporte a prefixo)
-                if any(mapped_league.startswith(l) for l in ['BATTLE 8 MIN', 'H2H 8 MIN', 'VALHALLA CUP', 'VALKYRIE CUP']):
-                    strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league.startswith('GT LEAGUE 12 MIN'):
-                    strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league.startswith('VOLTA 6 MIN'):
-                    strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
-                elif mapped_league.startswith('CLA 10 MIN'):
-                    strategies = check_strategies_10mins(event, home_stats, away_stats, league_stats)
-                
-                # 2. Fallback: Auto-detecção por palavras-chave se não houver estratégias
-                if not strategies:
-                    if '2X6' in raw_league or '12 MIN' in raw_league or 'GT LEAGUE' in raw_league or 'CHAMPIONS LEAGUE' in raw_league:
-                        strategies = check_strategies_12mins(event, home_stats, away_stats, league_stats)
-                    elif '2X4' in raw_league or '8 MIN' in raw_league or 'BATTLE' in raw_league or 'H2H' in raw_league or 'PREMIER LEAGUE' in raw_league:
-                        strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
-                    elif '2X3' in raw_league or '6 MIN' in raw_league or 'VOLTA' in raw_league:
-                        strategies = check_strategies_volta_6mins(event, home_stats, away_stats, league_stats)
-                    elif 'CLA' in raw_league or '10 MIN' in raw_league:
-                        strategies = check_strategies_10mins(event, home_stats, away_stats, league_stats)
-                    elif 'VALHALLA' in raw_league or 'VALKYRIE' in raw_league:
-                        strategies = check_strategies_8mins(event, home_stats, away_stats, league_stats)
+                # AVALIAÇÃO DINÂMICA DE MERCADOS
+                strategies = evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines)
 
                 for strategy in strategies:
                     print(
