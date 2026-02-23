@@ -125,7 +125,7 @@ global_history_cache = {
     'matches': [],
     'timestamp': 0
 }
-HISTORY_CACHE_TTL = 60  # 1 minuto
+HISTORY_CACHE_TTL = 120  # 2 minutos (para dar tempo do fetch de 100 páginas terminar tranquilo)
 
 sent_tips = []
 sent_match_ids = set()
@@ -540,6 +540,20 @@ def fetch_green365_history(num_pages=5):
         all_matches = []
         headers = {"Authorization": GREEN365_TOKEN}
 
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
         def fetch_page(page):
             try:
                 params = {
@@ -548,8 +562,9 @@ def fetch_green365_history(num_pages=5):
                     "sport": "esoccer",
                     "status": "ended"
                 }
-                response = requests.get(
-                    GREEN365_API_URL, params=params, headers=headers, timeout=12)
+                # Aumentado timeout para 20s para evitar Read Timed Out em deep fetch
+                response = session.get(
+                    GREEN365_API_URL, params=params, headers=headers, timeout=20)
                 if response.status_code != 200:
                     return []
                 data = response.json()
@@ -560,7 +575,8 @@ def fetch_green365_history(num_pages=5):
 
         import concurrent.futures
         items = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        # Aumentado max_workers para 10 para agilizar as 50 páginas
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             pages_to_fetch = range(1, num_pages + 1)
             results = list(executor.map(fetch_page, pages_to_fetch))
             for res in results:
@@ -626,24 +642,39 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
     fetch_pages = max(num_pages, 50)  # Aumentado de 15 para 50 páginas (~1200 jogos)
     print(f"[INFO] Atualizando histórico completo (Deep Fetch) - {fetch_pages} páginas...")
 
+    # 1. Buscar da API Interna em paralelo
+    internal_matches = []
+    print(f"[INFO] Buscando {fetch_pages} páginas da API Interna em paralelo...")
+    
+    # Reutilizar o mesmo padrão de sessão e retry para estabilidade
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    
+    int_session = requests.Session()
+    int_retry = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    int_session.mount("https://", HTTPAdapter(max_retries=int_retry))
+
     def fetch_internal_page(page):
         try:
             params = {'page': page, 'limit': 24}
-            response = requests.get(HISTORY_API_URL, params=params, timeout=10)
+            response = int_session.get(HISTORY_API_URL, params=params, timeout=15)
             if response.status_code != 200:
                 return []
             data = response.json()
             return data.get('results', [])
-        except:
+        except Exception as e:
+            if page <= 2: # Só logar erro nas primeiras páginas para evitar flood
+                print(f"[WARN] Internal API page {page} fetch error: {e}")
             return []
 
-    # 1. Buscar da API Interna em paralelo
-    internal_matches = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         pages = range(1, fetch_pages + 1)
         results = list(executor.map(fetch_internal_page, pages))
         for r in results:
-            internal_matches.extend(r)
+            if r:
+                internal_matches.extend(r)
+    print(f"[INFO] API Interna retornou {len(internal_matches)} partidas.")
 
     # 2. Buscar da Green365 (historicamente mais estável para H2H GG)
     # Usa a mesma quantidade de páginas (deep fetch) agora que é paralelo
@@ -669,7 +700,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
                                         m.get('away_competitor_name', ''))
         
         all_combined.append({
-            'id': f"int_{m.get('id')}",
+            'id': f"int_{m.get('id', m.get('_id', 'unk'))}",
             'league_name': map_league_name(league),
             'home_player': home_player,
             'away_player': away_player,
@@ -683,6 +714,14 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             'home_score_ft': m.get('home_score_ft', 0) or 0,
             'away_score_ft': m.get('away_score_ft', 0) or 0
         })
+
+    # Log para depuração de liga H2H GG na API Interna
+    h2h_int = [m for m in all_combined if "H2H" in m['league_name']]
+    if h2h_int:
+        print(f"[DEBUG INTERNAL] Encontradas {len(h2h_int)} partidas H2H unificadas.")
+        # Amostra do primeiro match H2H para ver os nomes
+        m = h2h_int[0]
+        print(f"[DEBUG INTERNAL] Exemplo H2H: {m['home_player']} vs {m['away_player']} ({m['league_name']})")
 
     # Processar Green365 (já normalizados mas mapear liga)
     for m in green_matches:
