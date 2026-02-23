@@ -534,68 +534,76 @@ def fetch_event_markets(event_id):
         return []
 
 def fetch_green365_history(num_pages=5):
-    """Busca partidas da API Green365 (especialmente para H2H GG)"""
+    """Busca partidas da API Green365 (especialmente para H2H GG) usando paralelismo"""
     try:
-        print(f"[INFO] Buscando histórico da Green365 ({num_pages} páginas)...")
+        print(f"[INFO] Buscando histórico da Green365 ({num_pages} páginas em paralelo)...")
         all_matches = []
-
         headers = {"Authorization": GREEN365_TOKEN}
 
-        for page in range(1, num_pages + 1):
-            params = {
-                "page": page, 
-                "limit": 24,
-                "sport": "esoccer",
-                "status": "ended"
-            }
-            response = requests.get(
-                GREEN365_API_URL, params=params, headers=headers, timeout=12)
-            if response.status_code != 200:
+        def fetch_page(page):
+            try:
+                params = {
+                    "page": page, 
+                    "limit": 24,
+                    "sport": "esoccer",
+                    "status": "ended"
+                }
+                response = requests.get(
+                    GREEN365_API_URL, params=params, headers=headers, timeout=12)
+                if response.status_code != 200:
+                    return []
+                data = response.json()
+                return data.get('items', [])
+            except Exception as e:
+                print(f"[WARN] Green365 page {page} fetch error: {e}")
+                return []
+
+        import concurrent.futures
+        items = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            pages_to_fetch = range(1, num_pages + 1)
+            results = list(executor.map(fetch_page, pages_to_fetch))
+            for res in results:
+                if res:
+                    items.extend(res)
+
+        for item in items:
+            try:
+                home_data = item.get('home', {})
+                away_data = item.get('away', {})
+                score = item.get('score', {})
+                score_ht = item.get('scoreHT', {})
+                competition = item.get('competition', {})
+
+                match_date = item.get('startTime', '')
+
+                # Normalizar para o formato interno (Green365 já costuma ter campos separados se bem configurado)
+                # Se não tiver, o fallback clean_player_name é usado
+                normalized_home = clean_player_name(home_data.get('player_name') or 
+                                                    home_data.get('playerName') or 
+                                                    home_data.get('name', ''))
+                normalized_away = clean_player_name(away_data.get('player_name') or 
+                                                    away_data.get('playerName') or 
+                                                    away_data.get('name', ''))
+
+                all_matches.append({
+                    'id': f"g365_{item.get('id')}",
+                    'league_name': competition.get('name', 'Unknown'),
+                    'home_player': normalized_home,
+                    'away_player': normalized_away,
+                    'home_team': home_data.get('team_name') or home_data.get('teamName') or '',
+                    'away_team': away_data.get('team_name') or away_data.get('teamName') or '',
+                    'home_team_logo': home_data.get('imageUrl', ''),
+                    'away_team_logo': away_data.get('imageUrl', ''),
+                    'data_realizacao': match_date,
+                    'home_score_ht': score_ht.get('home', 0),
+                    'away_score_ht': score_ht.get('away', 0),
+                    'home_score_ft': score.get('home', 0),
+                    'away_score_ft': score.get('away', 0)
+                })
+            except Exception as e:
+                print(f"[WARN] Erro ao normalizar item Green365: {e}")
                 continue
-
-            data = response.json()
-            # Green365 retorna os jogos em 'items'
-            items = data.get('items', [])
-            if not items:
-                break
-
-            for item in items:
-                try:
-                    home_data = item.get('home', {})
-                    away_data = item.get('away', {})
-                    score = item.get('score', {})
-                    score_ht = item.get('scoreHT', {})
-                    competition = item.get('competition', {})
-
-                    match_date = item.get('startTime', '')
-
-                    # Normalizar para o formato interno (Green365 já costuma ter campos separados se bem configurado)
-                    # Se não tiver, o fallback clean_player_name é usado
-                    normalized_home = clean_player_name(home_data.get('player_name') or 
-                                                        home_data.get('playerName') or 
-                                                        home_data.get('name', ''))
-                    normalized_away = clean_player_name(away_data.get('player_name') or 
-                                                        away_data.get('playerName') or 
-                                                        away_data.get('name', ''))
-
-                    all_matches.append({
-                        'id': f"g365_{item.get('id')}",
-                        'league_name': competition.get('name', 'Unknown'),
-                        'home_player': normalized_home,
-                        'away_player': normalized_away,
-                        'home_team': home_data.get('team_name') or home_data.get('teamName') or '',
-                        'away_team': away_data.get('team_name') or away_data.get('teamName') or '',
-                        'home_team_logo': home_data.get('imageUrl', ''),
-                        'away_team_logo': away_data.get('imageUrl', ''),
-                        'data_realizacao': match_date,
-                        'home_score_ht': score_ht.get('home', 0),
-                        'away_score_ht': score_ht.get('away', 0),
-                        'home_score_ft': score.get('home', 0),
-                        'away_score_ft': score.get('away', 0)
-                    })
-                except Exception as e:
-                    print(f"[WARN] Erro ao normalizar item Green365: {e}")
-                    continue
 
         return all_matches
     except Exception as e:
@@ -615,7 +623,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             return global_history_cache['matches']
 
     # Se pediram poucas páginas, aumentamos muito para garantir cobertura (Deep Fetch)
-    fetch_pages = max(num_pages, 15)  # Aumentado de 40 para 100 páginas (~2400 jogos)
+    fetch_pages = max(num_pages, 50)  # Aumentado de 15 para 50 páginas (~1200 jogos)
     print(f"[INFO] Atualizando histórico completo (Deep Fetch) - {fetch_pages} páginas...")
 
     def fetch_internal_page(page):
@@ -638,7 +646,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             internal_matches.extend(r)
 
     # 2. Buscar da Green365 (historicamente mais estável para H2H GG)
-    green_matches = fetch_green365_history(num_pages=5)
+    # Usa a mesma quantidade de páginas (deep fetch) agora que é paralelo
+    green_matches = fetch_green365_history(num_pages=fetch_pages)
 
     # 3. Processar e unificar
     all_combined = []
@@ -707,8 +716,8 @@ def fetch_player_individual_stats(player_name, use_cache=True):
             return cached['stats']
 
     # Buscar histórico global (usa cache se disponível)
-    # 500 jogos ~= 21 páginas de 24 jogos
-    all_matches = fetch_recent_matches(num_pages=15, use_cache=True)
+    # 1200 jogos ~= 50 páginas de 24 jogos
+    all_matches = fetch_recent_matches(num_pages=50, use_cache=True)
 
     if not all_matches:
         print(f"[WARN] Nenhum histórico disponível para filtrar {player_name}")
