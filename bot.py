@@ -1210,7 +1210,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
                         home_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
@@ -1220,7 +1220,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
                         home_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (l_stats['ft']['o15'] >= 95):
@@ -1229,7 +1229,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
                         away_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
@@ -1239,7 +1239,7 @@ def check_strategies_8mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
                         away_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
     return strategies
 
@@ -1358,7 +1358,7 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
                         home_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
@@ -1368,7 +1368,7 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
                         home_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (l_stats['ft']['o15'] >= 95):
@@ -1377,7 +1377,7 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
                         away_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
@@ -1387,7 +1387,7 @@ def check_strategies_12mins(event, home_stats, away_stats, all_league_stats):
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
                         away_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
     return strategies
 
@@ -1587,7 +1587,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
                     avg_btts <= 70 and
                     home_stats['ft_scored_15_pct'] >= 80 and
                         home_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p1 = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
         if (home_goals, away_goals) in valid_scores_p1:
@@ -1597,7 +1597,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
                     avg_btts <= 60 and
                     home_stats['ft_scored_25_pct'] >= 80 and
                         home_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {home_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {home_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
         if (home_goals == 0 and away_goals == 0) or (home_goals == 1 and away_goals == 0):
             if (l_stats['ft']['o15'] >= 95):
@@ -1606,7 +1606,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
                     avg_btts <= 70 and
                     away_stats['ft_scored_15_pct'] >= 80 and
                         away_stats['ft_scored_25_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +1.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +1.5 GOLS FT", "odd": total_ft_line["price"]})
 
         valid_scores_p2 = [(0, 0), (1, 0), (2, 0), (1, 1), (2, 1)]
         if (home_goals, away_goals) in valid_scores_p2:
@@ -1616,7 +1616,7 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
                     avg_btts <= 60 and
                     away_stats['ft_scored_25_pct'] >= 80 and
                         away_stats['ft_scored_35_pct'] >= 60):
-                    strategies.append(f"⚽ {away_player} +2.5 GOLS FT")
+                    strategies.append({"name": f"⚽ {away_player} +2.5 GOLS FT", "odd": total_ft_line["price"]})
 
     return strategies
 
@@ -1679,8 +1679,8 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                 if "tempo" not in query_lower and "tempo" in market_lower:
                     continue
                 if line['odd_name'].lower() == 'sim':
-                    return True
-        return False
+                    return line
+        return None
 
     print(f"[DEBUG EVAL] Avaliando linhas abertas {event['id']} ({time_seconds}s)")
 
@@ -1697,15 +1697,15 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             if val == 0.5:
                 # Exigência para 0.5 HT (Geralmente 1 gol no jogo todo)
                 if (home_stats['ht_over_05_pct'] >= 90 and away_stats['ht_over_05_pct'] >= 90):
-                    strategies.append(f"⚽ +0.5 GOL HT")
+                    strategies.append({"name": f"⚽ +0.5 GOL HT", "odd": ht_line["price"]})
                     return strategies # Retorna imediato: a primeira a bater ganha!
             elif val == 1.5:
                 if (home_stats['ht_over_15_pct'] >= 90 and away_stats['ht_over_15_pct'] >= 90):
-                    strategies.append(f"⚽ +1.5 GOLS HT")
+                    strategies.append({"name": f"⚽ +1.5 GOLS HT", "odd": ht_line["price"]})
                     return strategies
             elif val == 2.5:
                 if (home_stats['ht_over_25_pct'] >= 90 and away_stats['ht_over_25_pct'] >= 90):
-                    strategies.append(f"⚽ +2.5 GOLS HT")
+                    strategies.append({"name": f"⚽ +2.5 GOLS HT", "odd": ht_line["price"]})
                     return strategies
 
     # ==========================================
@@ -1715,7 +1715,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         btts_ht_open = find_btts_line("1º tempo - ambas equipes marcam") or find_btts_line("1ª tempo - ambas equipes marcam")
         if btts_ht_open:
             if home_stats['ht_btts_pct'] >= 85 and away_stats['ht_btts_pct'] >= 85:
-                strategies.append(f"⚽ BTTS HT")
+                strategies.append({"name": f"⚽ BTTS HT", "odd": btts_ht_open["price"]})
                 return strategies
 
     # Para FT strategies precisamos dar um tempinho para o odd maturar ou já disparar caso esteja muito bom.
@@ -1730,19 +1730,19 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         avg_combined_scored = home_stats['avg_goals_scored_ft'] + away_stats['avg_goals_scored_ft']
         if val == 1.5:
             if (home_stats['ft_over_15_pct'] >= 95 and away_stats['ft_over_15_pct'] >= 95):
-                strategies.append(f"⚽ +1.5 GOLS FT")
+                strategies.append({"name": f"⚽ +1.5 GOLS FT", "odd": total_ft_line["price"]})
                 return strategies
         elif val == 2.5:
             if (home_stats['ft_over_25_pct'] >= 90 and away_stats['ft_over_25_pct'] >= 90):
-                strategies.append(f"⚽ +2.5 GOLS FT")
+                strategies.append({"name": f"⚽ +2.5 GOLS FT", "odd": total_ft_line["price"]})
                 return strategies
         elif val == 3.5:
             if (home_stats['ft_over_35_pct'] >= 90 and away_stats['ft_over_35_pct'] >= 90 and avg_combined_scored >= 4.0):
-                strategies.append(f"⚽ +3.5 GOLS FT")
+                strategies.append({"name": f"⚽ +3.5 GOLS FT", "odd": total_ft_line["price"]})
                 return strategies
         elif val == 4.5:
             if (home_stats['ft_over_45_pct'] >= 90 and away_stats['ft_over_45_pct'] >= 90 and avg_combined_scored >= 5.0):
-                strategies.append(f"⚽ +4.5 GOLS FT")
+                strategies.append({"name": f"⚽ +4.5 GOLS FT", "odd": total_ft_line["price"]})
                 return strategies
                 
     # ==========================================
@@ -1752,7 +1752,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     if btts_ft_open:
         if home_stats['btts_pct'] >= 90 and away_stats['btts_pct'] >= 90:
             if home_stats['ft_scored_05_pct'] == 100 and away_stats['ft_scored_05_pct'] == 100:
-                strategies.append(f"⚽ BTTS FT")
+                strategies.append({"name": f"⚽ BTTS FT", "odd": btts_ft_open["price"]})
                 return strategies
 
     # ==========================================
@@ -1763,15 +1763,15 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         val = home_ft_line['value']
         if val == 1.5:
             if home_stats['ft_scored_15_pct'] >= 95 and home_stats['avg_goals_scored_ft'] >= 1.8:
-                strategies.append(f"⚽ {home_raw} +1.5 GOLS FT")
+                strategies.append({"name": f"⚽ {home_raw} +1.5 GOLS FT", "odd": home_ft_line["price"]})
                 return strategies
         elif val == 2.5:
             if home_stats['ft_scored_25_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 2.8:
-                strategies.append(f"⚽ {home_raw} +2.5 GOLS FT")
+                strategies.append({"name": f"⚽ {home_raw} +2.5 GOLS FT", "odd": home_ft_line["price"]})
                 return strategies
         elif val == 3.5:
             if home_stats['ft_scored_35_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 3.8:
-                strategies.append(f"⚽ {home_raw} +3.5 GOLS FT")
+                strategies.append({"name": f"⚽ {home_raw} +3.5 GOLS FT", "odd": home_ft_line["price"]})
                 return strategies
 
     # ==========================================
@@ -1782,15 +1782,15 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         val = away_ft_line['value']
         if val == 1.5:
             if away_stats['ft_scored_15_pct'] >= 95 and away_stats['avg_goals_scored_ft'] >= 1.8:
-                strategies.append(f"⚽ {away_raw} +1.5 GOLS FT")
+                strategies.append({"name": f"⚽ {away_raw} +1.5 GOLS FT", "odd": away_ft_line["price"]})
                 return strategies
         elif val == 2.5:
             if away_stats['ft_scored_25_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 2.8:
-                strategies.append(f"⚽ {away_raw} +2.5 GOLS FT")
+                strategies.append({"name": f"⚽ {away_raw} +2.5 GOLS FT", "odd": away_ft_line["price"]})
                 return strategies
         elif val == 3.5:
             if away_stats['ft_scored_35_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 3.8:
-                strategies.append(f"⚽ {away_raw} +3.5 GOLS FT")
+                strategies.append({"name": f"⚽ {away_raw} +3.5 GOLS FT", "odd": away_ft_line["price"]})
                 return strategies
 
     return strategies
@@ -1800,7 +1800,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
 # =============================================================================
 
 
-def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
+def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_summary):
     """Formata mensagem da dica"""
     event_id = event.get('id')
     league = event.get('leagueName', 'Desconhecida')
@@ -1862,7 +1862,8 @@ def format_tip_message(event, strategy, home_stats_summary, away_stats_summary):
 
     # Liga e Estratégia
     msg += f"🏆 <b>{clean_league}</b>\n"
-    msg += f"💎 <b>{strategy}</b>\n\n"
+    msg += f"💎 <b>{strategy}</b>\n"
+    msg += f"📈 <b>Odd: {obs_odd}</b>\n\n"
 
     # Informações do jogo
     msg += f"⏱️ Tempo: {time_str} | 📊 Placar: {scoreboard}\n"
@@ -1916,7 +1917,7 @@ def get_trend_emoji(perc, inverse=False):
 # =============================================================================
 
 
-async def send_tip(bot, event, strategy, home_stats, away_stats):
+async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
     """Envia dica com metadados extras para evitar falsos greens"""
     event_id = event.get('id')
     period = 'HT' if 'HT' in strategy.upper() else 'FT'
@@ -1930,7 +1931,7 @@ async def send_tip(bot, event, strategy, home_stats, away_stats):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            msg = format_tip_message(event, strategy, home_stats, away_stats)
+            msg = format_tip_message(event, strategy, obs_odd, home_stats, away_stats)
             message_obj = await bot.send_message(
                 chat_id=CHAT_ID,
                 text=msg,
@@ -2636,10 +2637,12 @@ async def main_loop(bot):
                 # AVALIAÇÃO DINÂMICA DE MERCADOS
                 strategies = evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines)
 
-                for strategy in strategies:
+                for strat_obj in strategies:
+                    strategy_name = strat_obj['name']
+                    obs_odd = strat_obj['odd']
                     print(
-                        f"[✓] OPORTUNIDADE ENCONTRADA: {strategy} | Confidence Médio: {avg_confidence:.0f}%")
-                    await send_tip(bot, event, strategy, home_stats, away_stats)
+                        f"[✓] OPORTUNIDADE ENCONTRADA: {strategy_name} (Odd: {obs_odd}) | Confidence Médio: {avg_confidence:.0f}%")
+                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats)
                     await asyncio.sleep(1)
 
             print("[INFO] Ciclo concluído, salvando estado e aguardando 10 segundos...")
