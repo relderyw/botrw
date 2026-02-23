@@ -1653,9 +1653,13 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     # Filtra as odds de Mais (Over)
     def find_over_line(market_name_query):
         best_line = None
+        query_lower = market_name_query.lower()
         for line in open_lines:
-            # Procurar pelo mercado e garantir que não é "Menos de"
-            if market_name_query.lower() in line['market_name'].lower():
+            market_lower = line['market_name'].lower()
+            if query_lower in market_lower:
+                # Impede que a busca por FT pegue mercados de HT por ter o mesmo nome
+                if "tempo" not in query_lower and "tempo" in market_lower:
+                    continue
                 if "mais de" in line['odd_name'].lower() or line['price'] > 0:
                     # Garantir que é a linha "Mais", geralmente odd_name="Mais de 1.5" ou só "Mais"
                     if "menos" in line['odd_name'].lower(): continue
@@ -1667,8 +1671,13 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         return best_line
         
     def find_btts_line(market_name_query):
+        query_lower = market_name_query.lower()
         for line in open_lines:
-            if market_name_query.lower() in line['market_name'].lower():
+            market_lower = line['market_name'].lower()
+            if query_lower in market_lower:
+                # Impede que a busca por FT pegue mercados de HT por ter o mesmo nome
+                if "tempo" not in query_lower and "tempo" in market_lower:
+                    continue
                 if line['odd_name'].lower() == 'sim':
                     return True
         return False
