@@ -1699,49 +1699,20 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                     strategies.append(f"⚽ +2.5 GOLS HT")
                     return strategies
 
-    # Para FT strategies precisamos dar um tempinho para o odd maturar 
-    # ou já disparar caso esteja muito bom.
-    
     # ==========================================
-    # 2. GOLS JOGADOR CASA FT
+    # 2. BTTS HT
     # ==========================================
-    home_ft_line = find_over_line(f"{home_raw} total")
-    if home_ft_line:
-        val = home_ft_line['value']
-        if val == 1.5:
-            if home_stats['ft_scored_15_pct'] >= 95 and home_stats['avg_goals_scored_ft'] >= 1.8:
-                strategies.append(f"⚽ {home_raw} +1.5 GOLS FT")
-                return strategies
-        elif val == 2.5:
-            if home_stats['ft_scored_25_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 2.8:
-                strategies.append(f"⚽ {home_raw} +2.5 GOLS FT")
-                return strategies
-        elif val == 3.5:
-            if home_stats['ft_scored_35_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 3.8:
-                strategies.append(f"⚽ {home_raw} +3.5 GOLS FT")
+    if time_seconds <= 240:
+        btts_ht_open = find_btts_line("1º tempo - ambas equipes marcam") or find_btts_line("1ª tempo - ambas equipes marcam")
+        if btts_ht_open:
+            if home_stats['ht_btts_pct'] >= 85 and away_stats['ht_btts_pct'] >= 85:
+                strategies.append(f"⚽ BTTS HT")
                 return strategies
 
-    # ==========================================
-    # 3. GOLS JOGADOR FORA FT
-    # ==========================================
-    away_ft_line = find_over_line(f"{away_raw} total")
-    if away_ft_line:
-        val = away_ft_line['value']
-        if val == 1.5:
-            if away_stats['ft_scored_15_pct'] >= 95 and away_stats['avg_goals_scored_ft'] >= 1.8:
-                strategies.append(f"⚽ {away_raw} +1.5 GOLS FT")
-                return strategies
-        elif val == 2.5:
-            if away_stats['ft_scored_25_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 2.8:
-                strategies.append(f"⚽ {away_raw} +2.5 GOLS FT")
-                return strategies
-        elif val == 3.5:
-            if away_stats['ft_scored_35_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 3.8:
-                strategies.append(f"⚽ {away_raw} +3.5 GOLS FT")
-                return strategies
+    # Para FT strategies precisamos dar um tempinho para o odd maturar ou já disparar caso esteja muito bom.
 
     # ==========================================
-    # 4. TOTAL DE GOLS FT (JOGO COMPLETO)
+    # 3. TOTAL DE GOLS FT (JOGO COMPLETO)
     # ==========================================
     total_ft_line = find_over_line("Total de Gols")
     if total_ft_line:
@@ -1764,25 +1735,53 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             if (home_stats['ft_over_45_pct'] >= 90 and away_stats['ft_over_45_pct'] >= 90 and avg_combined_scored >= 5.0):
                 strategies.append(f"⚽ +4.5 GOLS FT")
                 return strategies
-
+                
     # ==========================================
-    # 5. BTTS HT
-    # ==========================================
-    if time_seconds <= 240:
-        btts_ht_open = find_btts_line("1º tempo - ambas equipes marcam") or find_btts_line("1ª tempo - ambas equipes marcam")
-        if btts_ht_open:
-            if home_stats['ht_btts_pct'] >= 85 and away_stats['ht_btts_pct'] >= 85:
-                strategies.append(f"⚽ BTTS HT")
-                return strategies
-
-    # ==========================================
-    # 6. BTTS FT
+    # 4. BTTS FT
     # ==========================================
     btts_ft_open = find_btts_line("Ambas equipes marcam")
     if btts_ft_open:
         if home_stats['btts_pct'] >= 90 and away_stats['btts_pct'] >= 90:
             if home_stats['ft_scored_05_pct'] == 100 and away_stats['ft_scored_05_pct'] == 100:
                 strategies.append(f"⚽ BTTS FT")
+                return strategies
+
+    # ==========================================
+    # 5. GOLS JOGADOR CASA FT
+    # ==========================================
+    home_ft_line = find_over_line(f"{home_raw} total")
+    if home_ft_line:
+        val = home_ft_line['value']
+        if val == 1.5:
+            if home_stats['ft_scored_15_pct'] >= 95 and home_stats['avg_goals_scored_ft'] >= 1.8:
+                strategies.append(f"⚽ {home_raw} +1.5 GOLS FT")
+                return strategies
+        elif val == 2.5:
+            if home_stats['ft_scored_25_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 2.8:
+                strategies.append(f"⚽ {home_raw} +2.5 GOLS FT")
+                return strategies
+        elif val == 3.5:
+            if home_stats['ft_scored_35_pct'] >= 90 and home_stats['avg_goals_scored_ft'] >= 3.8:
+                strategies.append(f"⚽ {home_raw} +3.5 GOLS FT")
+                return strategies
+
+    # ==========================================
+    # 6. GOLS JOGADOR FORA FT
+    # ==========================================
+    away_ft_line = find_over_line(f"{away_raw} total")
+    if away_ft_line:
+        val = away_ft_line['value']
+        if val == 1.5:
+            if away_stats['ft_scored_15_pct'] >= 95 and away_stats['avg_goals_scored_ft'] >= 1.8:
+                strategies.append(f"⚽ {away_raw} +1.5 GOLS FT")
+                return strategies
+        elif val == 2.5:
+            if away_stats['ft_scored_25_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 2.8:
+                strategies.append(f"⚽ {away_raw} +2.5 GOLS FT")
+                return strategies
+        elif val == 3.5:
+            if away_stats['ft_scored_35_pct'] >= 90 and away_stats['avg_goals_scored_ft'] >= 3.8:
+                strategies.append(f"⚽ {away_raw} +3.5 GOLS FT")
                 return strategies
 
     return strategies
