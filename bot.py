@@ -1663,6 +1663,9 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                 if "mais de" in line['odd_name'].lower() or line['price'] > 0:
                     # Garantir que é a linha "Mais", geralmente odd_name="Mais de 1.5" ou só "Mais"
                     if "menos" in line['odd_name'].lower(): continue
+                    # Requisito mínimo de odd 1.70
+                    if line['price'] < 1.70:
+                        continue
                     sv_val = parse_line(line['odd_sv'])
                     if sv_val is not None:
                         # Priorizar a menor linha possível que está aberta
@@ -1679,7 +1682,9 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                 if "tempo" not in query_lower and "tempo" in market_lower:
                     continue
                 if line['odd_name'].lower() == 'sim':
-                    return line
+                    # Requisito mínimo de odd 1.70
+                    if line['price'] >= 1.70:
+                        return line
         return None
 
     print(f"[DEBUG EVAL] Avaliando linhas abertas {event['id']} ({time_seconds}s)")
