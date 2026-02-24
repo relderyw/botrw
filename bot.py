@@ -311,11 +311,26 @@ def get_player_ft_goals(player_nick: str, match: dict) -> int:
 def find_best_match_for_tip(tip, recent_matches):
     """Matching seguro: tempo, placar, começou depois da tip"""
     tip_time = tip['sent_time']
-    h_nick = extract_pure_nick(tip.get('homeRaw') or tip.get('homeTeamName') or tip.get('homePlayer') or '')
-    a_nick = extract_pure_nick(tip.get('awayRaw') or tip.get('awayTeamName') or tip.get('awayPlayer') or '')
+    # Garantir que tip_time tem timezone
+    if tip_time.tzinfo is None:
+        tip_time = tip_time.replace(tzinfo=MANAUS_TZ)
+
+    # Campos snake_case (como salvo em sent_tips) e camelCase (compatibilidade)
+    h_nick = extract_pure_nick(
+        tip.get('homeRaw') or tip.get('home_player') or
+        tip.get('homeTeamName') or tip.get('homePlayer') or ''
+    )
+    a_nick = extract_pure_nick(
+        tip.get('awayRaw') or tip.get('away_player') or
+        tip.get('awayTeamName') or tip.get('awayPlayer') or ''
+    )
     tip_nicks = {h_nick, a_nick} - {''}
 
     print(f"[DEBUG NICK] Tip: {h_nick} vs {a_nick} | {tip_time.strftime('%H:%M:%S')}")
+
+    if not tip_nicks:
+        print(f"[DEBUG NICK] Nenhum nick extraído da tip — pulando")
+        return None
 
     best = None
     best_delta = float('inf')
@@ -330,11 +345,17 @@ def find_best_match_for_tip(tip, recent_matches):
 
         try:
             dt_str = m.get('data_realizacao', '')
+            if not dt_str:
+                continue
             if 'T' in dt_str or 'Z' in dt_str:
                 dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
             else:
                 dt = datetime.strptime(dt_str, '%d/%m/%Y %H:%M:%S')
-            m_time = dt.replace(tzinfo=timezone(timedelta(hours=-4)))
+            # Converter para MANAUS_TZ de forma segura
+            if dt.tzinfo is not None:
+                m_time = dt.astimezone(MANAUS_TZ)
+            else:
+                m_time = dt.replace(tzinfo=MANAUS_TZ)
             delta = (m_time - tip_time).total_seconds()
 
             if delta < -180 or abs(delta) > 1500:
