@@ -158,54 +158,109 @@ def map_league_name(name):
     return name
 
 def save_state():
-    """Salva o estado do bot em um arquivo JSON"""
+    """Salva estado operacional em bot_state.json e tips pendentes em tips_pending.json"""
     try:
+        # 1. Estado operacional (sem tips)
         state = {
             'last_league_message_id': last_league_message_id,
             'league_stats': league_stats,
             'last_league_update_time': last_league_update_time,
             'last_summary': last_summary,
-            'daily_stats': daily_stats,
             'last_daily_message_date': last_daily_message_date,
             'sent_match_ids': list(sent_match_ids),
-            'sent_tips': [
-                {**tip, 'sent_time': tip['sent_time'].isoformat()}
-                for tip in sent_tips
-            ]
         }
-        with open('bot_state.json', 'w') as f:
-            json.dump(state, f, indent=4)
-        print("[DEBUG] Estado salvo com sucesso")
+        with open('bot_state.json', 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=4, ensure_ascii=False)
+
+        # 2. Tips pendentes (aguardando resultado)
+        pending = [
+            {**tip, 'sent_time': tip['sent_time'].isoformat()}
+            for tip in sent_tips if tip.get('status') == 'pending'
+        ]
+        with open('tips_pending.json', 'w', encoding='utf-8') as f:
+            json.dump(pending, f, indent=4, ensure_ascii=False)
+
+        print(f"[DEBUG] Estado salvo: {len(pending)} tips pendentes")
     except Exception as e:
         print(f"[ERROR] save_state: {e}")
 
 
-def load_state():
-    """Carrega o estado do bot de um arquivo JSON"""
-    global last_league_message_id, league_stats, last_league_update_time, last_summary, sent_match_ids, sent_tips
-    global daily_stats, last_daily_message_date
+def save_tip_result(tip, ht_home, ht_away, ft_home, ft_away):
+    """Persiste resultado confirmado em tips_results.json agrupado por data."""
     try:
+        results = {}
+        if os.path.exists('tips_results.json'):
+            with open('tips_results.json', 'r', encoding='utf-8') as f:
+                results = json.load(f)
+
+        sent_time = tip['sent_time']
+        if isinstance(sent_time, str):
+            sent_time = datetime.fromisoformat(sent_time)
+        date_key = sent_time.astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
+
+        if date_key not in results:
+            results[date_key] = []
+
+        results[date_key].append({
+            'sent_time': sent_time.isoformat(),
+            'strategy': tip.get('strategy', ''),
+            'status': tip.get('status', ''),
+            'home_player': tip.get('home_player', ''),
+            'away_player': tip.get('away_player', ''),
+            'league': tip.get('league', ''),
+            'tip_period': tip.get('tip_period', ''),
+            'message_id': tip.get('message_id'),
+            'result_ht': f"{ht_home}-{ht_away}",
+            'result_ft': f"{ft_home}-{ft_away}",
+        })
+
+        with open('tips_results.json', 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"[ERROR] save_tip_result: {e}")
+
+
+def load_state():
+    """Carrega estado operacional de bot_state.json, tips pendentes de tips_pending.json
+    e reconstrói daily_stats a partir de tips_results.json."""
+    global last_league_message_id, league_stats, last_league_update_time, last_summary
+    global sent_match_ids, sent_tips, daily_stats, last_daily_message_date
+    try:
+        # 1. Estado operacional
         if os.path.exists('bot_state.json'):
-            with open('bot_state.json', 'r') as f:
+            with open('bot_state.json', 'r', encoding='utf-8') as f:
                 state = json.load(f)
-                last_league_message_id = state.get('last_league_message_id')
-                league_stats = state.get('league_stats', {})
-                last_league_update_time = state.get('last_league_update_time', 0)
-                last_summary = state.get('last_summary')
-                daily_stats = state.get('daily_stats', {})
-                last_daily_message_date = state.get('last_daily_message_date')
-                sent_match_ids = set(state.get('sent_match_ids', []))
-                
-                # Carregar sent_tips e converter datas de volta
-                raw_tips = state.get('sent_tips', [])
-                sent_tips = []
-                for tip in raw_tips:
-                    try:
-                        tip['sent_time'] = datetime.fromisoformat(tip['sent_time'])
-                        sent_tips.append(tip)
-                    except:
-                        continue
-            print(f"[DEBUG] Estado carregado com sucesso ({len(sent_tips)} tips pendentes)")
+            last_league_message_id = state.get('last_league_message_id')
+            league_stats = state.get('league_stats', {})
+            last_league_update_time = state.get('last_league_update_time', 0)
+            last_summary = state.get('last_summary')
+            last_daily_message_date = state.get('last_daily_message_date')
+            sent_match_ids = set(state.get('sent_match_ids', []))
+
+        # 2. Tips pendentes
+        sent_tips = []
+        if os.path.exists('tips_pending.json'):
+            with open('tips_pending.json', 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            for tip in raw:
+                try:
+                    tip['sent_time'] = datetime.fromisoformat(tip['sent_time'])
+                    sent_tips.append(tip)
+                except:
+                    continue
+
+        # 3. Reconstrói daily_stats a partir dos resultados históricos
+        daily_stats = {}
+        if os.path.exists('tips_results.json'):
+            with open('tips_results.json', 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            for date_key, tips_list in results.items():
+                g = sum(1 for t in tips_list if t.get('status') == 'green')
+                r = sum(1 for t in tips_list if t.get('status') == 'red')
+                daily_stats[date_key] = {'green': g, 'red': r}
+
+        print(f"[DEBUG] Estado carregado: {len(sent_tips)} tips pendentes, "
+              f"{sum(v['green']+v['red'] for v in daily_stats.values())} resultados históricos")
     except Exception as e:
         print(f"[ERROR] load_state: {e}")
 
@@ -2221,15 +2276,17 @@ async def check_results(bot):
                 await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
                 print(f"[\u2713] {result.upper()} APLICADO - {strategy}")
 
-        # Recalcular daily_stats para os dias presentes no sent_tips
-        dates_in_sent_tips = {t['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d') for t in sent_tips}
-        for d_str in dates_in_sent_tips:
-            daily_stats[d_str] = {'green': 0, 'red': 0}
-            
-        for tip in sent_tips:
-            if tip['status'] in ('green', 'red'):
-                d_str = tip['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
-                daily_stats[d_str][tip['status']] += 1
+                # Persistir resultado imediatamente no tips_results.json
+                save_tip_result(tip, ht_home, ht_away, ft_home_total, ft_away_total)
+
+                # Atualizar daily_stats em memória
+                d_key = tip['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
+                if d_key not in daily_stats:
+                    daily_stats[d_key] = {'green': 0, 'red': 0}
+                daily_stats[d_key][result] += 1
+
+        # Remover da memória tips já resolvidas (já foram salvas em tips_results.json)
+        sent_tips[:] = [t for t in sent_tips if t.get('status') == 'pending']
 
         # Resumo contínuo do dia HOJE
         today_greens = daily_stats.get(today_str, {}).get('green', 0)
