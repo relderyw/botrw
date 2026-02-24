@@ -276,6 +276,92 @@ def clean_player_name(name):
     return outside
 
 
+def extract_pure_nick(raw: str) -> str:
+    """Extrai APENAS o nick do jogador - sem lista de times"""
+    if not raw or not isinstance(raw, str):
+        return ""
+    name = raw.strip()
+    match = re.search(r'\(([^)]+)\)', name)
+    if match:
+        inside = match.group(1).strip()
+        if 2 <= len(inside) <= 16 and (inside.isupper() or '_' in inside or any(c.isdigit() for c in inside)):
+            return inside.upper()
+    cleaned = clean_player_name(name)
+    words = re.findall(r'\b[A-Z0-9_]+\b', cleaned.upper())
+    for word in reversed(words):
+        if 2 <= len(word) <= 15:
+            return word
+    return cleaned.upper()[:15]
+
+
+def get_player_ft_goals(player_nick: str, match: dict) -> int:
+    """Gols do jogador no FT, respeitando home/away"""
+    if not player_nick or not match:
+        return 0
+    p_nick = player_nick.upper().strip()
+    home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
+    away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
+    if p_nick == home_nick:
+        return int(match.get('home_score_ft', 0) or 0)
+    if p_nick == away_nick:
+        return int(match.get('away_score_ft', 0) or 0)
+    return 0
+
+
+def find_best_match_for_tip(tip, recent_matches):
+    """Matching seguro: tempo, placar, começou depois da tip"""
+    tip_time = tip['sent_time']
+    h_nick = extract_pure_nick(tip.get('homeRaw') or tip.get('homeTeamName') or tip.get('homePlayer') or '')
+    a_nick = extract_pure_nick(tip.get('awayRaw') or tip.get('awayTeamName') or tip.get('awayPlayer') or '')
+    tip_nicks = {h_nick, a_nick} - {''}
+
+    print(f"[DEBUG NICK] Tip: {h_nick} vs {a_nick} | {tip_time.strftime('%H:%M:%S')}")
+
+    best = None
+    best_delta = float('inf')
+
+    for m in recent_matches:
+        m_h = extract_pure_nick(m.get('home_player') or m.get('home_team') or '')
+        m_a = extract_pure_nick(m.get('away_player') or m.get('away_team') or '')
+        m_nicks = {m_h, m_a} - {''}
+
+        if not (tip_nicks & m_nicks):
+            continue
+
+        try:
+            dt_str = m.get('data_realizacao', '')
+            if 'T' in dt_str or 'Z' in dt_str:
+                dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+            else:
+                dt = datetime.strptime(dt_str, '%d/%m/%Y %H:%M:%S')
+            m_time = dt.replace(tzinfo=timezone(timedelta(hours=-4)))
+            delta = (m_time - tip_time).total_seconds()
+
+            if delta < -180 or abs(delta) > 1500:
+                continue
+        except:
+            continue
+
+        try:
+            sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
+            final_h = int(m.get('home_score_ft', 0) or 0)
+            final_a = int(m.get('away_score_ft', 0) or 0)
+            if sent_h > final_h or sent_a > final_a:
+                continue
+        except:
+            pass
+
+        score = abs(delta)
+        if score < best_delta:
+            best_delta = score
+            best = m
+
+    if best and best_delta <= 1500:
+        print(f"[\u2713 MATCH SEGURO] delta {best_delta/60:.1f}min")
+        return best
+    print(f"[\u2717 SEM MATCH SEGURO]")
+    return None
+
 
 # =============================================================================
 # FUNÇÕES DE REQUISIÇÃO
@@ -1964,6 +2050,19 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
             )
             sent_match_ids.add(sent_key)
             
+            # Determinar jogador tipped
+            tipped_player = None
+            tipped_nick = ""
+            strategy_lower = strategy.lower()
+            for p in [event.get('homePlayer'), event.get('awayPlayer')]:
+                if p and p.lower() in strategy_lower:
+                    tipped_player = p
+                    tipped_nick = extract_pure_nick(p)
+                    break
+            if not tipped_player:
+                tipped_player = event.get('homePlayer')
+                tipped_nick = extract_pure_nick(tipped_player)
+
             sent_tips.append({
                 'event_id': event_id,
                 'strategy': strategy,
@@ -1980,7 +2079,10 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
                 'awayTeamName': event.get('awayTeamName', ''),
                 'liveTimeRaw': event.get('liveTimeRaw', ''),
                 'startDateRaw': event.get('startDateRaw', ''),
-                'sent_scoreboard': event.get('scoreboard', '0-0')
+                'sent_scoreboard': event.get('scoreboard', '0-0'),
+                # CAMPOS NOVOS
+                'tipped_player_nick': tipped_nick,
+                'tipped_player_raw': tipped_player
             })
             save_state()
             print(f"[✓] Dica enviada: {event_id} - {strategy} ({period}) @ {sent_minute} min")
@@ -2034,104 +2136,55 @@ async def check_results(bot):
             key = f"{home}_{away}"
             tip_league = tip.get('league', '').upper().strip()
 
-            candidates = finished_matches.get(key, [])
-            matched = None
-
-            def get_time_delta(x):
-                try:
-                    dt_str = x.get('data_realizacao', '')
-                    if not dt_str: return float('inf')
-                    if 'Z' in dt_str or 'T' in dt_str:
-                        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-                    else:
-                        dt = datetime.fromisoformat(dt_str)
-                    local = dt.astimezone(MANAUS_TZ) if dt.tzinfo else dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
-                    return abs((local - tip['sent_time']).total_seconds())
-                except:
-                    return float('inf')
-
-            # Ordena por menor diferença de tempo
-            for m in sorted(candidates, key=get_time_delta):
-                match_league = m.get('league_name', '').upper().strip()
-
-                # 1. Liga tolerante (Aceitar 'UNKNOWN' vindo do histórico)
-                if tip_league and match_league != 'UNKNOWN' and tip_league.split()[0] not in match_league:
-                    continue
-
-                # 2. TEMPO CRÍTICO: só aceita jogo que começou DEPOIS da tip (ou no máximo 2 min antes)
-                try:
-                    dt_str = m.get('data_realizacao', '')
-                    if 'Z' in dt_str or 'T' in dt_str:
-                        match_dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-                    else:
-                        match_dt = datetime.fromisoformat(dt_str)
-                    match_local = match_dt.astimezone(MANAUS_TZ) if match_dt.tzinfo else match_dt.replace(tzinfo=SAO_PAULO_TZ).astimezone(MANAUS_TZ)
-
-                    if match_local < tip['sent_time'] - timedelta(minutes=2):
-                        print(f"[DEBUG ANTERIOR] Ignorado jogo antigo: {match_local}")
-                        continue
-                except:
-                    continue
-
-                # 3. Times ultra tolerante
-                tip_home = tip.get('homeTeamName', '').lower()
-                tip_away = tip.get('awayTeamName', '').lower()
-                match_home = (m.get('home_team') or m.get('homeTeamName') or '').lower()
-                match_away = (m.get('away_team') or m.get('awayTeamName') or '').lower()
-
-                team_ok = True
-                if tip_home and match_home:
-                    if not (tip_home in match_home or match_home in tip_home or tip_home.split()[0] in match_home):
-                        team_ok = False
-                if tip_away and match_away:
-                    if not (tip_away in match_away or match_away in tip_away or tip_away.split()[0] in match_away):
-                        team_ok = False
-                        
-                # PERMISSIVO: Se os times não baterem por nome diferente (ex: PSG vs Paris Saint-Germain), 
-                # perdoamos se a diferença de tempo for pequena (< 15 minutos).
-                if not team_ok:
-                    if get_time_delta(m) > 900:
-                        continue
-
-                # 4. Placar inicial compatível
-                sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-                final_h = int(m.get('home_score_ft', 0))
-                final_a = int(m.get('away_score_ft', 0))
-                if sent_h > final_h or sent_a > final_a:
-                    continue
-
-                matched = m
-                print(f"[MATCH OK] {key} | delta={get_time_delta(m)/60:.1f}min | times OK")
-                break
-
+            matched = find_best_match_for_tip(tip, recent)
             if not matched:
-                print(f"[NO MATCH] {key} - nenhum candidato válido")
+                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match seguro")
                 continue
 
-            # Avaliação do resultado
-            ht_total = int(matched.get('home_score_ht',0)) + int(matched.get('away_score_ht',0))
-            ft_total = int(matched.get('home_score_ft',0)) + int(matched.get('away_score_ft',0))
             strategy = tip['strategy']
-            result = None
+            tipped_nick = tip.get('tipped_player_nick', '')
 
-            if '+0.5 GOL HT' in strategy: result = 'green' if ht_total >= 1 else 'red'
-            elif '+1.5 GOLS HT' in strategy: result = 'green' if ht_total >= 2 else 'red'
-            elif 'BTTS HT' in strategy: result = 'green' if (matched.get('home_score_ht',0)>0 and matched.get('away_score_ht',0)>0) else 'red'
-            elif '+1.5 GOLS FT' in strategy: result = 'green' if ft_total >= 2 else 'red'
-            elif '+2.5 GOLS FT' in strategy: result = 'green' if ft_total >= 3 else 'red'
-            elif '+3.5 GOLS FT' in strategy: result = 'green' if ft_total >= 4 else 'red'
+            ht_total = int(matched.get('home_score_ht', 0) or 0) + int(matched.get('away_score_ht', 0) or 0)
+            ft_total = int(matched.get('home_score_ft', 0) or 0) + int(matched.get('away_score_ft', 0) or 0)
+
+            result = None
+            if '+0.5 GOL HT' in strategy:
+                result = 'green' if ht_total >= 1 else 'red'
+            elif '+1.5 GOLS HT' in strategy:
+                result = 'green' if ht_total >= 2 else 'red'
+            elif 'BTTS HT' in strategy:
+                result = 'green' if (matched.get('home_score_ht',0)>0 and matched.get('away_score_ht',0)>0) else 'red'
+            elif '+1.5 GOLS FT' in strategy:
+                if tipped_nick:
+                    gols = get_player_ft_goals(tipped_nick, matched)
+                    result = 'green' if gols >= 2 else 'red'
+                else:
+                    result = 'green' if ft_total >= 2 else 'red'
+            elif '+2.5 GOLS FT' in strategy:
+                if tipped_nick:
+                    gols = get_player_ft_goals(tipped_nick, matched)
+                    result = 'green' if gols >= 3 else 'red'
+                else:
+                    result = 'green' if ft_total >= 3 else 'red'
+            elif '+3.5 GOLS FT' in strategy:
+                if tipped_nick:
+                    gols = get_player_ft_goals(tipped_nick, matched)
+                    result = 'green' if gols >= 4 else 'red'
+                else:
+                    result = 'green' if ft_total >= 4 else 'red'
 
             if result:
                 tip['status'] = result
-                emoji = "✅✅✅✅✅" if result == 'green' else "❌❌❌❌❌"
-                new_text = "━━━━━━━━━━━━━━━━━━━━\n📊 RESULTADO DA OPERAÇÃO\n━━━━━━━━━━━━━━━━━━━━\n\n"
-                new_text += f"🏆 {tip.get('league','')}\n"
-                new_text += f"💎 {strategy}\n"
-                new_text += f"🎮 {home} vs {away}\n\n"
-                new_text += f"📊 Resultado: HT {matched.get('home_score_ht',0)}-{matched.get('away_score_ht',0)} | FT {matched.get('home_score_ft',0)}-{matched.get('away_score_ft',0)}\n\n"
+                emoji = "\u2705\u2705\u2705\u2705\u2705" if result == 'green' else "\u274c\u274c\u274c\u274c\u274c"
+                new_text = "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4ca RESULTADO DA OPERA\u00c7\u00c3O\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+                new_text += f"\U0001f3c6 {tip.get('league','')}\n"
+                new_text += f"\U0001f4a0 {strategy}\n"
+                new_text += f"\U0001f3ae {tip.get('home_player')} vs {tip.get('away_player')}\n\n"
+                new_text += f"\U0001f4ca Resultado: HT {matched.get('home_score_ht',0)}-{matched.get('away_score_ht',0)} | FT {matched.get('home_score_ft',0)}-{matched.get('away_score_ft',0)}\n\n"
                 new_text += emoji
+
                 await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
-                print(f"[✓] {result.upper()} APLICADO COM SUCESSO")
+                print(f"[\u2713] {result.upper()} APLICADO - {strategy}")
 
         # Recalcular daily_stats para os dias presentes no sent_tips
         dates_in_sent_tips = {t['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d') for t in sent_tips}
