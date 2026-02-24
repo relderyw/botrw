@@ -295,16 +295,18 @@ def extract_pure_nick(raw: str) -> str:
 
 
 def get_player_ft_goals(player_nick: str, match: dict) -> int:
-    """Gols do jogador no FT, respeitando home/away"""
+    """Gols do jogador no jogo completo (HT + 2T), respeitando home/away.
+    A API interna guarda home_score_ft como gols do 2º tempo apenas,
+    portanto o total real do jogo = home_score_ht + home_score_ft."""
     if not player_nick or not match:
         return 0
     p_nick = player_nick.upper().strip()
     home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
     away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
     if p_nick == home_nick:
-        return int(match.get('home_score_ft', 0) or 0)
+        return int(match.get('home_score_ht', 0) or 0) + int(match.get('home_score_ft', 0) or 0)
     if p_nick == away_nick:
-        return int(match.get('away_score_ft', 0) or 0)
+        return int(match.get('away_score_ht', 0) or 0) + int(match.get('away_score_ft', 0) or 0)
     return 0
 
 
@@ -358,15 +360,20 @@ def find_best_match_for_tip(tip, recent_matches):
                 m_time = dt.replace(tzinfo=MANAUS_TZ)
             delta = (m_time - tip_time).total_seconds()
 
-            if delta < -180 or abs(delta) > 1500:
+            # Lower bound: -1200s (-20 min) para cobrir tips enviadas no meio do jogo.
+            # data_realizacao é o INÍCIO do jogo; se a tip foi enviada no min 8 de
+            # um jogo de 12 min, delta = -8 min = -480s. Precisa aceitar.
+            # Upper bound: 1500s (25 min) para não pegar jogos futuros.
+            if delta < -1200 or abs(delta) > 1500:
                 continue
         except:
             continue
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            final_h = int(m.get('home_score_ft', 0) or 0)
-            final_a = int(m.get('away_score_ft', 0) or 0)
+            # FT real = HT + 2T (a API interna guarda ft como só o 2º tempo)
+            final_h = int(m.get('home_score_ht', 0) or 0) + int(m.get('home_score_ft', 0) or 0)
+            final_a = int(m.get('away_score_ht', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
@@ -2165,8 +2172,15 @@ async def check_results(bot):
             strategy = tip['strategy']
             tipped_nick = tip.get('tipped_player_nick', '')
 
-            ht_total = int(matched.get('home_score_ht', 0) or 0) + int(matched.get('away_score_ht', 0) or 0)
-            ft_total = int(matched.get('home_score_ft', 0) or 0) + int(matched.get('away_score_ft', 0) or 0)
+            ht_home = int(matched.get('home_score_ht', 0) or 0)
+            ht_away = int(matched.get('away_score_ht', 0) or 0)
+            ft2_home = int(matched.get('home_score_ft', 0) or 0)  # 2º tempo apenas
+            ft2_away = int(matched.get('away_score_ft', 0) or 0)  # 2º tempo apenas
+            ht_total = ht_home + ht_away
+            # FT real = jogo completo (HT + 2º tempo)
+            ft_home_total = ht_home + ft2_home
+            ft_away_total = ht_away + ft2_away
+            ft_total = ft_home_total + ft_away_total
 
             result = None
             if '+0.5 GOL HT' in strategy:
@@ -2174,7 +2188,7 @@ async def check_results(bot):
             elif '+1.5 GOLS HT' in strategy:
                 result = 'green' if ht_total >= 2 else 'red'
             elif 'BTTS HT' in strategy:
-                result = 'green' if (matched.get('home_score_ht',0)>0 and matched.get('away_score_ht',0)>0) else 'red'
+                result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
             elif '+1.5 GOLS FT' in strategy:
                 if tipped_nick:
                     gols = get_player_ft_goals(tipped_nick, matched)
@@ -2201,7 +2215,7 @@ async def check_results(bot):
                 new_text += f"\U0001f3c6 {tip.get('league','')}\n"
                 new_text += f"\U0001f4a0 {strategy}\n"
                 new_text += f"\U0001f3ae {tip.get('home_player')} vs {tip.get('away_player')}\n\n"
-                new_text += f"\U0001f4ca Resultado: HT {matched.get('home_score_ht',0)}-{matched.get('away_score_ht',0)} | FT {matched.get('home_score_ft',0)}-{matched.get('away_score_ft',0)}\n\n"
+                new_text += f"\U0001f4ca Resultado: HT {ht_home}-{ht_away} | FT {ft_home_total}-{ft_away_total}\n\n"
                 new_text += emoji
 
                 await bot.edit_message_text(chat_id=CHAT_ID, message_id=tip['message_id'], text=new_text, parse_mode="HTML")
