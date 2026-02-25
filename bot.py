@@ -2188,7 +2188,8 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
                 'sent_scoreboard': event.get('scoreboard', '0-0'),
                 # CAMPOS NOVOS
                 'tipped_player_nick': tipped_nick,
-                'tipped_player_raw': tipped_player
+                'tipped_player_raw': tipped_player,
+                'sent_odd': obs_odd
             })
             save_state()
             print(f"[✓] Dica enviada: {event_id} - {strategy} ({period}) @ {sent_minute} min")
@@ -2291,7 +2292,11 @@ async def check_results(bot):
                 emoji = "\u2705\u2705\u2705\u2705\u2705" if result == 'green' else "\u274c\u274c\u274c\u274c\u274c"
                 new_text = "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\U0001f4ca RESULTADO DA OPERA\u00c7\u00c3O\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
                 new_text += f"\U0001f3c6 {tip.get('league','')}\n"
-                new_text += f"\U0001f4a0 {strategy}\n"
+                new_text += f"\U0001f4a0 {strategy}"
+                if tip.get('sent_odd'):
+                    new_text += f" (@{tip.get('sent_odd')})\n"
+                else:
+                    new_text += "\n"
                 new_text += f"\U0001f3ae {tip.get('home_player')} vs {tip.get('away_player')}\n\n"
                 new_text += f"\U0001f4ca Resultado: HT {ht_home}-{ht_away} | FT {ft_home_total}-{ft_away_total}\n\n"
                 new_text += emoji
