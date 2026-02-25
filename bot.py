@@ -350,18 +350,16 @@ def extract_pure_nick(raw: str) -> str:
 
 
 def get_player_ft_goals(player_nick: str, match: dict) -> int:
-    """Gols do jogador no jogo completo (HT + 2T), respeitando home/away.
-    A API interna guarda home_score_ft como gols do 2º tempo apenas,
-    portanto o total real do jogo = home_score_ht + home_score_ft."""
+    """Gols do jogador no jogo completo."""
     if not player_nick or not match:
         return 0
     p_nick = player_nick.upper().strip()
     home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
     away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
     if p_nick == home_nick:
-        return int(match.get('home_score_ht', 0) or 0) + int(match.get('home_score_ft', 0) or 0)
+        return int(match.get('home_score_ft', 0) or 0)
     if p_nick == away_nick:
-        return int(match.get('away_score_ht', 0) or 0) + int(match.get('away_score_ft', 0) or 0)
+        return int(match.get('away_score_ft', 0) or 0)
     return 0
 
 
@@ -428,11 +426,14 @@ def find_best_match_for_tip(tip, recent_matches):
             else:
                 dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
             
-            # Converter para MANAUS_TZ de forma segura
+            # Se a string veio formatada sem timezone explícito, ela está no horário de São Paulo (UTC-3).
+            # Precisamos forçar para America/Sao_Paulo antes de converter para MANAUS_TZ (UTC-4).
             if dt.tzinfo is not None:
                 m_time = dt.astimezone(MANAUS_TZ)
             else:
-                m_time = dt.replace(tzinfo=MANAUS_TZ)
+                import pytz
+                sp_tz = pytz.timezone('America/Sao_Paulo')
+                m_time = sp_tz.localize(dt).astimezone(MANAUS_TZ)
                 
             is_internal = str(m.get('id', '')).startswith('int_')
             
@@ -473,9 +474,9 @@ def find_best_match_for_tip(tip, recent_matches):
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            # FT real = HT + 2T
-            final_h = int(m.get('home_score_ht', 0) or 0) + int(m.get('home_score_ft', 0) or 0)
-            final_a = int(m.get('away_score_ht', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
+            # FT real = o placar final já entregue
+            final_h = int(m.get('home_score_ft', 0) or 0)
+            final_a = int(m.get('away_score_ft', 0) or 0)
             
             # Se a tip foi enviada com um placar maior que o placar final do histórico, é jogo antigo
             if sent_h > final_h or sent_a > final_a:
@@ -2279,12 +2280,9 @@ async def check_results(bot):
 
             ht_home = int(matched.get('home_score_ht', 0) or 0)
             ht_away = int(matched.get('away_score_ht', 0) or 0)
-            ft2_home = int(matched.get('home_score_ft', 0) or 0)  # 2º tempo apenas
-            ft2_away = int(matched.get('away_score_ft', 0) or 0)  # 2º tempo apenas
+            ft_home_total = int(matched.get('home_score_ft', 0) or 0)
+            ft_away_total = int(matched.get('away_score_ft', 0) or 0)
             ht_total = ht_home + ht_away
-            # FT real = jogo completo (HT + 2º tempo)
-            ft_home_total = ht_home + ft2_home
-            ft_away_total = ht_away + ft2_away
             ft_total = ft_home_total + ft_away_total
 
             result = None
