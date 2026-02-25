@@ -389,8 +389,24 @@ def find_best_match_for_tip(tip, recent_matches):
         print(f"[DEBUG NICK] Nenhum nick extraído da tip — pulando")
         return None
 
+    # Calcular uma estimativa de quando o jogo começou
+    tip_start_time = None
+    if tip.get('startDateRaw'):
+        try:
+            dt_start = datetime.fromisoformat(tip['startDateRaw'].replace('Z', '+00:00'))
+            if dt_start.tzinfo is not None:
+                tip_start_time = dt_start.astimezone(MANAUS_TZ)
+            else:
+                tip_start_time = dt_start.replace(tzinfo=MANAUS_TZ)
+        except:
+            pass
+            
+    if not tip_start_time:
+        sent_min = tip.get('sent_minute', 0)
+        tip_start_time = tip_time - timedelta(minutes=sent_min)
+
     best = None
-    best_delta = float('inf')
+    best_diff = float('inf')
 
     for m in recent_matches:
         m_h = extract_pure_nick(m.get('home_player') or m.get('home_team') or '')
@@ -399,6 +415,9 @@ def find_best_match_for_tip(tip, recent_matches):
 
         if not (tip_nicks & m_nicks):
             continue
+            
+        start_diff = float('inf')
+        m_time = None
 
         try:
             dt_str = m.get('data_realizacao', '')
@@ -408,39 +427,43 @@ def find_best_match_for_tip(tip, recent_matches):
                 dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
             else:
                 dt = datetime.strptime(dt_str, '%d/%m/%Y %H:%M:%S')
+            
             # Converter para MANAUS_TZ de forma segura
             if dt.tzinfo is not None:
                 m_time = dt.astimezone(MANAUS_TZ)
             else:
                 m_time = dt.replace(tzinfo=MANAUS_TZ)
-            delta = (m_time - tip_time).total_seconds()
-
-            # Lower bound: -1200s (-20 min) para cobrir tips enviadas no meio do jogo.
-            # data_realizacao é o INÍCIO do jogo; se a tip foi enviada no min 8 de
-            # um jogo de 12 min, delta = -8 min = -480s. Precisa aceitar.
-            # Upper bound: 1500s (25 min) para não pegar jogos futuros.
-            if delta < -1200 or abs(delta) > 1500:
+                
+            # Calcular a diferença exata entre o start_time real (history) e o da tip
+            start_diff = abs((m_time - tip_start_time).total_seconds())
+            
+            # Rejeitar imediatamente se o jogo começou com mais de 10 min de diferença
+            # do horário que a tip diz que o jogo começou. Impede pegar jogo passado.
+            if start_diff > 600:
                 continue
+                
         except:
             continue
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            # FT real = HT + 2T (a API interna guarda ft como só o 2º tempo)
+            # FT real = HT + 2T
             final_h = int(m.get('home_score_ht', 0) or 0) + int(m.get('home_score_ft', 0) or 0)
             final_a = int(m.get('away_score_ht', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
+            
+            # Se a tip foi enviada com um placar maior que o placar final do histórico, é outro jogo
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
             pass
 
-        score = abs(delta)
-        if score < best_delta:
-            best_delta = score
+        # Usar o start_diff para escolher o jogo mais sincronizado possível
+        if start_diff < best_diff:
+            best_diff = start_diff
             best = m
 
-    if best and best_delta <= 1500:
-        print(f"[\u2713 MATCH SEGURO] delta {best_delta/60:.1f}min")
+    if best and best_diff <= 600:
+        print(f"[\u2713 MATCH SEGURO] start_diff {best_diff/60:.1f}min")
         return best
     print(f"[\u2717 SEM MATCH SEGURO]")
     return None
