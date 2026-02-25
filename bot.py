@@ -423,10 +423,10 @@ def find_best_match_for_tip(tip, recent_matches):
             dt_str = m.get('data_realizacao', '')
             if not dt_str:
                 continue
-            if 'T' in dt_str or 'Z' in dt_str:
-                dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+            if 'T' in str(dt_str) or 'Z' in str(dt_str):
+                dt = datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
             else:
-                dt = datetime.strptime(dt_str, '%d/%m/%Y %H:%M:%S')
+                dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
             
             # Converter para MANAUS_TZ de forma segura
             if dt.tzinfo is not None:
@@ -434,15 +434,23 @@ def find_best_match_for_tip(tip, recent_matches):
             else:
                 m_time = dt.replace(tzinfo=MANAUS_TZ)
                 
-            # Calcular a diferença exata entre o start_time real (history) e o da tip
-            start_diff = abs((m_time - tip_start_time).total_seconds())
+            # Calcular a diferença de tempo real entre o início do jogo e o envio da tip
+            delta_seconds = (m_time - tip_start_time).total_seconds()
             
-            # Rejeitar imediatamente se o jogo começou com mais de 10 min de diferença
-            # do horário que a tip diz que o jogo começou. Impede pegar jogo passado.
-            if start_diff > 600:
+            # Queremos EXATAMENTE o próximo jogo que os dois jogaram após a tip ser enviada.
+            # Aceitamos que o jogo do histórico possa ter começado no MÁXIMO 3 minutos antes do envio da tip
+            # (pois a tip aposta no live, então o jogo de fato já começou um pouco antes).
+            if delta_seconds < -180:
                 continue
                 
-        except:
+            # Se a diferença for muito grande no futuro (ex: > 30 minutos), é outro jogo muito adiante, 
+            # não o que estávamos acompanhando na tip principal.
+            if delta_seconds > 1800:
+                continue
+                
+            start_diff = abs(delta_seconds)
+                
+        except Exception as e:
             continue
 
         try:
@@ -451,18 +459,18 @@ def find_best_match_for_tip(tip, recent_matches):
             final_h = int(m.get('home_score_ht', 0) or 0) + int(m.get('home_score_ft', 0) or 0)
             final_a = int(m.get('away_score_ht', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
             
-            # Se a tip foi enviada com um placar maior que o placar final do histórico, é outro jogo
+            # Se a tip foi enviada com um placar maior que o placar final do histórico, é jogo antigo
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
             pass
 
-        # Usar o start_diff para escolher o jogo mais sincronizado possível
+        # Usar o start_diff para escolher o jogo mais cronologicamente próximo
         if start_diff < best_diff:
             best_diff = start_diff
             best = m
 
-    if best and best_diff <= 600:
+    if best and best_diff <= 1800:
         print(f"[\u2713 MATCH SEGURO] start_diff {best_diff/60:.1f}min")
         return best
     print(f"[\u2717 SEM MATCH SEGURO]")
