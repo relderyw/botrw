@@ -434,21 +434,39 @@ def find_best_match_for_tip(tip, recent_matches):
             else:
                 m_time = dt.replace(tzinfo=MANAUS_TZ)
                 
-            # Calcular a diferença de tempo real entre o início do jogo e o envio da tip
-            delta_seconds = (m_time - tip_start_time).total_seconds()
+            is_internal = str(m.get('id', '')).startswith('int_')
             
-            # Queremos EXATAMENTE o próximo jogo que os dois jogaram após a tip ser enviada.
-            # Aceitamos que o jogo do histórico possa ter começado no MÁXIMO 3 minutos antes do envio da tip
-            # (pois a tip aposta no live, então o jogo de fato já começou um pouco antes).
-            if delta_seconds < -180:
-                continue
+            if is_internal:
+                # A API Interna salva a hora de TÉRMINO (finish time) do jogo no banco
+                delta_finish = (m_time - tip_time).total_seconds()
                 
-            # Se a diferença for muito grande no futuro (ex: > 30 minutos), é outro jogo muito adiante, 
-            # não o que estávamos acompanhando na tip principal.
-            if delta_seconds > 1800:
-                continue
+                # O jogo para o qual a tip foi mandada precisa terminar *após* a tip.
+                # Como a tip é mandada com o jogo rolando (no máximo min 8.5),
+                # o jogo vai terminar SEMPRE pelo menos ~4 minutos DEPOIS da tip.
+                # Se delta_finish for menor que 3 mins (180s), então nós garantimos
+                # que este registro é do confronto ANTERIOR que acabou recém agora!
+                if delta_finish < 180:
+                    continue
+                    
+                # Se terminou 40 minutos no futuro, é outro jogo
+                if delta_finish > 2400:
+                    continue
+                    
+                start_diff = abs(delta_finish - 600)
                 
-            start_diff = abs(delta_seconds)
+            else:
+                # A API Green365 salva a hora ESTIMADA DE INÍCIO (start time)
+                delta_start = (m_time - tip_start_time).total_seconds()
+                
+                # Se começou mais de 4 minutos antes, é o confronto passado
+                if delta_start < -240:
+                    continue
+                    
+                # Se começou muito no futuro
+                if delta_start > 2400:
+                    continue
+                    
+                start_diff = abs(delta_start)
                 
         except Exception as e:
             continue
