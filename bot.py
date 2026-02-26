@@ -34,14 +34,8 @@ LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEve
 # Event API (to get open markets)
 EVENT_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
 # Internal History API
-HISTORY_API_URL = "https://rwtips-r943.onrender.com/api/app3/history"
-# Green365 API (for H2H GG and consistent history)
-GREEN365_API_URL = "https://api-v2.green365.com.br/api/v2/sport-events"
-GREEN365_TOKEN = "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjJjMjdhZmY1YzlkNGU1MzVkNWRjMmMwNWM1YTE2N2FlMmY1NjgxYzIiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vZXVncmVlbi0yZTljMCIsImF1ZCI6ImV1Z3JlZW4tMmU5YzAiLCJhdXRoX3RpbWUiOjE3NjM4NzY2NTcsInVzZXJfaWQiOiJwM09CaFI3Wmd3VENwNnFBWFpFZWl0RGt4T0czIiwic3ViIjoicDNPQmhSN1pnd1RDcDZxQVhaRWVpdERreE9HMyIsImlhdCI6MTc3MTg4MzI4MiwiZXhwIjoxNzcxODg2ODgyLCJlbWFpbCI6InJlbGRlcnkxNDIyQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7ImVtYWlsIjpbInJlbGRlcnkxNDIyQGdtYWlsLmNvbSJdfSwic2lnbl9pbl9wcm92aWRlciI6InBhc3N3b3JkIn19.UV077zfBUUZ8twg5U0pEMmo7CI56WQgAi7gVTnYD6oh9rjIlqIIwO_PJAT9sRHF9g3j7mWAWxahjJQkNCLGxNffD8p2uFuIqryDv2pJgH5o0F27cG_5iqd8KTtsrBbhBSs8QIjn9ZiI3Z_23kjbSO6sA9IyfkvuvzHz6NSelQNlTxti_p3cSgO6x17l5HWseLcvbBtf2nrEa5BwcbIvaqI0usrKWf2dpdmOedovbxTq6SoM0jS4djq_UvRnpbZMzWIUKVHYXce4ZPjwWiBRx270s2o974JkSRW7pzMYfl6c1zfUXlqL2Q1KdsLlojk_-lhrJihr1Zx4hZwp8kwuFRw"
+HISTORY_API_URL = "https://rwtips-k8j2.onrender.com/api/history"
 
-# Legacy URLs (kept for reference/fallback)
-PLAYER_STATS_URL = "https://app3.caveiratips.com.br/app3/api/confronto/"
-H2H_API_URL = "https://rwtips-r943.onrender.com/api/v1/historico/confronto/{player1}/{player2}?page=1&limit=20"
 
 AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
 
@@ -752,75 +746,8 @@ def fetch_event_markets(event_id):
         print(f"[WARN] Erro ao buscar mercados para o evento {event_id}: {e}")
         return []
 
-def fetch_green365_h2h_specialized(num_pages=10):
-    """Busca partidas exclusivas da liga H2H GG (Competition 12887) usando stats-v2"""
-    try:
-        print(f"[INFO] Buscando H2H GG especializado (stats-v2) - {num_pages} páginas...")
-        all_matches = []
-        headers = {"Authorization": GREEN365_TOKEN}
-        URL_V2 = "https://api-v2.green365.com.br/api/v2/stats-v2/events"
-
-        import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-
-        session = requests.Session()
-        retry_strategy = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-        session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
-
-        def fetch_page(page):
-            try:
-                params = {
-                    "sport": 18,
-                    "status": "ended",
-                    "competition": 12887,
-                    "page": page,
-                    "limit": 24
-                }
-                # Timeout de 20s para garantir
-                response = session.get(URL_V2, params=params, headers=headers, timeout=20)
-                if response.status_code != 200:
-                    return []
-                return response.json().get('data', [])
-            except Exception as e:
-                print(f"[WARN] Green365 H2H page {page} error: {e}")
-                return []
-
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            pages = range(1, num_pages + 1)
-            results = list(executor.map(fetch_page, pages))
-            items = [item for sublist in results for item in sublist if sublist]
-
-        for item in items:
-            try:
-                home = item.get('home', {})
-                away = item.get('away', {})
-                all_matches.append({
-                    'id': f"h2h_{item.get('id')}",
-                    'league_name': item.get('competitionName', 'Esoccer H2H GG League - 8 mins play'),
-                    'home_player': clean_player_name(home.get('name', '')),
-                    'away_player': clean_player_name(away.get('name', '')),
-                    'home_team': home.get('teamName', ''),
-                    'away_team': away.get('teamName', ''),
-                    'home_team_logo': home.get('imageUrl', ''),
-                    'away_team_logo': away.get('imageUrl', ''),
-                    'data_realizacao': item.get('eventDate', datetime.now().isoformat()),
-                    'home_score_ht': 0, # stats-v2 não fornece HT
-                    'away_score_ht': 0,
-                    'home_score_ft': home.get('score', 0),
-                    'away_score_ft': away.get('score', 0)
-                })
-            except:
-                continue
-        return all_matches
-    except Exception as e:
-        print(f"[ERROR] Green365 H2H Specialized API falhou: {e}")
-        return []
-
-
 def fetch_recent_matches(num_pages=10, use_cache=True):
-    """Busca partidas recentes finalizadas - Unifica Internal API e Green365"""
+    """Busca partidas recentes finalizadas da API Interna"""
     global global_history_cache
 
     # Verificar cache global
@@ -830,13 +757,13 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    # Se pediram poucas páginas, aumentamos para garantir cobertura
-    fetch_pages = max(num_pages, 20)  # 20 páginas (~500 jogos)
-    print(f"[INFO] Atualizando histórico (Internal API {fetch_pages} págs + H2H GG 10 págs)...")
+    # Se pediram poucas páginas, limitamos a no máximo 10 conforme solicitado
+    fetch_pages = min(num_pages, 10)
+    print(f"[INFO] Atualizando histórico (API {fetch_pages} págs)...")
 
     # 1. Buscar da API Interna em paralelo
     internal_matches = []
-    print(f"[INFO] Buscando {fetch_pages} páginas da API Interna em paralelo...")
+    print(f"[INFO] Buscando {fetch_pages} páginas em paralelo...")
     
     # Reutilizar o mesmo padrão de sessão e retry para estabilidade
     import requests
@@ -849,7 +776,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
 
     def fetch_internal_page(page):
         try:
-            params = {'page': page, 'limit': 24}
+            params = {'page': page, 'limit': 40}
             response = int_session.get(HISTORY_API_URL, params=params, timeout=15)
             if response.status_code != 200:
                 return []
@@ -866,40 +793,45 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         for r in results:
             if r:
                 internal_matches.extend(r)
-    print(f"[INFO] API Interna retornou {len(internal_matches)} partidas.")
+    print(f"[INFO] API retornou {len(internal_matches)} partidas.")
 
-    # 2. Buscar da Green365 (especializada na liga H2H GG)
-    green_matches = fetch_green365_h2h_specialized(num_pages=10)
-
-    # 3. Processar e unificar
     all_combined = []
 
     # Processar Internal
     for m in internal_matches:
-        league = m.get('league_name', 'Unknown')
+        league = m.get('league_mapped') or m.get('league_name', 'Unknown')
         # Priorizar campos separados da API Interna se existirem
-        home_player = clean_player_name(m.get('home_player') or 
+        home_player = clean_player_name(m.get('home_nick') or 
+                                        m.get('home_player') or 
                                         m.get('player_home') or 
                                         m.get('home_player_name') or 
                                         m.get('home_player_raw') or 
                                         m.get('home_competitor_name', ''))
         
-        away_player = clean_player_name(m.get('away_player') or 
+        away_player = clean_player_name(m.get('away_nick') or 
+                                        m.get('away_player') or 
                                         m.get('player_away') or 
                                         m.get('away_player_name') or 
                                         m.get('away_player_raw') or 
                                         m.get('away_competitor_name', ''))
         
+        match_id = m.get('event_id') or m.get('id') or m.get('_id', 'unk')
+        
+        if m.get('finished_at'):
+            data_realizacao = m.get('finished_at')
+        else:
+            data_realizacao = f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat()
+            
         all_combined.append({
-            'id': f"int_{m.get('id', m.get('_id', 'unk'))}",
+            'id': f"int_{match_id}",
             'league_name': map_league_name(league),
             'home_player': home_player,
             'away_player': away_player,
-            'home_team': m.get('home_team', ''),
-            'away_team': m.get('away_team', ''),
+            'home_team': m.get('home_raw') or m.get('home_team', ''),
+            'away_team': m.get('away_raw') or m.get('away_team', ''),
             'home_team_logo': m.get('home_team_logo', ''),
             'away_team_logo': m.get('away_team_logo', ''),
-            'data_realizacao': f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat(),
+            'data_realizacao': data_realizacao,
             'home_score_ht': m.get('home_score_ht', 0) or 0,
             'away_score_ht': m.get('away_score_ht', 0) or 0,
             'home_score_ft': m.get('home_score_ft', 0) or 0,
@@ -914,14 +846,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         m = h2h_int[0]
         print(f"[DEBUG INTERNAL] Exemplo H2H: {m['home_player']} vs {m['away_player']} ({m['league_name']})")
 
-    # Processar Green365 (já normalizados mas mapear liga)
-    for m in green_matches:
-        league = m['league_name']
-        m['league_name'] = map_league_name(league)
-        # Log para depuração de liga H2H GG
-        if "H2H" in m['league_name']:
-            print(f"[DEBUG G365] Partida unificada: {m['home_player']} vs {m['away_player']} - Liga: {m['league_name']}")
-        all_combined.append(m)
+
 
     # 4. Remover duplicatas por jogadores + score + data_truncada (se necessário)
     # Por simplicidade e volume, apenas ordenar por data e confiar na unificação
@@ -979,28 +904,7 @@ def fetch_player_individual_stats(player_name, use_cache=True):
     return final_data
 
 
-def fetch_h2h_data(player1, player2):
-    """Busca dados H2H entre dois jogadores"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = H2H_API_URL.format(player1=player1, player2=player2)
-            response = requests.get(url, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            print(
-                f"[INFO] H2H {player1} vs {player2}: {data.get('total_matches', 0)} jogos")
-            return data
-        except requests.exceptions.Timeout:
-            print(
-                f"[WARN] Timeout ao buscar H2H (tentativa {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-        except Exception as e:
-            print(f"[ERROR] fetch_h2h_data {player1} vs {player2}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-    return None
+
 
 # =============================================================================
 # ANÁLISE DE ESTATÍSTICAS
