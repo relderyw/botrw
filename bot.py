@@ -757,8 +757,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    # Se pediram poucas páginas, limitamos a no máximo 10 conforme solicitado
-    fetch_pages = min(num_pages, 10)
+    # Se pediram poucas páginas, limitamos a no máximo 15 conforme solicitado
+    fetch_pages = min(num_pages, 15)
     print(f"[INFO] Atualizando histórico (API {fetch_pages} págs)...")
 
     # 1. Buscar da API Interna em paralelo
