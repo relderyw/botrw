@@ -1764,12 +1764,17 @@ def check_strategies_volta_6mins(event, home_stats, away_stats, all_league_stats
 
     return strategies
 
-def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines):
+def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines, avg_confidence):
     """
     Avalia as linhas abertas na EstrelaBet cruzando com o histórico dos jogadores.
     Segue rigorosamente a ordem de prioridade estipulada.
     """
     strategies = []
+
+    # Se a confiança geral do confronto for baixa, rejeita análises dinâmicas das odds abertas
+    if avg_confidence < 75:
+        print(f"[BLOCK DYNAMIC] Confiança média de {avg_confidence:.0f}% é muito baixa para risco em linhas dinâmicas abertas (mínimo 75%).")
+        return strategies
     
     timer = event.get('timer', {})
     minute = timer.get('minute', 0)
@@ -2762,7 +2767,7 @@ async def main_loop(bot):
                     all_league_stats = {} # Fallback
 
                 # AVALIAÇÃO DINÂMICA DE MERCADOS
-                strategies = evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines)
+                strategies = evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines, avg_confidence)
 
                 for strat_obj in strategies:
                     strategy_name = strat_obj['name']
