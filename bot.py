@@ -757,8 +757,8 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         if cache_age < HISTORY_CACHE_TTL:
             return global_history_cache['matches']
 
-    # Se pediram poucas páginas, limitamos a no máximo 15 conforme solicitado
-    fetch_pages = min(num_pages, 15)
+    # Se pediram poucas páginas, limitamos a no máximo 25 conforme solicitado
+    fetch_pages = min(num_pages, 25)
     print(f"[INFO] Atualizando histórico (API {fetch_pages} págs)...")
 
     # 1. Buscar da API Interna em paralelo
@@ -2146,7 +2146,8 @@ async def check_results(bot):
     """VERSÃO FINAL BLINDADA - só aceita jogo que começou DEPOIS da tip"""
     global last_summary, last_league_message_id, daily_stats, last_daily_message_date
     try:
-        recent = fetch_recent_matches(num_pages=30)
+        # Bypassar cache (use_cache=False) para garantir que pegamos os últimos segundos do servidor
+        recent = fetch_recent_matches(num_pages=30, use_cache=False)
         finished_matches = defaultdict(list)
         for match in recent:
             home = match.get('home_player', '').upper().strip()
@@ -2796,10 +2797,10 @@ async def results_checker(bot):
     while True:
         try:
             await check_results(bot)
-            await asyncio.sleep(300)
+            await asyncio.sleep(120)
         except Exception as e:
             print(f"[ERROR] results_checker: {e}")
-            await asyncio.sleep(300)
+            await asyncio.sleep(120)
 
 # =============================================================================
 # INICIALIZAÇÃO
