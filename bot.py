@@ -818,7 +818,9 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
         match_id = m.get('event_id') or m.get('id') or m.get('_id', 'unk')
         
         if m.get('finished_at'):
-            data_realizacao = m.get('finished_at')
+            fin_at = str(m.get('finished_at'))
+            # History API returns UTC but without explicit timezone marker 'Z', causing timezone mismatch.
+            data_realizacao = f"{fin_at}Z" if not fin_at.endswith('Z') and '+' not in fin_at else fin_at
         else:
             data_realizacao = f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat()
             
@@ -2789,10 +2791,10 @@ async def results_checker(bot):
     while True:
         try:
             await check_results(bot)
-            await asyncio.sleep(180)
+            await asyncio.sleep(300)
         except Exception as e:
             print(f"[ERROR] results_checker: {e}")
-            await asyncio.sleep(180)
+            await asyncio.sleep(300)
 
 # =============================================================================
 # INICIALIZAÇÃO
