@@ -2202,6 +2202,8 @@ async def check_results(bot):
                 result = 'green' if ht_total >= 1 else 'red'
             elif '+1.5 GOLS HT' in strategy:
                 result = 'green' if ht_total >= 2 else 'red'
+            elif '+2.5 GOLS HT' in strategy:
+                result = 'green' if ht_total >= 3 else 'red'
             elif 'BTTS HT' in strategy:
                 result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
             elif '+1.5 GOLS FT' in strategy:
@@ -2222,6 +2224,14 @@ async def check_results(bot):
                     result = 'green' if gols >= 4 else 'red'
                 else:
                     result = 'green' if ft_total >= 4 else 'red'
+            elif '+4.5 GOLS FT' in strategy:
+                if tipped_nick:
+                    gols = get_player_ft_goals(tipped_nick, matched)
+                    result = 'green' if gols >= 5 else 'red'
+                else:
+                    result = 'green' if ft_total >= 5 else 'red'
+            elif 'BTTS FT' in strategy:
+                result = 'green' if (ft_home_total > 0 and ft_away_total > 0) else 'red'
 
             if result:
                 tip['status'] = result
