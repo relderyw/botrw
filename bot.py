@@ -1772,8 +1772,8 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     strategies = []
 
     # Se a confiança geral do confronto for baixa, rejeita análises dinâmicas das odds abertas
-    if avg_confidence < 75:
-        print(f"[BLOCK DYNAMIC] Confiança média de {avg_confidence:.0f}% é muito baixa para risco em linhas dinâmicas abertas (mínimo 75%).")
+    if avg_confidence < 65:
+        print(f"[BLOCK DYNAMIC] Confiança média de {avg_confidence:.0f}% é muito baixa para risco em linhas dinâmicas abertas (mínimo 65%).")
         return strategies
     
     timer = event.get('timer', {})
@@ -2745,12 +2745,12 @@ async def main_loop(bot):
                         f"[WARN] Falha na análise das estatísticas (possível regime change detectado)")
                     continue
 
-                # FILTRO DE CONFIDENCE MÍNIMO (Média de 60%)
+                # FILTRO DE CONFIDENCE MÍNIMO (Média de 65%)
                 home_confidence = home_stats.get('confidence', 0)
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 60:
+                if avg_confidence < 65:
                     print(
                         f"[BLOCKED] Confidence médio insuficiente: {avg_confidence:.0f}% (Home: {home_confidence:.0f}%, Away: {away_confidence:.0f}%)")
                     continue
