@@ -1226,7 +1226,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     home_player = event.get('homePlayer', 'P1')
     away_player = event.get('awayPlayer', 'P2')
 
-    # 1. Obter H2H Stats (Foco em Player 1)
+    # 1. Obter H2H Stats (Foco em Player 1 para consistência)
     h2h = get_h2h_stats(home_player, away_player)
     
     # Função auxiliar para calcular média ponderada
@@ -1267,21 +1267,37 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                             best_line = {'value': sv_val, 'odd_name': line['odd_name'], 'price': line['price']}
         return best_line
 
+    def find_sim_line(market_name_query):
+        q_lower = market_name_query.lower()
+        for line in open_lines:
+            m_lower = line['market_name'].lower()
+            if q_lower in m_lower:
+                if line['odd_name'].lower() == 'sim' and line['price'] >= 1.70:
+                    return line
+        return None
+
     # --- LÓGICA HT ---
     if time_seconds <= MAX_HT_TIME and total_now == 0:
         ht_line = find_over_line("1º tempo - total") or find_over_line("1ª tempo - Total de gols")
         if ht_line:
             val = ht_line['value']
             h2h_val = h2h.get(f'ht_over_{str(val).replace(".","")}_pct', 0) if h2h else 0
+            w_pct = get_weighted_val(home_stats[f'ht_over_{str(val).replace(".","")}_pct'], away_stats[f'ht_over_{str(val).replace(".","")}_pct'], h2h_val)
             
-            if val == 0.5:
-                w_pct = get_weighted_val(home_stats['ht_over_05_pct'], away_stats['ht_over_05_pct'], h2h_val)
-                if w_pct >= 85:
-                    strategies.append({"name": "⚽ +0.5 GOL HT", "odd": ht_line["price"]})
-            elif val == 1.5:
-                w_pct = get_weighted_val(home_stats['ht_over_15_pct'], away_stats['ht_over_15_pct'], h2h_val)
-                if w_pct >= 80:
-                    strategies.append({"name": "⚽ +1.5 GOLS HT", "odd": ht_line["price"]})
+            print(f"[DEBUG HT] Linha {val} | Individual: {(home_stats[f'ht_over_{str(val).replace(".","")}_pct']+away_stats[f'ht_over_{str(val).replace(".","")}_pct'])/2:.1f}% | H2H: {h2h_val:.1f}% | Ponderada: {w_pct:.1f}%")
+
+            if val == 0.5 and w_pct >= 85:
+                strategies.append({"name": "⚽ +0.5 GOL HT", "odd": ht_line["price"]})
+            elif val == 1.5 and w_pct >= 80:
+                strategies.append({"name": "⚽ +1.5 GOLS HT", "odd": ht_line["price"]})
+
+        # BTTS HT
+        btts_ht_line = find_sim_line("Ambas equipes marcam - 1º tempo")
+        if btts_ht_line:
+            h2h_btts = h2h.get('ht_btts_pct', 0) if h2h else 0
+            w_btts = get_weighted_val(home_stats['ht_btts_pct'], away_stats['ht_btts_pct'], h2h_btts)
+            if w_btts >= 70:
+                strategies.append({"name": "⚽ BTTS HT", "odd": btts_ht_line["price"]})
 
     # --- LÓGICA FT ---
     total_ft_line = find_over_line("Total de Gols")
@@ -1291,15 +1307,20 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         h2h_val = h2h.get(f'ft_over_{str(val).replace(".","")}_pct', 0) if h2h else 0
         
         if needed <= 1.5:
-            if val == 1.5:
-                w_pct = get_weighted_val(home_stats['ft_over_15_pct'], away_stats['ft_over_15_pct'], h2h_val)
-                if w_pct >= 90: strategies.append({"name": "⚽ +1.5 GOLS FT", "odd": total_ft_line["price"]})
-            elif val == 2.5:
-                w_pct = get_weighted_val(home_stats['ft_over_25_pct'], away_stats['ft_over_25_pct'], h2h_val)
-                if w_pct >= 85: strategies.append({"name": "⚽ +2.5 GOLS FT", "odd": total_ft_line["price"]})
-            elif val == 3.5:
-                w_pct = get_weighted_val(home_stats['ft_over_35_pct'], away_stats['ft_over_35_pct'], h2h_val)
-                if w_pct >= 80: strategies.append({"name": "⚽ +3.5 GOLS FT", "odd": total_ft_line["price"]})
+            w_pct = get_weighted_val(home_stats[f'ft_over_{str(val).replace(".","")}_pct'], away_stats[f'ft_over_{str(val).replace(".","")}_pct'], h2h_val)
+            print(f"[DEBUG FT] Linha {val} | Ponderada: {w_pct:.1f}%")
+            if val == 1.5 and w_pct >= 90: strategies.append({"name": "⚽ +1.5 GOLS FT", "odd": total_ft_line["price"]})
+            elif val == 2.5 and w_pct >= 85: strategies.append({"name": "⚽ +2.5 GOLS FT", "odd": total_ft_line["price"]})
+            elif val == 3.5 and w_pct >= 80: strategies.append({"name": "⚽ +3.5 GOLS FT", "odd": total_ft_line["price"]})
+            elif val == 4.5 and w_pct >= 75: strategies.append({"name": "⚽ +4.5 GOLS FT", "odd": total_ft_line["price"]})
+
+    # BTTS FT
+    btts_ft_line = find_sim_line("Ambas equipes marcam")
+    if btts_ft_line and "tempo" not in btts_ft_line['market_name'].lower():
+        h2h_btts = h2h.get('btts_pct', 0) if h2h else 0
+        w_btts = get_weighted_val(home_stats['btts_pct'], away_stats['btts_pct'], h2h_btts)
+        if w_btts >= 80:
+            strategies.append({"name": "⚽ BTTS FT", "odd": btts_ft_line["price"]})
 
     # --- LÓGICA INDIVIDUAL ---
     home_ind_line = find_over_line(f"{home_raw} total")
@@ -1307,21 +1328,37 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         v = home_ind_line['value']
         h2h_avg_scored = h2h.get('avg_goals_scored_ft', 0) if h2h else 0
         w_avg = (home_stats['avg_goals_scored_ft'] + h2h_avg_scored) / 2 if h2h else home_stats['avg_goals_scored_ft']
-        
         needed = v - hg
-        if needed <= 1.5 and w_avg >= (v * 0.8): # Média ponderada deve ser pelo menos 80% da linha
+        if needed <= 1.5 and w_avg >= (v * 0.8):
             strategies.append({"name": f"⚽ {home_raw} +{v} GOLS FT", "odd": home_ind_line["price"]})
 
-    # --- LÓGICA VITORIA ---
-    h2h_win_pct = h2h.get('win_pct', 0) if h2h else 0
-    # Probabilidade do player1 ganhar: (Vitórias do P1 + Derrotas do P2) / 2
-    base_win_pct = (home_stats['win_pct'] + away_stats['loss_pct']) / 2
-    weighted_win_pct = (base_win_pct + h2h_win_pct) / 2 if h2h else base_win_pct
+    away_ind_line = find_over_line(f"{away_raw} total")
+    if away_ind_line:
+        v = away_ind_line['value']
+        h2h_avg_scored = h2h.get('avg_goals_conceded_ft', 0) if h2h else 0 # Conceded by p1 = Scored by p2
+        w_avg = (away_stats['avg_goals_scored_ft'] + h2h_avg_scored) / 2 if h2h else away_stats['avg_goals_scored_ft']
+        needed = v - ag
+        if needed <= 1.5 and w_avg >= (v * 0.8):
+            strategies.append({"name": f"⚽ {away_raw} +{v} GOLS FT", "odd": away_ind_line["price"]})
 
-    if weighted_win_pct >= 80:
+    # --- LÓGICA VITORIA ---
+    # PLAYER 1
+    h2h_win_p1 = h2h.get('win_pct', 0) if h2h else 0
+    base_win_p1 = (home_stats['win_pct'] + away_stats['loss_pct']) / 2
+    w_win_p1 = (base_win_p1 + h2h_win_p1) / 2 if h2h else base_win_p1
+
+    # PLAYER 2
+    h2h_win_p2 = h2h.get('loss_pct', 0) if h2h else 0 # Loss p1 = Win p2
+    base_win_p2 = (away_stats['win_pct'] + home_stats['loss_pct']) / 2
+    w_win_p2 = (base_win_p2 + h2h_win_p2) / 2 if h2h else base_win_p2
+
+    if w_win_p1 >= 80:
         strategies.append({"name": f"🏆 VITORIA {home_raw}", "odd": "VAR"})
+    elif w_win_p2 >= 80:
+        strategies.append({"name": f"🏆 VITORIA {away_raw}", "odd": "VAR"})
 
     return strategies
+
 
 
 
@@ -2138,10 +2175,12 @@ async def main_loop(bot):
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                if avg_confidence < 80:
+                # FILTRO DE SEGURANÇA GLOBAL (Reduzido para 60% para permitir análise ponderada)
+                if avg_confidence < 60:
                     print(
-                        f"[BLOCKED] Confidence insuficiente para assertividade: {avg_confidence:.0f}% (Mínimo 80%)")
+                        f"[BLOCKED] Confidence global insuficiente: {avg_confidence:.0f}% (Mínimo 60%)")
                     continue
+
 
                 print(f"[✓] Confidence aprovado: Média {avg_confidence:.0f}% | {home_player}: {home_confidence:.0f}% | {away_player}: {away_confidence:.0f}%")
 
