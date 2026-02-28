@@ -1014,8 +1014,11 @@ def analyze_player_history(matches, player_name, window=10):
         'win_pct': (stats_data['wins'] / n) * 100,
         'draw_pct': (stats_data['draws'] / n) * 100,
         'loss_pct': (stats_data['losses'] / n) * 100,
+        'consistency_ft_3_plus_pct': (stats_data['ft_over_25'] / n) * 100,
+        'consistency_ht_1_plus_pct': (stats_data['ht_over_05'] / n) * 100,
         'games_analyzed': n
     }
+
 
 
 
