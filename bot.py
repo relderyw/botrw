@@ -2178,11 +2178,12 @@ async def main_loop(bot):
                 away_confidence = away_stats.get('confidence', 0)
                 avg_confidence = (home_confidence + away_confidence) / 2
 
-                # FILTRO DE SEGURANÇA GLOBAL (Reduzido para 60% para permitir análise ponderada)
-                if avg_confidence < 60:
+                # FILTRO DE SEGURANÇA GLOBAL (Mínimo 70% conforme solicitado)
+                if avg_confidence < 70:
                     print(
-                        f"[BLOCKED] Confidence global insuficiente: {avg_confidence:.0f}% (Mínimo 60%)")
+                        f"[BLOCKED] Confidence global insuficiente: {avg_confidence:.0f}% (Mínimo 70%)")
                     continue
+
 
 
                 print(f"[✓] Confidence aprovado: Média {avg_confidence:.0f}% | {home_player}: {home_confidence:.0f}% | {away_player}: {away_confidence:.0f}%")
