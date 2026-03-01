@@ -1,0 +1,37 @@
+{
+  "H2H 8 MIN": {
+    "active": false,
+    "window": [],
+    "total_tips": 0
+  },
+  "VALHALLA CUP": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "Champions VOLTA league 4x4 (2x3 mins)": {
+    "active": false,
+    "window": [],
+    "total_tips": 0
+  },
+  "INT 8 MIN": {
+    "active": false,
+    "window": [],
+    "total_tips": 0
+  },
+  "GT LEAGUE 12 MIN": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "CLA 10 MIN": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "VALKYRIE CUP": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  }
+}
