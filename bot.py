@@ -735,16 +735,32 @@ def extract_pure_nick(raw: str) -> str:
 
 
 def get_player_ft_goals(player_nick: str, match: dict) -> int:
+    """
+    Retorna os gols TOTAIS (jogo completo) do jogador.
+
+    A API retorna home_score_ft como gols do 2º tempo apenas.
+    Total do jogo = home_score_ht + home_score_ft
+
+    Evidência: Stason23 marcou 3 gols (2 no HT + 1 no 2T),
+    mas a API retornava home_score_ft=1 (só 2T) → acusava RED indevidamente.
+    """
     if not player_nick or not match:
         return 0
     p_nick = player_nick.upper().strip()
     home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
     away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
+
     if p_nick == home_nick:
-        return int(match.get('home_score_ft', 0) or 0)
-    if p_nick == away_nick:
-        return int(match.get('away_score_ft', 0) or 0)
-    return 0
+        ht = int(match.get('home_score_ht', 0) or 0)
+        ft = int(match.get('home_score_ft', 0) or 0)
+    elif p_nick == away_nick:
+        ht = int(match.get('away_score_ht', 0) or 0)
+        ft = int(match.get('away_score_ft', 0) or 0)
+    else:
+        return 0
+
+    # ft é o 2º tempo → total = ht + ft
+    return ht + ft
 
 
 def find_best_match_for_tip(tip, recent_matches):
@@ -1794,7 +1810,7 @@ def make_confidence_semaphore(confidence):
         return "🔴"
 
 
-def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_summary, liga_det=None):
+def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_summary, liga_det=None, avg_confidence=None):
     """
     ✅ FORMATO OTIMIZADO — Decisão em 2 segundos, sem scroll.
 
@@ -1817,10 +1833,13 @@ def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_
     mapped     = event.get('mappedLeague', league_raw)
     league_display = mapped if mapped and mapped != 'Unknown' else league_raw
 
-    # Confidence e semáforo
-    home_conf = home_stats_summary.get('confidence', 0)
-    away_conf = away_stats_summary.get('confidence', 0)
-    avg_conf  = (home_conf + away_conf) / 2
+    # Confidence e semáforo — usa valor passado diretamente ou fallback nos stats
+    if avg_confidence is not None:
+        avg_conf = avg_confidence
+    else:
+        home_conf = home_stats_summary.get('confidence', 0)
+        away_conf = away_stats_summary.get('confidence', 0)
+        avg_conf  = (home_conf + away_conf) / 2
     semaphore = make_confidence_semaphore(avg_conf)
 
     # Barras visuais dos jogadores
@@ -2065,7 +2084,7 @@ async def update_league_stats(bot, recent_matches, force=False):
 # ENVIO DE MENSAGENS
 # =============================================================================
 
-async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
+async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats, avg_confidence=0):
     global sent_tips, sent_match_ids
     event_id = event.get('id')
     period = 'HT' if 'HT' in strategy.upper() else 'FT'
@@ -2089,7 +2108,7 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
     liga_det = event.get('_liga_det')
     for attempt in range(3):
         try:
-            msg = format_tip_message(event, strategy, obs_odd, home_stats, away_stats, liga_det)
+            msg = format_tip_message(event, strategy, obs_odd, home_stats, away_stats, liga_det, avg_confidence=avg_confidence)
             message_obj = await bot.send_message(
                 chat_id=CHAT_ID, text=msg, parse_mode="HTML", disable_web_page_preview=True
             )
@@ -2174,8 +2193,11 @@ async def check_results(bot):
 
             ht_home = int(matched.get('home_score_ht', 0) or 0)
             ht_away = int(matched.get('away_score_ht', 0) or 0)
-            ft_home_total = int(matched.get('home_score_ft', 0) or 0)
-            ft_away_total = int(matched.get('away_score_ft', 0) or 0)
+            ft_home_2t = int(matched.get('home_score_ft', 0) or 0)
+            ft_away_2t = int(matched.get('away_score_ft', 0) or 0)
+            # ft da API = apenas 2º tempo → total do jogo = ht + ft_2t
+            ft_home_total = ht_home + ft_home_2t
+            ft_away_total = ht_away + ft_away_2t
             ht_total = ht_home + ht_away
             ft_total = ft_home_total + ft_away_total
 
@@ -2427,7 +2449,7 @@ async def main_loop(bot):
                     obs_odd = strat_obj['odd']
                     print(f"[✓] OPORTUNIDADE: {strategy_name} (Odd: {obs_odd}) | Conf: {avg_confidence:.0f}%")
                     event['_liga_det'] = liga_det
-                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats)
+                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=avg_confidence)
                     await asyncio.sleep(1)
 
             print("[INFO] Ciclo concluído. Aguardando 10s...")
