@@ -268,18 +268,14 @@ LIVE_LEAGUE_MAPPING = {
     "Champions League B 2×6": "GT LEAGUE 12 MIN",
     "Champions League B 2x6": "GT LEAGUE 12 MIN",
     "Champions League": "BATTLE 8 MIN",
-    "Super Lig": "GT LEAGUE 12 MIN",
-    "Super Lig • E-battles": "GT LEAGUE 12 MIN",
-    "ESportsBattle. RSL (2x6 mins)": "GT LEAGUE 12 MIN",
-    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
-    "International": "INT 8 MIN",
-    "Europa League": "GT LEAGUE 12 MIN",
-    "Bundesliga": "GT LEAGUE 12 MIN",
     "Champions Cyber League": "CLA 10 MIN",
     "Cyber League": "CLA 10 MIN",
+    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    "Premier League": "GT LEAGUE 12 MIN",
+    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+    "International": "INT 8 MIN",
+    # Ligas E-battles independentes (Bundesliga, Europa League, Super Lig, Premier League, etc.)
+    # NÃO mapeadas — mantêm seu nome original e são gerenciadas pelo LeagueManager dinamicamente
 }
 
 HISTORY_LEAGUE_MAPPING = {
@@ -298,12 +294,18 @@ HISTORY_LEAGUE_MAPPING = {
     "CLA": "CLA 10 MIN",
     "Champions League": "BATTLE 8 MIN",
     "Super Lig": "GT LEAGUE 12 MIN",
-    "Champions League B 2x6": "GT LEAGUE 12 MIN",
+    # Ligas com formato definido — mapeadas para o perfil correto
     "Champions League B 2×6": "GT LEAGUE 12 MIN",
-    "ESportsBattle. RSL (2x6 mins)": "GT LEAGUE 12 MIN",
+    "Champions League B 2x6": "GT LEAGUE 12 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+    "International": "INT 8 MIN",
+    "Champions Cyber League": "CLA 10 MIN",
+    "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
+    # Ligas E-battles independentes — mantêm o próprio nome (gerenciadas dinamicamente)
+    # "Bundesliga", "Europa League", "Premier League", "Super Lig", etc.
+    # NÃO mapeadas aqui para preservar identidade e estatísticas próprias
 }
 
 # =============================================================================
