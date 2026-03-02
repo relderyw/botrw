@@ -1894,30 +1894,30 @@ def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_
 
 def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
     """
-    ✅ RESULTADO OTIMIZADO — Mostra quem marcou o quê.
+    ✅ RESULTADO OTIMIZADO — Mostra quem marcou o quê + confidence original.
     """
-    strategy   = tip.get('strategy', '')
-    league     = tip.get('league', '')
-    home_p     = tip.get('home_player', '?')
-    away_p     = tip.get('away_player', '?')
-    sent_odd   = tip.get('sent_odd', '')
+    strategy    = tip.get('strategy', '')
+    league      = tip.get('league', '')
+    home_p      = tip.get('home_player', '?')
+    away_p      = tip.get('away_player', '?')
+    sent_odd    = tip.get('sent_odd', '')
     tipped_nick = tip.get('tipped_player_nick', '')
+    conf        = tip.get('avg_confidence', None)
 
     ft_total = ft_home + ft_away
 
     if result == 'green':
         emoji  = "✅"
         status = "GREEN"
-        placar_color = "✅"
     else:
         emoji  = "❌"
         status = "RED"
-        placar_color = "❌"
 
-    odd_str = f" @ {sent_odd}" if sent_odd else ""
+    odd_str  = f" @ {sent_odd}" if sent_odd else ""
+    conf_str = f"  |  Conf: {conf:.0f}%" if conf is not None else ""
 
     msg  = f"{emoji} <b>{status}</b> — {league}\n"
-    msg += f"<b>{strategy}</b>{odd_str}\n"
+    msg += f"<b>{strategy}</b>{odd_str}{conf_str}\n"
     msg += "─────────────────────\n"
     msg += f"HT {ht_home}-{ht_away}  →  FT <b>{ft_home}-{ft_away}</b>  ({ft_total} gols)\n"
 
@@ -2144,6 +2144,7 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats, avg_co
                 'tipped_player_nick': tipped_nick,
                 'tipped_player_raw': tipped_player,
                 'sent_odd': obs_odd,
+                'avg_confidence': avg_confidence,
                 'liga_det': liga_det or {},
             })
             save_state()
