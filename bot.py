@@ -1825,9 +1825,8 @@ def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
 
 def format_league_stats_text(stats):
     """
-    Formato compacto e alinhado.
-    ✓ = 100%  |  número = valor parcial  |  ✗ = 0%
-    Emoji colorido fora do <code> (evita quebra de linha).
+    Bloco <pre> único: alinhamento perfeito garantido no mobile.
+    Sem emojis dentro do bloco — usa G/Y/R e ★/▼ como indicadores.
     """
     LIGAS_MONITORADAS = {
         "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
@@ -1841,14 +1840,15 @@ def format_league_stats_text(stats):
     ]
 
     def fmt(v):
-        if v == 100: return " ✓"
-        if v == 0:   return " ✗"
-        return f"{v:2}"
+        if v == 100: return "✓"
+        if v ==   0: return "✗"
+        return str(v)
 
-    def color(avg):
-        if avg >= 78: return "🟢"
-        if avg >= 48: return "🟡"
-        return "🔴"
+    def ind(avg):
+        # Indicador dentro do bloco monospace (sem emoji)
+        if avg >= 78: return "G"
+        if avg >= 48: return "Y"
+        return "R"
 
     if not stats:
         return "📊 <b>ANÁLISE DE LIGAS</b>\n\nSem dados disponíveis."
@@ -1868,10 +1868,11 @@ def format_league_stats_text(stats):
     worst = min(scores, key=scores.get)
 
     now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
-    out = [
-        f"📊 <b>LIGAS — últimos 5j</b>  <i>{now_str}</i>",
-        "<code>Liga         H½ H1 BT F2 F3 BT AVG</code>",
-        "<code>──────────────────────────────────</code>",
+
+    pre_lines = [
+        f"LIGAS ultimos 5j  {now_str}",
+        "Liga         H½ H1 BT F2 F3 BT AVG",
+        "─" * 34,
     ]
 
     for league in ORDER:
@@ -1882,15 +1883,16 @@ def format_league_stats_text(stats):
             s['ht']['o05'], s['ht']['o15'], s['ht']['btts'],
             s['ft']['o25'], s['ft']['o15'], s['ft']['btts'],
         ]
-        avg  = scores[league]
-        name = (league[:11] + "…") if len(league) > 12 else league.ljust(12)
-        cols = " ".join(fmt(v) for v in vals)
-        tag  = " 🏆" if league == best else (" ⚠️" if league == worst else "")
-        out.append(f"<code>{name} {cols} {avg:3.0f}%</code> {color(avg)}{tag}")
+        avg   = scores[league]
+        name  = (league[:11] + ".") if len(league) > 12 else league.ljust(12)
+        cols  = " ".join(f"{fmt(v):>2}" for v in vals)
+        tag   = "★" if league == best else ("▼" if league == worst else " ")
+        pre_lines.append(f"{name} {cols} {avg:3.0f}% {ind(avg)}{tag}")
 
-    out.append("")
-    out.append(f"🏆 <b>{best}</b> ({scores[best]:.0f}%)  ⚠️ <b>{worst}</b> ({scores[worst]:.0f}%)")
-    return "\n".join(out)
+    pre_lines.append("─" * 34)
+    pre_lines.append(f"★={best[:14]}  ▼={worst[:12]}")
+
+    return f"<pre>{chr(10).join(pre_lines)}</pre>"
 
 
 async def update_league_stats(bot, recent_matches, force=False):
