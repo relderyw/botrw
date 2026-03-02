@@ -1825,25 +1825,29 @@ def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
 
 def format_league_stats_text(stats):
     """
-    Resumo compacto: apenas ligas monitoradas, 1 linha por liga.
-    Formato: NOME  🟢🟢🟢🟢🟡🟢  AVG%
+    Alinhamento perfeito: valores numéricos dentro de <code>.
+    Emojis coloridos apenas no final de cada linha (fora do monospace).
     """
     LIGAS_MONITORADAS = {
         "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
         "GT LEAGUE 12 MIN", "CLA 10 MIN", "H2H 8 MIN",
         "VOLTA 6 MIN", "INT 8 MIN",
     }
+    ORDER = [
+        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
+        "GT LEAGUE 12 MIN", "CLA 10 MIN",
+        "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
+    ]
 
-    def dot(pct):
-        if pct >= 78: return "🟢"
-        if pct >= 48: return "🟡"
+    def color(avg):
+        if avg >= 78: return "🟢"
+        if avg >= 48: return "🟡"
         return "🔴"
 
     if not stats:
         return "📊 <b>ANÁLISE DE LIGAS</b>\n\nSem dados disponíveis."
 
     filtered = {k: v for k, v in stats.items() if k in LIGAS_MONITORADAS}
-
     if not filtered:
         return "📊 <b>ANÁLISE DE LIGAS</b>\n\nAguardando dados das ligas monitoradas."
 
@@ -1857,17 +1861,11 @@ def format_league_stats_text(stats):
     best  = max(scores, key=scores.get)
     worst = min(scores, key=scores.get)
 
-    ORDER = [
-        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
-        "GT LEAGUE 12 MIN", "CLA 10 MIN",
-        "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
-    ]
-
     now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
-    lines = [
-        f"📊 <b>LIGAS — últimos 5 jogos</b>  <i>{now_str}</i>",
-        "<code>Liga            HT½ HT1 BTT FT2 FT3 BTT  AVG</code>",
-        "<code>────────────────────────────────────────────</code>",
+    out = [
+        f"📊 <b>LIGAS — últimos 5j</b>  <i>{now_str}</i>",
+        "<code>Liga           H½  H1  BT  F2  F3  BT  AVG</code>",
+        "<code>──────────────────────────────────────────</code>",
     ]
 
     for league in ORDER:
@@ -1878,18 +1876,15 @@ def format_league_stats_text(stats):
             s['ht']['o05'], s['ht']['o15'], s['ht']['btts'],
             s['ft']['o25'], s['ft']['o15'], s['ft']['btts'],
         ]
-        avg   = scores[league]
-        tag   = " 🏆" if league == best else (" ⚠️" if league == worst else "")
-        short = (league[:13] + "…") if len(league) > 14 else league.ljust(14)
-        dots  = " ".join(dot(v) for v in vals)
-        lines.append(f"<code>{short}</code> {dots} <b>{avg:.0f}%</b>{tag}")
+        avg  = scores[league]
+        name = (league[:12] + "…") if len(league) > 13 else league.ljust(13)
+        cols = "  ".join(f"{v:3}" for v in vals)
+        tag  = " 🏆" if league == best else (" ⚠️" if league == worst else "")
+        out.append(f"<code>{name}  {cols}  {avg:3.0f}%</code> {color(avg)}{tag}")
 
-    lines.append("")
-    lines.append(f"🏆 <b>{best}</b> ({scores[best]:.0f}%)  ⚠️ <b>{worst}</b> ({scores[worst]:.0f}%)")
-
-    return "\n".join(lines)
-
-
+    out.append("")
+    out.append(f"🏆 <b>{best}</b> ({scores[best]:.0f}%)  ⚠️ <b>{worst}</b> ({scores[worst]:.0f}%)")
+    return "\n".join(out)
 
 
 async def update_league_stats(bot, recent_matches, force=False):
