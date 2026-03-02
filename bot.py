@@ -1425,11 +1425,12 @@ def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
         s += pts
         bd.append(f"HT marc {ht_marc:.1f}→+{pts}")
 
-        # F2: HT sofrido — invertido (≤1.0=15, ≤1.5=10, ≤2.0=5, >2.0=0)
-        if ht_sofr <= 1.0:   pts = 15
-        elif ht_sofr <= 1.5: pts = 10
-        elif ht_sofr <= 2.0: pts = 5
-        else:                pts = 0
+        # F2: HT sofrido — threshold dinâmico: artilheiros (ht_marc>=1.8) sofrem mais por natureza
+        ht_bonus = 0.5 if ht_marc >= 1.8 else 0
+        if ht_sofr <= (1.0 + ht_bonus):   pts = 15
+        elif ht_sofr <= (1.5 + ht_bonus): pts = 10
+        elif ht_sofr <= (2.0 + ht_bonus): pts = 5
+        else:                              pts = 0
         s += pts
         bd.append(f"HT sofr {ht_sofr:.1f}→+{pts}")
 
@@ -1441,23 +1442,37 @@ def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
         s += pts
         bd.append(f"FT marc {ft_marc:.1f}→+{pts}")
 
-        # F4: FT sofrido — invertido (≤2.0=15, ≤2.5=10, ≤3.0=5, >3.0=0)
-        if ft_sofr <= 2.0:   pts = 15
-        elif ft_sofr <= 2.5: pts = 10
-        elif ft_sofr <= 3.0: pts = 5
-        else:                pts = 0
+        # F4: FT sofrido — threshold dinâmico por perfil ofensivo
+        # Artilheiros (ft_marc>=3.5) sofrem mais por natureza → limiares tolerantes
+        if ft_marc >= 3.5:   ft_lims = (3.0, 3.5, 4.5)  # tolerante
+        elif ft_marc >= 2.8: ft_lims = (2.5, 3.0, 3.5)  # moderado
+        else:                ft_lims = (2.0, 2.5, 3.0)   # padrão
+        if ft_sofr <= ft_lims[0]:   pts = 15
+        elif ft_sofr <= ft_lims[1]: pts = 10
+        elif ft_sofr <= ft_lims[2]: pts = 5
+        else:                       pts = 0
         s += pts
         bd.append(f"FT sofr {ft_sofr:.1f}→+{pts}")
 
-        # F5: Win% (≥65%=10, ≥55%=6, ≥45%=3, <45%=0)
-        if win_pct >= 65:   pts = 10
-        elif win_pct >= 55: pts = 6
-        elif win_pct >= 45: pts = 3
-        else:               pts = 0
+        # F5: Win% para jogadores normais / Ratio ofensivo para artilheiros
+        # Artilheiro que perde 7-6 ainda é ótimo para apostas de gols
+        # Ratio = ft_marc / (ft_marc + ft_sofr) — mede dominância ofensiva
+        if ft_marc >= 3.5:
+            ratio = ft_marc / (ft_marc + ft_sofr) if (ft_marc + ft_sofr) > 0 else 0
+            if ratio >= 0.55:   pts = 10
+            elif ratio >= 0.48: pts = 6
+            elif ratio >= 0.42: pts = 3
+            else:               pts = 0
+            bd.append(f"Ratio {ratio:.2f}→+{pts}")
+        else:
+            if win_pct >= 65:   pts = 10
+            elif win_pct >= 55: pts = 6
+            elif win_pct >= 45: pts = 3
+            else:               pts = 0
+            bd.append(f"Win {win_pct:.0f}%→+{pts}")
         s += pts
-        bd.append(f"Win {win_pct:.0f}%→+{pts}")
 
-        # F7: Forma recente (0-10 pts proporcional)
+        # F6: Forma recente (0-10 pts proporcional)
         pts = round((forma / 100) * 10)
         s += pts
         bd.append(f"Forma {forma:.0f}%→+{pts}")
@@ -1513,16 +1528,17 @@ def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
 # 5. Não tinha floor mínimo de gols por jogo para ligas específicas
 # =============================================================================
 
-def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines, avg_confidence):
+def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines,
+                        avg_confidence,
+                        gate_individual=True, gate_total=True,
+                        home_confidence=0, away_confidence=0):
     """
-    Avaliação de mercados com lógica corrigida.
-    
-    REGRAS PRINCIPAIS:
-    1. Apostas individuais: verificar média de gols INDIVIDUAIS do jogador
-    2. Apostas de jogo total: verificar média COMBINADA dos dois jogadores  
-    3. Threshold deve ser NO MÁXIMO floor(média_individual * 0.85)
-    4. Máximo 1 aposta por jogo (a melhor, por confidence ponderado)
-    5. Ligas bloqueadas já foram filtradas antes de chegar aqui
+    Avaliação de mercados com gate duplo:
+
+    gate_individual=True → pode avaliar apostas individuais (gols de 1 jogador)
+    gate_total=True      → pode avaliar apostas de total do jogo
+
+    Regra: só avalia o tipo de mercado que passou seu gate.
     """
     candidates = []  # Lista de candidatos, depois escolhemos apenas o melhor
 
@@ -1591,9 +1607,9 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         return None
 
     # -------------------------------------------------------------------------
-    # ✅ LÓGICA HT — Apostas de primeiro tempo
+    # ✅ LÓGICA HT — Apostas de primeiro tempo (requer gate_total)
     # -------------------------------------------------------------------------
-    if time_seconds <= MAX_HT_TIME and total_now == 0:
+    if gate_total and time_seconds <= MAX_HT_TIME and total_now == 0:
         ht_line = find_over_line("1º tempo - total") or find_over_line("1ª tempo - Total de gols")
         if ht_line:
             val = ht_line['value']
@@ -1633,9 +1649,9 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                 })
 
     # -------------------------------------------------------------------------
-    # ✅ LÓGICA FT — Apostas de jogo completo (total de gols)
+    # ✅ LÓGICA FT — Apostas de jogo completo / total de gols (requer gate_total)
     # -------------------------------------------------------------------------
-    total_ft_line = find_over_line("Total de Gols")
+    total_ft_line = find_over_line("Total de Gols") if gate_total else None
     if total_ft_line:
         val = total_ft_line['value']
         needed = val - total_now
@@ -1673,16 +1689,21 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     # -------------------------------------------------------------------------
     # ✅ LÓGICA INDIVIDUAL — Apostas em gols de UM jogador específico
     #
-    # CORREÇÃO CRÍTICA: O código anterior apostava que o JOGADOR X marcaria
-    # N gols, mas usava a % do TOTAL do jogo para decidir.
-    # Agora usamos a % de gols INDIVIDUAIS do jogador.
+    # Requer gate_individual=True.
+    # Só avalia o jogador cujo confidence individual >= 65%.
+    # O adversário fraco NÃO bloqueia aposta no jogador forte.
     # -------------------------------------------------------------------------
 
-    def evaluate_individual_player(player_raw, player_stats, player_goals_now):
+    def evaluate_individual_player(player_raw, player_stats, player_goals_now, player_conf):
         """Avalia se vale apostar nos gols individuais de um jogador."""
+
+        # ✅ NOVO: gate individual por jogador — só avalia quem tem conf >= 65%
+        if player_conf < 65:
+            return None
+
         avg_individual = player_stats['avg_goals_scored_ft']
 
-        # ✅ Gate: jogador precisa ter média mínima para a liga
+        # Gate: jogador precisa ter média mínima para a liga
         if avg_individual < min_player_avg:
             print(f"[BLOCKED IND] {player_raw}: média {avg_individual:.1f} < mínimo {min_player_avg}")
             return None
@@ -1695,22 +1716,18 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         v = ind_line['value']
         needed = v - player_goals_now
 
-        if needed > 2.0:  # Precisa marcar mais de 2 gols ainda → muito arriscado
+        if needed > 2.0:
             return None
 
-        # ✅ Usar porcentagem INDIVIDUAL do jogador (ft_scored), não do total do jogo
         key_str = str(v).replace(".", "")
         player_pct = player_stats.get(f'ft_scored_{key_str}_pct', 0)
 
-        # Se não temos a porcentagem exata, estimamos pela média
         if player_pct == 0:
-            # Estimar: se média é 3.0 e threshold é 2.5, a probabilidade é alta
             if avg_individual >= v * 1.1:
-                player_pct = 75  # Estimativa conservadora
+                player_pct = 75
             else:
                 return None
 
-        # ✅ Gate mais rigoroso para apostas individuais
         if v <= 1.5 and player_pct < 85: return None
         if v <= 2.5 and player_pct < 80: return None
         if v <= 3.5 and player_pct < 75: return None
@@ -1724,13 +1741,14 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             "confidence_pct": player_pct
         }
 
-    home_candidate = evaluate_individual_player(home_raw, home_stats, hg)
-    if home_candidate:
-        candidates.append(home_candidate)
+    if gate_individual:
+        home_candidate = evaluate_individual_player(home_raw, home_stats, hg, home_confidence)
+        if home_candidate:
+            candidates.append(home_candidate)
 
-    away_candidate = evaluate_individual_player(away_raw, away_stats, ag)
-    if away_candidate:
-        candidates.append(away_candidate)
+        away_candidate = evaluate_individual_player(away_raw, away_stats, ag, away_confidence)
+        if away_candidate:
+            candidates.append(away_candidate)
 
     # -------------------------------------------------------------------------
     # ✅ CORREÇÃO #7: RETORNAR APENAS O MELHOR CANDIDATO POR JOGO
@@ -2350,19 +2368,33 @@ async def main_loop(bot):
                     print(f"[WARN] Falha na análise (possível regime change)")
                     continue
 
-                # Nova lógica: confidence calculado com H2H integrado
+                # Confidence calculado com H2H integrado
                 h2h = get_h2h_stats(home_player, away_player)
-                conf_result   = calculate_confidence_score(home_stats, away_stats, h2h)
+                conf_result     = calculate_confidence_score(home_stats, away_stats, h2h)
                 home_confidence = conf_result['home_confidence']
                 away_confidence = conf_result['away_confidence']
                 avg_confidence  = conf_result['avg_confidence']
+                max_confidence  = max(home_confidence, away_confidence)
 
-                # Threshold: 70% (novo, era 80% com lógica antiga mais restritiva)
-                CONF_THRESHOLD = 70
-                if avg_confidence < CONF_THRESHOLD:
+                # ✅ GATE DUPLO por tipo de aposta:
+                #
+                # GATE 1 — Apostas INDIVIDUAIS (gols de 1 jogador):
+                #   Passa se PELO MENOS 1 jogador >= 65%
+                #   Lógica: o adversário fraco não deve bloquear aposta no jogador forte
+                #
+                # GATE 2 — Apostas TOTAIS do jogo (over X.5 FT total):
+                #   Passa se MÉDIA dos dois >= 60%
+                #   Lógica: ambos precisam contribuir para o total de gols
+                #
+                # Se nenhum gate passa → bloqueia
+
+                gate_individual = max_confidence >= 65   # 1 jogador forte basta
+                gate_total      = avg_confidence  >= 60  # ambos precisam contribuir
+
+                if not gate_individual and not gate_total:
                     bd_h = " | ".join(conf_result['breakdown_home'])
                     bd_a = " | ".join(conf_result['breakdown_away'])
-                    print(f"[BLOCKED] Confidence {avg_confidence:.0f}% < {CONF_THRESHOLD}%")
+                    print(f"[BLOCKED] max={max_confidence:.0f}% avg={avg_confidence:.0f}% — nenhum gate passou")
                     print(f"  {home_player}: {home_confidence:.0f}% — {bd_h}")
                     print(f"  {away_player}: {away_confidence:.0f}% — {bd_a}")
                     continue
@@ -2374,13 +2406,21 @@ async def main_loop(bot):
                     print(f"[BLOCKED] Ambos com média FT abaixo do mínimo da liga ({min_avg})")
                     continue
 
-                h2h_info = f" | H2H: {h2h['count']}j" if h2h else " | H2H: sem dados"
+                h2h_info = f"H2H: {h2h['count']}j" if h2h else "H2H: sem dados"
+                gate_str = f"gate={'IND+TOT' if gate_individual and gate_total else ('IND' if gate_individual else 'TOT')}"
                 print(f"[STATS] {home_player}: FT={home_stats['avg_scored_ft_5j']:.1f} HT={home_stats['avg_scored_ht_5j']:.1f} conf={home_confidence:.0f}%")
-                print(f"[STATS] {away_player}: FT={away_stats['avg_scored_ft_5j']:.1f} HT={away_stats['avg_scored_ht_5j']:.1f} conf={away_confidence:.0f}%{h2h_info}")
+                print(f"[STATS] {away_player}: FT={away_stats['avg_scored_ft_5j']:.1f} HT={away_stats['avg_scored_ht_5j']:.1f} conf={away_confidence:.0f}% | {h2h_info} | {gate_str}")
 
                 all_league_stats = league_stats if mapped_league in league_stats else {}
 
-                strategies = evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines, avg_confidence)
+                strategies = evaluate_open_lines(
+                    event, home_stats, away_stats, all_league_stats, open_lines,
+                    avg_confidence,
+                    gate_individual=gate_individual,
+                    gate_total=gate_total,
+                    home_confidence=home_confidence,
+                    away_confidence=away_confidence,
+                )
 
                 for strat_obj in strategies:
                     strategy_name = strat_obj['name']
