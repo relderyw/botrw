@@ -1825,53 +1825,67 @@ def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
 
 def format_league_stats_text(stats):
     """
-    ✅ Substitui a imagem PNG por texto HTML rico com barras Unicode.
-    Mais rápido, confiável e pesquisável no Telegram.
+    Resumo compacto: apenas ligas monitoradas, 1 linha por liga.
+    Formato: NOME  🟢🟢🟢🟢🟡🟢  AVG%
     """
-    def bar(pct):
-        filled = int(round(pct / 10))
-        color  = "🟢" if pct >= 78 else ("🟡" if pct >= 48 else "🔴")
-        return f"{color} {'█' * filled}{'░' * (10 - filled)} {pct:.0f}%"
+    LIGAS_MONITORADAS = {
+        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
+        "GT LEAGUE 12 MIN", "CLA 10 MIN", "H2H 8 MIN",
+        "VOLTA 6 MIN", "INT 8 MIN",
+    }
+
+    def dot(pct):
+        if pct >= 78: return "🟢"
+        if pct >= 48: return "🟡"
+        return "🔴"
 
     if not stats:
         return "📊 <b>ANÁLISE DE LIGAS</b>\n\nSem dados disponíveis."
 
-    league_scores = {}
-    for league, s in stats.items():
-        avg = (s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] +
-               s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']) / 6
-        league_scores[league] = avg
+    filtered = {k: v for k, v in stats.items() if k in LIGAS_MONITORADAS}
 
-    best  = max(league_scores, key=league_scores.get) if league_scores else None
-    worst = min(league_scores, key=league_scores.get) if league_scores else None
+    if not filtered:
+        return "📊 <b>ANÁLISE DE LIGAS</b>\n\nAguardando dados das ligas monitoradas."
 
-    lines = [
-        "📊 <b>RW TIPS — ANÁLISE DE LIGAS</b>",
-        f"<i>Últimos 5 jogos | 🔴&lt;48% 🟡48-77% 🟢78%+</i>",
-        "",
+    scores = {}
+    for league, s in filtered.items():
+        scores[league] = (
+            s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] +
+            s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']
+        ) / 6
+
+    best  = max(scores, key=scores.get)
+    worst = min(scores, key=scores.get)
+
+    ORDER = [
+        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
+        "GT LEAGUE 12 MIN", "CLA 10 MIN",
+        "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
     ]
 
-    headers = "  <code>HT0.5  HT1.5  BTTS   FT1.5  FT2.5  BTTS</code>"
+    now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
+    lines = [
+        f"📊 <b>LIGAS — últimos 5 jogos</b>  <i>{now_str}</i>",
+        "<code>Liga            HT½ HT1 BTT FT2 FT3 BTT  AVG</code>",
+        "<code>────────────────────────────────────────────</code>",
+    ]
 
-    for league in sorted(stats.keys()):
-        s    = stats[league]
-        vals = [s['ht']['o05'], s['ht']['o15'], s['ht']['btts'],
-                s['ft']['o15'], s['ft']['o25'], s['ft']['btts']]
-        avg  = league_scores[league]
-        avg_bar = bar(avg)
-        tag = " 🏆" if league == best else (" ⚠️" if league == worst else "")
+    for league in ORDER:
+        if league not in filtered:
+            continue
+        s    = filtered[league]
+        vals = [
+            s['ht']['o05'], s['ht']['o15'], s['ht']['btts'],
+            s['ft']['o25'], s['ft']['o15'], s['ft']['btts'],
+        ]
+        avg   = scores[league]
+        tag   = " 🏆" if league == best else (" ⚠️" if league == worst else "")
+        short = (league[:13] + "…") if len(league) > 14 else league.ljust(14)
+        dots  = " ".join(dot(v) for v in vals)
+        lines.append(f"<code>{short}</code> {dots} <b>{avg:.0f}%</b>{tag}")
 
-        lines.append(f"<b>{league}</b>{tag}")
-        # Linha com valores formatados
-        row = "  " + "  ".join(f"{v:3.0f}%" for v in vals)
-        lines.append(f"<code>{row}</code>")
-        lines.append(f"  Média: {avg_bar}")
-        lines.append("")
-
-    if best:
-        lines.append(f"🏆 Melhor liga: <b>{best}</b> ({league_scores[best]:.0f}% média)")
-    if worst and worst != best:
-        lines.append(f"⚠️ Pior liga: <b>{worst}</b> ({league_scores[worst]:.0f}% média)")
+    lines.append("")
+    lines.append(f"🏆 <b>{best}</b> ({scores[best]:.0f}%)  ⚠️ <b>{worst}</b> ({scores[worst]:.0f}%)")
 
     return "\n".join(lines)
 
