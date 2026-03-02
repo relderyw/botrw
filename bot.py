@@ -1169,259 +1169,337 @@ def fetch_player_individual_stats(player_name, use_cache=True):
 # =============================================================================
 
 def analyze_player_history(matches, player_name, window=10):
+    """
+    Analisa histórico do jogador.
+    Usa janela de 10 jogos para métricas gerais
+    e janela de 5 jogos para forma recente (mais sensível).
+    """
     if not matches:
         return None
 
     actual_window = min(len(matches), window)
-    if actual_window < 5:  # ✅ CORREÇÃO #4: Mínimo 5 jogos (era 4)
+    if actual_window < 5:
         return None
 
-    study_set = matches[:actual_window]
+    study_set    = matches[:actual_window]
+    recent_5     = matches[:5]   # Janela curta para forma recente
 
-    stats_data = {
-        'ht_over_05': 0, 'ht_over_15': 0, 'ht_over_25': 0,
-        'ht_scored_05': 0, 'ht_scored_15': 0,
-        'ft_over_05': 0, 'ft_over_15': 0, 'ft_over_25': 0, 'ft_over_35': 0, 'ft_over_45': 0,
-        'ft_scored_05': 0, 'ft_scored_15': 0, 'ft_scored_25': 0, 'ft_scored_35': 0,
-        'total_goals_scored': 0, 'total_goals_conceded': 0,
-        'total_goals_scored_ht': 0, 'total_goals_conceded_ht': 0,
-        'btts_count': 0, 'ht_btts_count': 0,
-        'wins': 0, 'draws': 0, 'losses': 0,
-        'games_count': actual_window,
-        'goals_list': [],       # ✅ NOVO: lista para cálculo de stdev
-        'goals_list_ht': [],
-    }
+    def calc_set(match_set, pname):
+        n = len(match_set)
+        d = {
+            'total_scored_ft': 0, 'total_conceded_ft': 0,
+            'total_scored_ht': 0, 'total_conceded_ht': 0,
+            'wins': 0, 'draws': 0, 'losses': 0,
+            'goals_list_ft': [], 'goals_list_ht': [],
+            'ht_scored_05': 0, 'ht_scored_15': 0,
+            'ft_scored_05': 0, 'ft_scored_15': 0,
+            'ft_scored_25': 0, 'ft_scored_35': 0,
+            'ht_over_05': 0, 'ht_over_15': 0, 'ht_over_25': 0,
+            'ft_over_05': 0, 'ft_over_15': 0, 'ft_over_25': 0,
+            'ft_over_35': 0, 'ft_over_45': 0,
+            'btts_count': 0, 'ht_btts_count': 0,
+        }
+        for m in match_set:
+            is_home = m.get('home_player', '').upper() == pname.upper()
+            ht_h = m.get('home_score_ht', 0) or 0
+            ht_a = m.get('away_score_ht', 0) or 0
+            ft_h = m.get('home_score_ft', 0) or 0
+            ft_a = m.get('away_score_ft', 0) or 0
 
-    for match in study_set:
-        is_home = match.get('home_player', '').upper() == player_name.upper()
+            pg  = ft_h if is_home else ft_a   # gols marcados FT
+            pc  = ft_a if is_home else ft_h   # gols sofridos FT
+            pgh = ht_h if is_home else ht_a   # gols marcados HT
+            pch = ht_a if is_home else ht_h   # gols sofridos HT
 
-        ht_home = match.get('home_score_ht', 0) or 0
-        ht_away = match.get('away_score_ht', 0) or 0
-        ht_total = ht_home + ht_away
+            d['goals_list_ft'].append(pg)
+            d['goals_list_ht'].append(pgh)
+            d['total_scored_ft']   += pg
+            d['total_conceded_ft'] += pc
+            d['total_scored_ht']   += pgh
+            d['total_conceded_ht'] += pch
 
-        ft_home = match.get('home_score_ft', 0) or 0
-        ft_away = match.get('away_score_ft', 0) or 0
-        ft_total = ft_home + ft_away
+            if pg > pc: d['wins']   += 1
+            elif pg == pc: d['draws'] += 1
+            else: d['losses'] += 1
 
-        p_ht_g = ht_home if is_home else ht_away
-        p_ht_c = ht_away if is_home else ht_home
-        p_ft_g = ft_home if is_home else ft_away
-        p_ft_c = ft_away if is_home else ft_home
+            if pg > 0: d['ft_scored_05'] += 1
+            if pg > 1: d['ft_scored_15'] += 1
+            if pg > 2: d['ft_scored_25'] += 1
+            if pg > 3: d['ft_scored_35'] += 1
+            if pgh > 0: d['ht_scored_05'] += 1
+            if pgh > 1: d['ht_scored_15'] += 1
 
-        stats_data['goals_list'].append(p_ft_g)
-        stats_data['goals_list_ht'].append(p_ht_g)
+            ht_t = ht_h + ht_a
+            ft_t = ft_h + ft_a
+            if ht_t > 0: d['ht_over_05'] += 1
+            if ht_t > 1: d['ht_over_15'] += 1
+            if ht_t > 2: d['ht_over_25'] += 1
+            if ft_t > 0: d['ft_over_05'] += 1
+            if ft_t > 1: d['ft_over_15'] += 1
+            if ft_t > 2: d['ft_over_25'] += 1
+            if ft_t > 3: d['ft_over_35'] += 1
+            if ft_t > 4: d['ft_over_45'] += 1
+            if ft_h > 0 and ft_a > 0: d['btts_count']    += 1
+            if ht_h > 0 and ht_a > 0: d['ht_btts_count'] += 1
+        return d, n
 
-        if p_ft_g > p_ft_c: stats_data['wins'] += 1
-        elif p_ft_g == p_ft_c: stats_data['draws'] += 1
-        else: stats_data['losses'] += 1
+    d10, n10 = calc_set(study_set, player_name)
+    d5,  n5  = calc_set(recent_5,  player_name)
 
-        stats_data['total_goals_scored'] += p_ft_g
-        stats_data['total_goals_conceded'] += p_ft_c
-        stats_data['total_goals_scored_ht'] += p_ht_g
-        stats_data['total_goals_conceded_ht'] += p_ht_c
-
-        if ft_home > 0 and ft_away > 0: stats_data['btts_count'] += 1
-        if ht_home > 0 and ht_away > 0: stats_data['ht_btts_count'] += 1
-
-        if ht_total > 0: stats_data['ht_over_05'] += 1
-        if ht_total > 1: stats_data['ht_over_15'] += 1
-        if ht_total > 2: stats_data['ht_over_25'] += 1
-
-        if p_ht_g > 0: stats_data['ht_scored_05'] += 1
-        if p_ht_g > 1: stats_data['ht_scored_15'] += 1
-
-        if ft_total > 0: stats_data['ft_over_05'] += 1
-        if ft_total > 1: stats_data['ft_over_15'] += 1
-        if ft_total > 2: stats_data['ft_over_25'] += 1
-        if ft_total > 3: stats_data['ft_over_35'] += 1
-        if ft_total > 4: stats_data['ft_over_45'] += 1
-
-        if p_ft_g > 0: stats_data['ft_scored_05'] += 1
-        if p_ft_g > 1: stats_data['ft_scored_15'] += 1
-        if p_ft_g > 2: stats_data['ft_scored_25'] += 1
-        if p_ft_g > 3: stats_data['ft_scored_35'] += 1
-
-    n = actual_window
-
-    # ✅ NOVO: Calcular desvio padrão dos gols individuais
-    goals_list = stats_data['goals_list']
     try:
-        goals_stdev = statistics.stdev(goals_list) if len(goals_list) >= 2 else 0
+        stdev_ft = statistics.stdev(d10['goals_list_ft']) if len(d10['goals_list_ft']) >= 2 else 0
     except:
-        goals_stdev = 0
+        stdev_ft = 0
+
+    # Forma recente: sequência dos últimos 5 (W=2, D=1, L=0)
+    forma_pts = 0
+    for m in recent_5:
+        is_home = m.get('home_player', '').upper() == player_name.upper()
+        pg = (m.get('home_score_ft', 0) or 0) if is_home else (m.get('away_score_ft', 0) or 0)
+        pc = (m.get('away_score_ft', 0) or 0) if is_home else (m.get('home_score_ft', 0) or 0)
+        if pg > pc:   forma_pts += 2
+        elif pg == pc: forma_pts += 1
+    forma_pct = (forma_pts / 10) * 100  # 0-100%
 
     return {
-        'ht_over_05_pct': (stats_data['ht_over_05'] / n) * 100,
-        'ht_over_15_pct': (stats_data['ht_over_15'] / n) * 100,
-        'ht_over_25_pct': (stats_data['ht_over_25'] / n) * 100,
-        'ht_scored_05_pct': (stats_data['ht_scored_05'] / n) * 100,
-        'ht_scored_15_pct': (stats_data['ht_scored_15'] / n) * 100,
-        'ft_over_05_pct': (stats_data['ft_over_05'] / n) * 100,
-        'ft_over_15_pct': (stats_data['ft_over_15'] / n) * 100,
-        'ft_over_25_pct': (stats_data['ft_over_25'] / n) * 100,
-        'ft_over_35_pct': (stats_data['ft_over_35'] / n) * 100,
-        'ft_over_45_pct': (stats_data['ft_over_45'] / n) * 100,
-        'ft_scored_05_pct': (stats_data['ft_scored_05'] / n) * 100,
-        'ft_scored_15_pct': (stats_data['ft_scored_15'] / n) * 100,
-        'ft_scored_25_pct': (stats_data['ft_scored_25'] / n) * 100,
-        'ft_scored_35_pct': (stats_data['ft_scored_35'] / n) * 100,
-        'avg_goals_scored_ft': stats_data['total_goals_scored'] / n,
-        'avg_goals_conceded_ft': stats_data['total_goals_conceded'] / n,
-        'avg_goals_scored_ht': stats_data['total_goals_scored_ht'] / n,
-        'avg_goals_conceded_ht': stats_data['total_goals_conceded_ht'] / n,
-        'btts_pct': (stats_data['btts_count'] / n) * 100,
-        'ht_btts_pct': (stats_data['ht_btts_count'] / n) * 100,
-        'win_pct': (stats_data['wins'] / n) * 100,
-        'draw_pct': (stats_data['draws'] / n) * 100,
-        'loss_pct': (stats_data['losses'] / n) * 100,
-        'consistency_ft_3_plus_pct': (stats_data['ft_over_25'] / n) * 100,
-        'consistency_ht_1_plus_pct': (stats_data['ht_over_05'] / n) * 100,
-        'goals_stdev': goals_stdev,           # ✅ NOVO
-        'goals_list': goals_list,             # ✅ NOVO: para backtesting
-        'games_analyzed': n
+        # Médias gerais (10j)
+        'avg_goals_scored_ft':   d10['total_scored_ft']   / n10,
+        'avg_goals_conceded_ft': d10['total_conceded_ft'] / n10,
+        'avg_goals_scored_ht':   d10['total_scored_ht']   / n10,
+        'avg_goals_conceded_ht': d10['total_conceded_ht'] / n10,
+        'win_pct':  (d10['wins']   / n10) * 100,
+        'draw_pct': (d10['draws']  / n10) * 100,
+        'loss_pct': (d10['losses'] / n10) * 100,
+        # Médias recentes (5j) — para o novo confidence
+        'avg_scored_ft_5j':   d5['total_scored_ft']   / n5,
+        'avg_conceded_ft_5j': d5['total_conceded_ft'] / n5,
+        'avg_scored_ht_5j':   d5['total_scored_ht']   / n5,
+        'avg_conceded_ht_5j': d5['total_conceded_ht'] / n5,
+        'win_pct_5j': (d5['wins'] / n5) * 100,
+        # Percentuais (10j)
+        'ht_over_05_pct':   (d10['ht_over_05'] / n10) * 100,
+        'ht_over_15_pct':   (d10['ht_over_15'] / n10) * 100,
+        'ht_over_25_pct':   (d10['ht_over_25'] / n10) * 100,
+        'ht_scored_05_pct': (d10['ht_scored_05'] / n10) * 100,
+        'ht_scored_15_pct': (d10['ht_scored_15'] / n10) * 100,
+        'ft_over_05_pct':   (d10['ft_over_05'] / n10) * 100,
+        'ft_over_15_pct':   (d10['ft_over_15'] / n10) * 100,
+        'ft_over_25_pct':   (d10['ft_over_25'] / n10) * 100,
+        'ft_over_35_pct':   (d10['ft_over_35'] / n10) * 100,
+        'ft_over_45_pct':   (d10['ft_over_45'] / n10) * 100,
+        'ft_scored_05_pct': (d10['ft_scored_05'] / n10) * 100,
+        'ft_scored_15_pct': (d10['ft_scored_15'] / n10) * 100,
+        'ft_scored_25_pct': (d10['ft_scored_25'] / n10) * 100,
+        'ft_scored_35_pct': (d10['ft_scored_35'] / n10) * 100,
+        'btts_pct':    (d10['btts_count']    / n10) * 100,
+        'ht_btts_pct': (d10['ht_btts_count'] / n10) * 100,
+        'consistency_ft_3_plus_pct': (d10['ft_over_25'] / n10) * 100,
+        'consistency_ht_1_plus_pct': (d10['ht_over_05'] / n10) * 100,
+        # Stdev e listas
+        'goals_stdev': stdev_ft,
+        'goals_list':    d10['goals_list_ft'],
+        'goals_list_ht': d10['goals_list_ht'],
+        'games_analyzed': n10,
+        # Forma recente (0-100%)
+        'forma_recente_pct': forma_pct,
     }
 
 
 def get_h2h_stats(player1, player2):
+    """
+    Retorna estatísticas dos confrontos diretos entre player1 e player2.
+    Usa os 5 últimos H2H disponíveis.
+    Retorna None se menos de 3 confrontos (não penaliza por falta de dados).
+    """
     all_matches = global_history_cache.get('matches', [])
     if not all_matches:
         return None
 
-    h2h_matches_list = []
     p1 = player1.upper()
     p2 = player2.upper()
+    h2h_list = [
+        m for m in all_matches
+        if (m.get('home_player', '').upper() == p1 and m.get('away_player', '').upper() == p2)
+        or (m.get('home_player', '').upper() == p2 and m.get('away_player', '').upper() == p1)
+    ]
 
-    for m in all_matches:
-        hp = m.get('home_player', '').upper()
-        ap = m.get('away_player', '').upper()
-        if (hp == p1 and ap == p2) or (hp == p2 and ap == p1):
-            h2h_matches_list.append(m)
+    if len(h2h_list) < 3:
+        return None   # Dados insuficientes — critério H2H não será aplicado
 
-    if not h2h_matches_list:
-        return None
-
-    h2h_matches_list = h2h_matches_list[:5]
-    stats = analyze_player_history(h2h_matches_list, player1, window=5)
+    h2h_list = h2h_list[:5]
+    stats = analyze_player_history(h2h_list, player1, window=5)
     if stats:
-        stats['count'] = len(h2h_matches_list)
+        stats['count'] = len(h2h_list)
     return stats
 
 
 def detect_regime_change(matches):
+    """
+    Detecta se o jogador está em queda (COOLING) ou em alta (HEATING)
+    comparando os últimos 3 jogos com os 4-10 anteriores.
+    """
     if len(matches) < 6:
         return {'regime_change': False}
 
-    last_3 = matches[:3]
-    previous_7 = matches[3:10] if len(matches) >= 10 else matches[3:]
+    last_3     = matches[:3]
+    previous   = matches[3:10] if len(matches) >= 10 else matches[3:]
 
-    def avg_goals_window(window):
-        total = 0
-        for m in window:
-            goals = m.get('home_score_ft', 0) or 0
-            total += goals
-        return total / len(window) if window else 0
+    def avg_scored(window):
+        if not window: return 0
+        return sum(m.get('home_score_ft', 0) or 0 for m in window) / len(window)
 
-    avg_last_3 = avg_goals_window(last_3)
-    avg_previous = avg_goals_window(previous_7)
+    avg_r = avg_scored(last_3)
+    avg_p = avg_scored(previous)
 
-    if avg_previous > 0:
-        ratio = avg_last_3 / avg_previous
-        if ratio < 0.45 and avg_last_3 < 1.2:
-            return {
-                'regime_change': True,
-                'direction': 'COOLING',
-                'severity': 'HIGH',
-                'avg_last_3': avg_last_3,
-                'avg_previous': avg_previous,
-                'action': 'AVOID',
-                'reason': f'Jogador esfriou: {avg_last_3:.1f} vs {avg_previous:.1f}'
-            }
-        elif ratio > 1.8 and avg_last_3 > 2.0:
-            return {
-                'regime_change': True,
-                'direction': 'HEATING',
-                'severity': 'MEDIUM',
-                'avg_last_3': avg_last_3,
-                'avg_previous': avg_previous,
-                'action': 'BOOST',
-                'reason': f'Jogador em alta: {avg_last_3:.1f} vs {avg_previous:.1f}'
-            }
+    if avg_p > 0:
+        ratio = avg_r / avg_p
+        if ratio < 0.45 and avg_r < 1.2:
+            return {'regime_change': True, 'direction': 'COOLING', 'action': 'AVOID',
+                    'reason': f'Esfriou: {avg_r:.1f} vs {avg_p:.1f}'}
+        if ratio > 1.8 and avg_r > 2.0:
+            return {'regime_change': True, 'direction': 'HEATING', 'action': 'BOOST',
+                    'reason': f'Em alta: {avg_r:.1f} vs {avg_p:.1f}'}
 
     return {'regime_change': False}
 
 
 def analyze_player_with_regime_check(matches, player_name):
+    """
+    Análise completa do jogador: histórico + regime + confidence.
+    """
     if not matches:
         return None
 
-    # ✅ CORREÇÃO #4: Janela de 10 jogos para análise mais robusta
     stats = analyze_player_history(matches, player_name, window=10)
     if not stats:
         return None
 
     regime = detect_regime_change(matches)
 
+    # Bloquear imediatamente se em queda
     if regime['regime_change'] and regime['action'] == 'AVOID':
         print(f"[REGIME] {player_name} em queda. Bloqueando.")
         stats['confidence'] = 0
         return stats
 
-    confidence = calculate_confidence_score(matches[:10], player_name, stats, regime)
-
-    stats['confidence'] = confidence
-    stats['regime_change'] = regime['regime_change']
+    stats['regime_change']    = regime['regime_change']
     stats['regime_direction'] = regime.get('direction', 'STABLE')
+    stats['regime_action']    = regime.get('action', '')
 
     return stats
 
 
-def calculate_confidence_score(last_matches, player_name, stats, regime):
+def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
     """
-    ✅ CORREÇÃO #5: Score de confiança mais rigoroso.
-    
-    Principais mudanças:
-    - Penalizar fortemente jogadores com alta variância (stdev alto)
-    - Exigir média mínima de gols compatível com o threshold que será apostado
-    - Usar janela de 10 jogos para cálculo de consistência
+    Nova lógica de confidence — baseada em métricas dos últimos 5 jogos
+    de CADA jogador individualmente, mais confronto direto.
+
+    Pontuação máxima: 100 pts por jogador
+    Threshold de aprovação: média dos dois jogadores >= 70%
+
+    FATOR 1 — HT marcado (15 pts, gradual)
+    FATOR 2 — HT sofrido (15 pts, gradual)
+    FATOR 3 — FT marcado (15 pts, gradual)
+    FATOR 4 — FT sofrido (15 pts, gradual)
+    FATOR 5 — Win% (10 pts, gradual)
+    FATOR 6 — H2H vantagem (20 pts, com fallback)
+    FATOR 7 — Forma recente (10 pts, sequência W/D/L)
     """
-    score = 0
 
-    goals_list = stats.get('goals_list', [])
+    def score_player(stats, label=""):
+        s = 0
+        bd = []
 
-    # FATOR 1: Consistência via desvio padrão (40 pts)
-    # Alta variância = imprevisível = não tippamos
-    goals_stdev = stats.get('goals_stdev', 0)
-    if goals_stdev <= 0.8:   score += 40  # Muito consistente
-    elif goals_stdev <= 1.2: score += 30  # Consistente
-    elif goals_stdev <= 1.8: score += 15  # Moderado
-    elif goals_stdev <= 2.5: score += 5   # Volátil
-    else:                    score += 0   # Muito volátil (não tippamos)
+        ht_marc = stats.get('avg_scored_ht_5j', stats.get('avg_goals_scored_ht', 0))
+        ht_sofr = stats.get('avg_conceded_ht_5j', stats.get('avg_goals_conceded_ht', 0))
+        ft_marc = stats.get('avg_scored_ft_5j', stats.get('avg_goals_scored_ft', 0))
+        ft_sofr = stats.get('avg_conceded_ft_5j', stats.get('avg_goals_conceded_ft', 0))
+        win_pct = stats.get('win_pct_5j', stats.get('win_pct', 0))
+        forma   = stats.get('forma_recente_pct', 50)
 
-    # FATOR 2: Média de gols (30 pts)
-    avg_goals_ft = stats['avg_goals_scored_ft']
-    avg_goals_ht = stats['avg_goals_scored_ht']
+        # F1: HT marcado (≥2.5=15, ≥1.8=10, ≥1.2=5, <1.2=0)
+        if ht_marc >= 2.5:   pts = 15
+        elif ht_marc >= 1.8: pts = 10
+        elif ht_marc >= 1.2: pts = 5
+        else:                pts = 0
+        s += pts
+        bd.append(f"HT marc {ht_marc:.1f}→+{pts}")
 
-    if avg_goals_ft >= 3.5:   score += 20
-    elif avg_goals_ft >= 2.5: score += 13
-    elif avg_goals_ft >= 1.5: score += 6
-    else:                     score += 0  # Jogador de baixa pontuação: não tippamos +2.5
+        # F2: HT sofrido — invertido (≤1.0=15, ≤1.5=10, ≤2.0=5, >2.0=0)
+        if ht_sofr <= 1.0:   pts = 15
+        elif ht_sofr <= 1.5: pts = 10
+        elif ht_sofr <= 2.0: pts = 5
+        else:                pts = 0
+        s += pts
+        bd.append(f"HT sofr {ht_sofr:.1f}→+{pts}")
 
-    if avg_goals_ht >= 1.5:   score += 10
-    elif avg_goals_ht >= 0.8: score += 5
-    else:                     score += 0
+        # F3: FT marcado (≥3.5=15, ≥2.8=10, ≥2.0=5, <2.0=0)
+        if ft_marc >= 3.5:   pts = 15
+        elif ft_marc >= 2.8: pts = 10
+        elif ft_marc >= 2.0: pts = 5
+        else:                pts = 0
+        s += pts
+        bd.append(f"FT marc {ft_marc:.1f}→+{pts}")
 
-    # FATOR 3: Regime / Forma recente (20 pts)
-    if regime.get('regime_change') and regime.get('action') == 'BOOST':
-        score += 20
-    elif not regime.get('regime_change'):
-        score += 12  # Estável mas não excepcional
-    # Se COOLING, já retornamos confidence=0 antes
+        # F4: FT sofrido — invertido (≤2.0=15, ≤2.5=10, ≤3.0=5, >3.0=0)
+        if ft_sofr <= 2.0:   pts = 15
+        elif ft_sofr <= 2.5: pts = 10
+        elif ft_sofr <= 3.0: pts = 5
+        else:                pts = 0
+        s += pts
+        bd.append(f"FT sofr {ft_sofr:.1f}→+{pts}")
 
-    # FATOR 4: HT Dependability (10 pts)
-    if stats['ht_over_05_pct'] >= 90:   score += 10
-    elif stats['ht_over_05_pct'] >= 75: score += 5
+        # F5: Win% (≥65%=10, ≥55%=6, ≥45%=3, <45%=0)
+        if win_pct >= 65:   pts = 10
+        elif win_pct >= 55: pts = 6
+        elif win_pct >= 45: pts = 3
+        else:               pts = 0
+        s += pts
+        bd.append(f"Win {win_pct:.0f}%→+{pts}")
 
-    return min(100, score)
+        # F7: Forma recente (0-10 pts proporcional)
+        pts = round((forma / 100) * 10)
+        s += pts
+        bd.append(f"Forma {forma:.0f}%→+{pts}")
+
+        return min(100, s), bd
+
+    sc_home, bd_home = score_player(home_stats, "home")
+    sc_away, bd_away = score_player(away_stats, "away")
+
+    # F6: H2H — aplica ao JOGADOR com vantagem (+20), desvantagem (0)
+    # Se sem dados H2H suficientes, ambos recebem +10 (neutro)
+    if h2h_stats is not None:
+        # h2h_stats é calculado na perspectiva do home_player
+        h2h_win = h2h_stats.get('win_pct', 50)
+        if h2h_win >= 60:
+            sc_home = min(100, sc_home + 20)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+20")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+0")
+        elif h2h_win <= 40:
+            sc_away = min(100, sc_away + 20)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+20")
+        else:
+            # Paridade: +10 para ambos
+            sc_home = min(100, sc_home + 10)
+            sc_away = min(100, sc_away + 10)
+            bd_home.append(f"H2H paridade→+10")
+            bd_away.append(f"H2H paridade→+10")
+    else:
+        # Sem H2H: +10 neutro para ambos (não penaliza)
+        sc_home = min(100, sc_home + 10)
+        sc_away = min(100, sc_away + 10)
+
+    avg_conf = (sc_home + sc_away) / 2
+
+    return {
+        'home_confidence': sc_home,
+        'away_confidence': sc_away,
+        'avg_confidence':  avg_conf,
+        'breakdown_home':  bd_home,
+        'breakdown_away':  bd_away,
+    }
 
 
 # =============================================================================
@@ -2272,24 +2350,33 @@ async def main_loop(bot):
                     print(f"[WARN] Falha na análise (possível regime change)")
                     continue
 
-                home_confidence = home_stats.get('confidence', 0)
-                away_confidence = away_stats.get('confidence', 0)
-                avg_confidence = (home_confidence + away_confidence) / 2
+                # Nova lógica: confidence calculado com H2H integrado
+                h2h = get_h2h_stats(home_player, away_player)
+                conf_result   = calculate_confidence_score(home_stats, away_stats, h2h)
+                home_confidence = conf_result['home_confidence']
+                away_confidence = conf_result['away_confidence']
+                avg_confidence  = conf_result['avg_confidence']
 
-                # ✅ CORREÇÃO #5: Aumentar o threshold de confidence mínimo para 80%
-                if avg_confidence < 80:
-                    print(f"[BLOCKED] Confidence {avg_confidence:.0f}% < 80% mínimo")
+                # Threshold: 70% (novo, era 80% com lógica antiga mais restritiva)
+                CONF_THRESHOLD = 70
+                if avg_confidence < CONF_THRESHOLD:
+                    bd_h = " | ".join(conf_result['breakdown_home'])
+                    bd_a = " | ".join(conf_result['breakdown_away'])
+                    print(f"[BLOCKED] Confidence {avg_confidence:.0f}% < {CONF_THRESHOLD}%")
+                    print(f"  {home_player}: {home_confidence:.0f}% — {bd_h}")
+                    print(f"  {away_player}: {away_confidence:.0f}% — {bd_a}")
                     continue
 
-                # ✅ GATE EXTRA: Verificar se algum jogador tem média muito baixa para a liga
+                # Gate: pelo menos 1 jogador com média mínima para a liga
                 league_profile = LEAGUE_PROFILES.get(mapped_league, LEAGUE_PROFILES["DEFAULT"])
                 min_avg = league_profile['min_player_avg']
                 if home_stats['avg_goals_scored_ft'] < min_avg and away_stats['avg_goals_scored_ft'] < min_avg:
-                    print(f"[BLOCKED] Ambos jogadores com média abaixo do mínimo da liga ({min_avg})")
+                    print(f"[BLOCKED] Ambos com média FT abaixo do mínimo da liga ({min_avg})")
                     continue
 
-                print(f"[STATS] {home_player}: avg={home_stats['avg_goals_scored_ft']:.1f} σ={home_stats.get('goals_stdev',0):.1f} conf={home_confidence:.0f}%")
-                print(f"[STATS] {away_player}: avg={away_stats['avg_goals_scored_ft']:.1f} σ={away_stats.get('goals_stdev',0):.1f} conf={away_confidence:.0f}%")
+                h2h_info = f" | H2H: {h2h['count']}j" if h2h else " | H2H: sem dados"
+                print(f"[STATS] {home_player}: FT={home_stats['avg_scored_ft_5j']:.1f} HT={home_stats['avg_scored_ht_5j']:.1f} conf={home_confidence:.0f}%")
+                print(f"[STATS] {away_player}: FT={away_stats['avg_scored_ft_5j']:.1f} HT={away_stats['avg_scored_ht_5j']:.1f} conf={away_confidence:.0f}%{h2h_info}")
 
                 all_league_stats = league_stats if mapped_league in league_stats else {}
 
