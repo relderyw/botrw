@@ -1825,8 +1825,9 @@ def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
 
 def format_league_stats_text(stats):
     """
-    Alinhamento perfeito: valores numéricos dentro de <code>.
-    Emojis coloridos apenas no final de cada linha (fora do monospace).
+    Formato compacto e alinhado.
+    ✓ = 100%  |  número = valor parcial  |  ✗ = 0%
+    Emoji colorido fora do <code> (evita quebra de linha).
     """
     LIGAS_MONITORADAS = {
         "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
@@ -1838,6 +1839,11 @@ def format_league_stats_text(stats):
         "GT LEAGUE 12 MIN", "CLA 10 MIN",
         "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
     ]
+
+    def fmt(v):
+        if v == 100: return " ✓"
+        if v == 0:   return " ✗"
+        return f"{v:2}"
 
     def color(avg):
         if avg >= 78: return "🟢"
@@ -1864,8 +1870,8 @@ def format_league_stats_text(stats):
     now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
     out = [
         f"📊 <b>LIGAS — últimos 5j</b>  <i>{now_str}</i>",
-        "<code>Liga           H½  H1  BT  F2  F3  BT  AVG</code>",
-        "<code>──────────────────────────────────────────</code>",
+        "<code>Liga         H½ H1 BT F2 F3 BT AVG</code>",
+        "<code>──────────────────────────────────</code>",
     ]
 
     for league in ORDER:
@@ -1877,10 +1883,10 @@ def format_league_stats_text(stats):
             s['ft']['o25'], s['ft']['o15'], s['ft']['btts'],
         ]
         avg  = scores[league]
-        name = (league[:12] + "…") if len(league) > 13 else league.ljust(13)
-        cols = "  ".join(f"{v:3}" for v in vals)
+        name = (league[:11] + "…") if len(league) > 12 else league.ljust(12)
+        cols = " ".join(fmt(v) for v in vals)
         tag  = " 🏆" if league == best else (" ⚠️" if league == worst else "")
-        out.append(f"<code>{name}  {cols}  {avg:3.0f}%</code> {color(avg)}{tag}")
+        out.append(f"<code>{name} {cols} {avg:3.0f}%</code> {color(avg)}{tag}")
 
     out.append("")
     out.append(f"🏆 <b>{best}</b> ({scores[best]:.0f}%)  ⚠️ <b>{worst}</b> ({scores[worst]:.0f}%)")
