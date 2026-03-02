@@ -1,16 +1,16 @@
 {
-    "last_league_message_id": 66496,
+    "last_league_message_id": 66501,
     "league_stats": {
-        "GT LEAGUE 12 MIN": {
+        "CLA 10 MIN": {
             "ht": {
-                "o05": 80,
-                "o15": 40,
+                "o05": 100,
+                "o15": 80,
                 "btts": 40
             },
             "ft": {
                 "o15": 100,
-                "o25": 60,
-                "btts": 80
+                "o25": 100,
+                "btts": 100
             },
             "count": 5
         },
@@ -18,20 +18,7 @@
             "ht": {
                 "o05": 100,
                 "o15": 100,
-                "btts": 80
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "INT 8 MIN": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 100
+                "btts": 60
             },
             "ft": {
                 "o15": 100,
@@ -43,19 +30,58 @@
         "Champions VOLTA league 4x4 (2x3 mins)": {
             "ht": {
                 "o05": 100,
-                "o15": 60,
-                "btts": 60
+                "o15": 100,
+                "btts": 80
             },
             "ft": {
-                "o15": 80,
-                "o25": 80,
-                "btts": 80
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
             },
             "count": 5
         },
         "H2H 8 MIN": {
             "ht": {
-                "o05": 60,
+                "o05": 40,
+                "o15": 20,
+                "btts": 0
+            },
+            "ft": {
+                "o15": 80,
+                "o25": 20,
+                "btts": 20
+            },
+            "count": 5
+        },
+        "VALHALLA CUP": {
+            "ht": {
+                "o05": 100,
+                "o15": 60,
+                "btts": 60
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "INT 8 MIN": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "GT LEAGUE 12 MIN": {
+            "ht": {
+                "o05": 80,
                 "o15": 60,
                 "btts": 20
             },
@@ -66,29 +92,16 @@
             },
             "count": 5
         },
-        "VALHALLA CUP": {
+        "Seria A (Virtual eComp)": {
             "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 80
+                "o05": 80,
+                "o15": 40,
+                "btts": 20
             },
             "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "CLA 10 MIN": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
+                "o15": 60,
+                "o25": 60,
                 "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
             },
             "count": 5
         },
@@ -182,9 +195,87 @@
                 "btts": 80
             },
             "count": 5
+        },
+        "Volta Seria A 4x4 (2x3 mins)": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 60
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Conference League": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 100
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "FA Cup": {
+            "ht": {
+                "o05": 100,
+                "o15": 60,
+                "btts": 20
+            },
+            "ft": {
+                "o15": 80,
+                "o25": 60,
+                "btts": 60
+            },
+            "count": 5
+        },
+        "Volta Europa League": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 60
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Serie A": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 40
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Volta International II 4x4 (2x3 mins)": {
+            "ht": {
+                "o05": 100,
+                "o15": 80,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
         }
     },
-    "last_league_update_time": 1772397807.3323147,
+    "last_league_update_time": 1772400444.3658798,
     "last_summary": null,
     "last_daily_message_date": "2026-03-01",
     "sent_match_ids": [],

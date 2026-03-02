@@ -116,23 +116,32 @@ class LeagueManager:
 
     def _get_or_init(self, league):
         if league not in self.leagues:
-            initial = LEAGUE_INITIAL_STATUS.get(league, False)
+            # ✅ FIX #1: Ligas desconhecidas começam ATIVAS (default=True)
+            # Antes era False → ficavam bloqueadas para sempre sem amostras
+            # Agora ficam ativas até acumularem 8 tips e serem avaliadas
+            initial = LEAGUE_INITIAL_STATUS.get(league, True)
             self.leagues[league] = {
                 'active': initial,
                 'window': deque(maxlen=LEAGUE_WINDOW_SIZE),
                 'total_tips': 0,
             }
             status_str = "ATIVA" if initial else "BLOQUEADA"
-            print(f"[LeagueManager] Nova liga: {league} → {status_str}")
+            print(f"[LeagueManager] Nova liga: {league} → {status_str} (inicial)")
         return self.leagues[league]
 
     def is_active(self, league):
-        """Retorna (bool_ativa, motivo)."""
+        """
+        Retorna (bool_ativa, motivo).
+        ✅ FIX: Com < LEAGUE_MIN_SAMPLES tips, respeita o status atual
+        sem bloquear — a liga só é reavaliada quando tiver amostras suficientes.
+        """
         info = self._get_or_init(league)
         window = info['window']
         n = len(window)
         if n < LEAGUE_MIN_SAMPLES:
-            return info['active'], f"Aguardando amostras ({n}/{LEAGUE_MIN_SAMPLES})"
+            # Retorna o status atual (True para novas ligas) — não bloqueia por falta de dados
+            motivo = f"Coletando dados ({n}/{LEAGUE_MIN_SAMPLES} tips)"
+            return info['active'], motivo
         pct = (sum(window) / n) * 100
         return info['active'], f"{pct:.1f}% nas últimas {n} tips"
 
@@ -230,10 +239,12 @@ class LeagueManager:
         return "\n".join(lines)
 
 
-
-
 # Instância global
 league_manager = LeagueManager()
+
+# =============================================================================
+# MAPEAMENTO DE LIGAS
+# =============================================================================
 
 LIVE_LEAGUE_MAPPING = {
     "E-Soccer - Battle - 8 minutos de jogo": "BATTLE 8 MIN",
@@ -531,14 +542,12 @@ def clean_player_name(name):
         return content_match
     return outside
 
-
 # =============================================================================
 # ✅ FILTRO DE QUALIDADE DA LIGA — Cenários favoráveis por tipo
 # =============================================================================
 
 SHORT_LEAGUES = {"BATTLE 8 MIN", "H2H 8 MIN", "VOLTA 6 MIN", "VALHALLA CUP", "VALKYRIE CUP"}
 LONG_LEAGUES  = {"GT LEAGUE 12 MIN", "CLA 10 MIN"}
-
 
 LEAGUE_QUALITY_CRITERIA = {
     "SHORT": {
@@ -572,16 +581,36 @@ LEAGUE_QUALITY_CRITERIA = {
 }
 
 
-def check_league_quality(league_key, last_5_matches):
+def check_league_quality(league_key, last_n_matches):
     """
     Verifica se a liga está em condição favorável para receber tips.
-    Analisa os últimos 5 jogos DA LIGA como um todo (não de um jogador).
+    Analisa os últimos 8 jogos DA LIGA (era 5 — mais estabilidade estatística).
+
+    ✅ FIX #2: Critério mudou de "TODOS devem passar" para "score ponderado >= 70%"
+    → Com 5 jogos e 12 critérios, "todos passam" reprova ligas boas ~38% das vezes
+    → Agora a liga pode falhar em até ~3 critérios menores e ainda ser aprovada
+
+    Critérios têm pesos diferentes:
+      - Peso ALTO (crítico): zero_zero (partidas sem gols) — falha aqui penaliza muito
+      - Peso MÉDIO: métricas principais (ft_over_25, btts_ft, ht_over_05)
+      - Peso BAIXO: métricas secundárias (ht_over_25, ft_over_45)
 
     Retorna: (aprovada: bool, score: float, detalhes: dict)
-    Se QUALQUER critério falhar → liga desfavorável no momento.
     """
-    if not last_5_matches or len(last_5_matches) < 5:
-        return False, 0, {"failed": ["Menos de 5 jogos da liga disponíveis"], "passed": []}
+    MIN_MATCHES = 8  # era 5
+    APPROVAL_THRESHOLD = 70  # score ponderado mínimo para aprovar
+
+    if not last_n_matches or len(last_n_matches) < MIN_MATCHES:
+        n_found = len(last_n_matches) if last_n_matches else 0
+        # Sem dados suficientes → passa (não bloquear por falta de histórico)
+        return True, 100, {
+            "passed": [f"⚠️ Histórico insuficiente ({n_found}/{MIN_MATCHES}) — aprovado por falta de dados"],
+            "failed": [],
+            "tipo": "SEM DADOS",
+            "score": 100
+        }
+
+    last_5_matches = last_n_matches[:MIN_MATCHES]
 
     n = len(last_5_matches)
 
@@ -628,20 +657,48 @@ def check_league_quality(league_key, last_5_matches):
         "avg_ht_min": "Média HT", "avg_ft_min": "Média FT",
     }
 
+    # ✅ FIX #2: Pesos por critério (alto = mais importante)
+    # zero_zero é crítico — liga com partidas 0-0 é ruim para apostas de gols
+    # métricas FT têm mais peso que HT (é o que apostamos)
+    # médias são indicadores gerais (peso médio)
+    weights = {
+        "zero_zero_ht": 3,   # CRÍTICO
+        "zero_zero_ft": 3,   # CRÍTICO
+        "ft_over_25":   2,   # ALTO
+        "btts_ft":      2,   # ALTO
+        "ht_over_05":   2,   # ALTO
+        "btts_ht":      1,   # MÉDIO
+        "ht_over_15":   1,   # MÉDIO
+        "ft_over_35":   1,   # MÉDIO
+        "avg_ft_min":   1,   # MÉDIO
+        "ht_over_25":   1,   # BAIXO
+        "ft_over_45":   1,   # BAIXO
+        "avg_ht_min":   1,   # BAIXO
+    }
+
     passed, failed = [], []
+    total_weight = 0
+    passed_weight = 0
+
     for key, threshold in crit.items():
-        real = real_values[key]
-        label = labels[key]
-        is_zz = key.startswith("zero_zero")
-        ok = (real == 0) if is_zz else (real >= threshold)
+        real    = real_values[key]
+        label   = labels[key]
+        w       = weights.get(key, 1)
+        is_zz   = key.startswith("zero_zero")
+        ok      = (real == 0) if is_zz else (real >= threshold)
+        total_weight  += w
         if ok:
+            passed_weight += w
             passed.append(f"✅ {label}: {real:.0f}%")
         else:
             diff = threshold - real if not is_zz else real
             failed.append(f"❌ {label}: {real:.0f}% (faltam {diff:.0f}pp)")
 
-    aprovada = len(failed) == 0
-    score    = len(passed) / (len(passed) + len(failed)) * 100 if (passed or failed) else 0
+    # Score ponderado (0–100%)
+    score = (passed_weight / total_weight * 100) if total_weight > 0 else 0
+
+    # ✅ FIX #2: Aprovada se score ponderado >= APPROVAL_THRESHOLD (70%)
+    aprovada = score >= APPROVAL_THRESHOLD
 
     return aprovada, score, {
         "tipo": tipo, "passed": passed, "failed": failed, "score": score,
@@ -650,13 +707,13 @@ def check_league_quality(league_key, last_5_matches):
 
 
 def get_league_last5(league_key, all_matches):
-    """Retorna os últimos 5 jogos de uma liga específica do histórico global."""
+    """Retorna os últimos 8 jogos de uma liga específica do histórico global."""
     filtered = [
         m for m in all_matches
         if m.get('league_name', '') == league_key
         or map_league_name(m.get('league_name', '')) == league_key
     ]
-    return filtered[:5]
+    return filtered[:8]  # ✅ FIX #2: 8 jogos (era 5) — mais estabilidade estatística
 
 
 
@@ -1821,7 +1878,7 @@ def format_league_stats_text(stats):
 
 
 
-async def update_league_stats(bot, recent_matches):
+async def update_league_stats(bot, recent_matches, force=False):
     global last_league_summary, last_league_message_id, league_stats, last_league_update_time
 
     try:
@@ -1868,11 +1925,16 @@ async def update_league_stats(bot, recent_matches):
         if not stats:
             return
 
-        if league_stats == stats:
-            return
-
         current_time = time.time()
-        if current_time - last_league_update_time < 600:
+
+        # ✅ FIX #3: Removido o guard "if league_stats == stats: return"
+        # Motivo: impedia reenvio mesmo após reinício do bot, pois os dados
+        # eram iguais ao estado salvo. Agora o cooldown de 10min é suficiente.
+        # O guard de "dados iguais" só bloqueava sem benefício real.
+
+        # Cooldown de 10 min entre envios (evita spam) — exceto se force=True
+        if not force and last_league_update_time > 0 and current_time - last_league_update_time < 600:
+            league_stats = stats  # Atualiza o cache mesmo sem enviar
             return
 
         league_stats            = stats
@@ -1900,6 +1962,232 @@ async def update_league_stats(bot, recent_matches):
 
     except Exception as e:
         print(f"[ERROR] update_league_stats: {e}")
+
+
+# =============================================================================
+# ENVIO DE MENSAGENS
+# =============================================================================
+
+async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats):
+    global sent_tips, sent_match_ids
+    event_id = event.get('id')
+    period = 'HT' if 'HT' in strategy.upper() else 'FT'
+    event_base_key = f"{event_id}_ANY"
+    if event_base_key in sent_match_ids:
+        print(f"[SKIP] Evento {event_id} já teve tip enviada.")
+        return
+
+    timer = event.get('timer', {})
+    sent_minute = timer.get('minute', 0)
+
+    home_player = event.get('homePlayer', '')
+    away_player = event.get('awayPlayer', '')
+    for player in [home_player, away_player]:
+        if player:
+            on_cooldown, remaining = is_player_on_cooldown(player)
+            if on_cooldown:
+                print(f"[COOLDOWN] {player} em cooldown por {remaining:.0f} min.")
+                return
+
+    liga_det = event.get('_liga_det')
+    for attempt in range(3):
+        try:
+            msg = format_tip_message(event, strategy, obs_odd, home_stats, away_stats, liga_det)
+            message_obj = await bot.send_message(
+                chat_id=CHAT_ID, text=msg, parse_mode="HTML", disable_web_page_preview=True
+            )
+            sent_match_ids.add(event_base_key)
+            sent_match_ids.add(f"{event_id}_{period}")
+
+            tipped_player = event.get('homePlayer')
+            tipped_nick = extract_pure_nick(tipped_player) if tipped_player else ""
+            strategy_lower = strategy.lower()
+            for p in [event.get('homePlayer'), event.get('awayPlayer')]:
+                if p and p.lower() in strategy_lower:
+                    tipped_player = p
+                    tipped_nick = extract_pure_nick(p)
+                    break
+
+            sent_tips.append({
+                'event_id': event_id,
+                'strategy': strategy,
+                'sent_time': datetime.now(MANAUS_TZ),
+                'status': 'pending',
+                'message_id': message_obj.message_id,
+                'message_text': msg,
+                'home_player': home_player,
+                'away_player': away_player,
+                'league': event.get('mappedLeague'),
+                'tip_period': period,
+                'sent_minute': sent_minute,
+                'homeTeamName': event.get('homeTeamName', ''),
+                'awayTeamName': event.get('awayTeamName', ''),
+                'liveTimeRaw': event.get('liveTimeRaw', ''),
+                'startDateRaw': event.get('startDateRaw', ''),
+                'sent_scoreboard': event.get('scoreboard', '0-0'),
+                'tipped_player_nick': tipped_nick,
+                'tipped_player_raw': tipped_player,
+                'sent_odd': obs_odd,
+                'liga_det': liga_det or {},
+            })
+            save_state()
+            print(f"[✓] Tip enviada: {event_id} - {strategy} @ min {sent_minute}")
+            break
+        except Exception as e:
+            print(f"[ERROR] send_tip tentativa {attempt+1}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2)
+
+
+# =============================================================================
+# VERIFICAÇÃO DE RESULTADOS
+# =============================================================================
+
+async def check_results(bot):
+    global last_summary, last_league_message_id, daily_stats, last_daily_message_date
+    try:
+        recent = fetch_recent_matches(num_pages=30, use_cache=False)
+        today_date = datetime.now(MANAUS_TZ)
+        today = today_date.date()
+        today_str = today_date.strftime('%Y-%m-%d')
+
+        sent_tips[:] = [t for t in sent_tips if t['sent_time'].date() >= today - timedelta(days=5)]
+
+        for tip in sent_tips:
+            if tip['status'] != 'pending':
+                continue
+
+            elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
+            league_upper = tip.get('league', '').upper()
+            if any(x in league_upper for x in ["VALKYRIE", "CLA", "H2H", "BATTLE"]):
+                min_wait = 150 if tip.get('tip_period') == 'HT' else 400
+            else:
+                min_wait = 240 if tip.get('tip_period') == 'HT' else 480
+
+            if elapsed < min_wait:
+                continue
+
+            matched = find_best_match_for_tip(tip, recent)
+            if not matched:
+                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match")
+                continue
+
+            strategy = tip['strategy']
+            tipped_nick = tip.get('tipped_player_nick', '')
+
+            ht_home = int(matched.get('home_score_ht', 0) or 0)
+            ht_away = int(matched.get('away_score_ht', 0) or 0)
+            ft_home_total = int(matched.get('home_score_ft', 0) or 0)
+            ft_away_total = int(matched.get('away_score_ft', 0) or 0)
+            ht_total = ht_home + ht_away
+            ft_total = ft_home_total + ft_away_total
+
+            result = None
+            if '+0.5 GOL HT' in strategy:
+                result = 'green' if ht_total >= 1 else 'red'
+            elif '+1.5 GOLS HT' in strategy:
+                result = 'green' if ht_total >= 2 else 'red'
+            elif '+2.5 GOLS HT' in strategy:
+                result = 'green' if ht_total >= 3 else 'red'
+            elif 'BTTS HT' in strategy:
+                result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
+            elif '+1.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+                result = 'green' if gols >= 2 else 'red'
+            elif '+2.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+                result = 'green' if gols >= 3 else 'red'
+            elif '+3.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+                result = 'green' if gols >= 4 else 'red'
+            elif '+4.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+                result = 'green' if gols >= 5 else 'red'
+            elif '+5.5 GOLS FT' in strategy:
+                result = 'green' if ft_total >= 6 else 'red'
+            elif 'BTTS FT' in strategy:
+                result = 'green' if (ft_home_total > 0 and ft_away_total > 0) else 'red'
+
+            if result:
+                tip['status'] = result
+                result_msg = format_result_message(
+                    tip, ht_home, ht_away, ft_home_total, ft_away_total, result
+                )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=CHAT_ID, message_id=tip['message_id'],
+                        text=result_msg, parse_mode="HTML"
+                    )
+                except Exception as e:
+                    print(f"[WARN] Não editou mensagem: {e}")
+
+                print(f"[✓] {result.upper()} - {strategy}")
+                save_tip_result(tip, ht_home, ht_away, ft_home_total, ft_away_total)
+
+                tip_league = tip.get('league', '')
+                if tip_league:
+                    mudou_liga, novo_status, msg_liga = league_manager.record_result(tip_league, result == 'green')
+                    if mudou_liga and msg_liga:
+                        try:
+                            await bot.send_message(chat_id=CHAT_ID, text=msg_liga, parse_mode="HTML")
+                        except Exception as e:
+                            print(f"[WARN] Não enviou notif de liga: {e}")
+
+                tipped_p = tip.get('tipped_player_nick', '')
+                if tipped_p:
+                    update_player_red_streak(tipped_p, result)
+
+                d_key = tip['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
+                if d_key not in daily_stats:
+                    daily_stats[d_key] = {'green': 0, 'red': 0}
+                daily_stats[d_key][result] += 1
+
+        sent_tips[:] = [t for t in sent_tips if t.get('status') == 'pending']
+
+        today_greens = daily_stats.get(today_str, {}).get('green', 0)
+        today_reds   = daily_stats.get(today_str, {}).get('red', 0)
+        total_resolved = today_greens + today_reds
+        if total_resolved > 0:
+            perc = (today_greens / total_resolved) * 100
+            summary = (
+                f"<b>👑 RW TIPS - FIFA 🎮</b>\n"
+                f"✅ Green [{today_greens}]\n"
+                f"❌ Red [{today_reds}]\n"
+                f"📊 {perc:.1f}%"
+            )
+            if summary != last_summary:
+                await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
+                last_summary = summary
+
+        if last_daily_message_date and last_daily_message_date != today_str:
+            sorted_dates = sorted(daily_stats.keys())
+            if sorted_dates:
+                msg = "🚨 <b>Resumo Geral:</b>\n\n"
+                for date_str in sorted_dates[-7:]:
+                    ds = daily_stats[date_str]
+                    g, r = ds['green'], ds['red']
+                    t = g + r
+                    if t == 0:
+                        continue
+                    pct = (g / t) * 100
+                    fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m')
+                    msg += f"📅 {fmt_date} --> ✅ [{g}] | ❌ [{r}] | 📊 [{pct:.1f}%]\n"
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
+
+        if last_daily_message_date != today_str:
+            last_daily_message_date = today_str
+            try:
+                await bot.send_message(
+                    chat_id=CHAT_ID, text=league_manager.get_status_report(), parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"[WARN] Erro ao enviar status das ligas: {e}")
+            save_state()
+
+        await update_league_stats(bot, recent)
+
+    except Exception as e:
+        print(f"[ERROR check_results] {e}")
 
 
 # =============================================================================
@@ -2087,7 +2375,19 @@ async def main():
 
     print("[INFO] Pré-carregando dados...")
     recent = fetch_recent_matches(num_pages=15)
-    await update_league_stats(bot, recent)
+    # ✅ FIX #3: force=True garante envio do resumo sempre ao iniciar
+    await update_league_stats(bot, recent, force=True)
+
+    # ✅ Enviar status das ligas imediatamente na inicialização
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=league_manager.get_status_report(),
+            parse_mode="HTML"
+        )
+        print("[✓] Status inicial das ligas enviado")
+    except Exception as e:
+        print(f"[WARN] Não enviou status inicial: {e}")
 
     await asyncio.gather(
         main_loop(bot),
