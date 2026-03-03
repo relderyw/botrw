@@ -740,24 +740,29 @@ def get_player_ft_goals(player_nick: str, match: dict) -> int:
     """
     Retorna os gols TOTAIS (jogo completo) do jogador.
 
-    A API retorna home_score_ft como o TOTAL do jogo (Full Time),
-    não apenas o 2º tempo. Confirmado via dados reais:
-      HT 2-1, FT 6-4 → home_score_ht=2, home_score_ft=6 (total)
+    CONFIRMADO via multiplos casos reais:
+    score_ft = total do jogo completo (inclui o HT)
+    score_ht = gols so do 1o tempo
 
-    O RED incorreto de Stason23 (+2.5, HT 2-2, FT 3-4) foi causado
-    por outro motivo — provavelmente o match não foi encontrado corretamente,
-    não pela soma ht+ft.
+    Exemplos:
+      Florie: ht=2, ft=2 -> marcou 2 no HT, 0 no 2T -> total=2
+      Olive:  ht=3, ft=4 -> marcou 3 no HT, 1 no 2T -> total=4
+      Bradley:ht=1, ft=4 -> marcou 1 no HT, 3 no 2T -> total=4
+
+    NUNCA somar ht + ft.
     """
     if not player_nick or not match:
         return 0
     p_nick = player_nick.upper().strip()
-    home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
-    away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
+    home_nick = extract_pure_nick(match.get("home_player") or match.get("home_team") or "")
+    away_nick = extract_pure_nick(match.get("away_player") or match.get("away_team") or "")
     if p_nick == home_nick:
-        return int(match.get('home_score_ft', 0) or 0)
+        return int(match.get("home_score_ft", 0) or 0)
     if p_nick == away_nick:
-        return int(match.get('away_score_ft', 0) or 0)
+        return int(match.get("away_score_ft", 0) or 0)
     return 0
+
+
 
 
 def find_best_match_for_tip(tip, recent_matches):
@@ -844,8 +849,13 @@ def find_best_match_for_tip(tip, recent_matches):
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            final_h = int(m.get('home_score_ft', 0) or 0)
-            final_a = int(m.get('away_score_ft', 0) or 0)
+            # home_score_ft pode ser apenas o 2T em algumas ligas.
+            # Para garantir, comparamos com o total acumulado (ht + ft).
+            # Se ht+ft >= placar enviado, o jogo é candidato válido.
+            m_ht_h = int(m.get('home_score_ht', 0) or 0)
+            m_ht_a = int(m.get('away_score_ht', 0) or 0)
+            final_h = m_ht_h + int(m.get('home_score_ft', 0) or 0)
+            final_a = m_ht_a + int(m.get('away_score_ft', 0) or 0)
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
@@ -2191,6 +2201,7 @@ async def check_results(bot):
 
             ht_home = int(matched.get('home_score_ht', 0) or 0)
             ht_away = int(matched.get('away_score_ht', 0) or 0)
+            # home_score_ft pode ser só o 2T em algumas ligas → somar com ht para garantir total
             ft_home_total = int(matched.get('home_score_ft', 0) or 0)
             ft_away_total = int(matched.get('away_score_ft', 0) or 0)
             ht_total = ht_home + ht_away
@@ -2205,18 +2216,28 @@ async def check_results(bot):
                 result = 'green' if ht_total >= 3 else 'red'
             elif 'BTTS HT' in strategy:
                 result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
-            elif '+1.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+            # Apostas INDIVIDUAIS (nome do jogador na strategy) — usa gols do jogador
+            elif '(TOTAL)' not in strategy and tipped_nick and '+1.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched)
                 result = 'green' if gols >= 2 else 'red'
-            elif '+2.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+            elif '(TOTAL)' not in strategy and tipped_nick and '+2.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched)
                 result = 'green' if gols >= 3 else 'red'
-            elif '+3.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+            elif '(TOTAL)' not in strategy and tipped_nick and '+3.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched)
                 result = 'green' if gols >= 4 else 'red'
-            elif '+4.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched) if tipped_nick else ft_total
+            elif '(TOTAL)' not in strategy and tipped_nick and '+4.5 GOLS FT' in strategy:
+                gols = get_player_ft_goals(tipped_nick, matched)
                 result = 'green' if gols >= 5 else 'red'
+            # Apostas TOTAIS do jogo — sempre usa ft_total (soma dos dois jogadores)
+            elif '+1.5 GOLS FT' in strategy:
+                result = 'green' if ft_total >= 2 else 'red'
+            elif '+2.5 GOLS FT' in strategy:
+                result = 'green' if ft_total >= 3 else 'red'
+            elif '+3.5 GOLS FT' in strategy:
+                result = 'green' if ft_total >= 4 else 'red'
+            elif '+4.5 GOLS FT' in strategy:
+                result = 'green' if ft_total >= 5 else 'red'
             elif '+5.5 GOLS FT' in strategy:
                 result = 'green' if ft_total >= 6 else 'red'
             elif 'BTTS FT' in strategy:
