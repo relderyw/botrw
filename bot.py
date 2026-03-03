@@ -740,29 +740,24 @@ def get_player_ft_goals(player_nick: str, match: dict) -> int:
     """
     Retorna os gols TOTAIS (jogo completo) do jogador.
 
-    A API retorna home_score_ft como gols do 2º tempo apenas.
-    Total do jogo = home_score_ht + home_score_ft
+    A API retorna home_score_ft como o TOTAL do jogo (Full Time),
+    não apenas o 2º tempo. Confirmado via dados reais:
+      HT 2-1, FT 6-4 → home_score_ht=2, home_score_ft=6 (total)
 
-    Evidência: Stason23 marcou 3 gols (2 no HT + 1 no 2T),
-    mas a API retornava home_score_ft=1 (só 2T) → acusava RED indevidamente.
+    O RED incorreto de Stason23 (+2.5, HT 2-2, FT 3-4) foi causado
+    por outro motivo — provavelmente o match não foi encontrado corretamente,
+    não pela soma ht+ft.
     """
     if not player_nick or not match:
         return 0
     p_nick = player_nick.upper().strip()
     home_nick = extract_pure_nick(match.get('home_player') or match.get('home_team') or '')
     away_nick = extract_pure_nick(match.get('away_player') or match.get('away_team') or '')
-
     if p_nick == home_nick:
-        ht = int(match.get('home_score_ht', 0) or 0)
-        ft = int(match.get('home_score_ft', 0) or 0)
-    elif p_nick == away_nick:
-        ht = int(match.get('away_score_ht', 0) or 0)
-        ft = int(match.get('away_score_ft', 0) or 0)
-    else:
-        return 0
-
-    # ft é o 2º tempo → total = ht + ft
-    return ht + ft
+        return int(match.get('home_score_ft', 0) or 0)
+    if p_nick == away_nick:
+        return int(match.get('away_score_ft', 0) or 0)
+    return 0
 
 
 def find_best_match_for_tip(tip, recent_matches):
@@ -2196,11 +2191,8 @@ async def check_results(bot):
 
             ht_home = int(matched.get('home_score_ht', 0) or 0)
             ht_away = int(matched.get('away_score_ht', 0) or 0)
-            ft_home_2t = int(matched.get('home_score_ft', 0) or 0)
-            ft_away_2t = int(matched.get('away_score_ft', 0) or 0)
-            # ft da API = apenas 2º tempo → total do jogo = ht + ft_2t
-            ft_home_total = ht_home + ft_home_2t
-            ft_away_total = ht_away + ft_away_2t
+            ft_home_total = int(matched.get('home_score_ft', 0) or 0)
+            ft_away_total = int(matched.get('away_score_ft', 0) or 0)
             ht_total = ht_home + ht_away
             ft_total = ft_home_total + ft_away_total
 
