@@ -49,7 +49,9 @@ from collections import deque
 LEAGUE_UNLOCK_THRESHOLD = 72   # % para desbloquear liga bloqueada
 LEAGUE_RELOCK_THRESHOLD = 60   # % para bloquear liga ativa (abaixo de 60% → bloqueia)
 LEAGUE_WINDOW_SIZE      = 20   # Janela deslizante (últimas N tips)
-LEAGUE_MIN_SAMPLES      = 8    # Mínimo de amostras antes de decidir
+LEAGUE_MIN_SAMPLES      = 8    # Mínimo de amostras antes de decidir bloqueio estatístico
+LEAGUE_CONSECUTIVE_REDS = 2    # Reds consecutivos para pausar liga temporariamente (mesmo sem amostras suficientes)
+LEAGUE_PAUSE_MINUTES    = 30   # Minutos de pausa após reds consecutivos
 
 # Status inicial de cada liga (baseado no histórico disponível)
 # True = começa ATIVA | False = começa BLOQUEADA (precisa provar)
@@ -116,34 +118,51 @@ class LeagueManager:
 
     def _get_or_init(self, league):
         if league not in self.leagues:
-            # ✅ FIX #1: Ligas desconhecidas começam ATIVAS (default=True)
-            # Antes era False → ficavam bloqueadas para sempre sem amostras
-            # Agora ficam ativas até acumularem 8 tips e serem avaliadas
             initial = LEAGUE_INITIAL_STATUS.get(league, True)
             self.leagues[league] = {
-                'active': initial,
-                'window': deque(maxlen=LEAGUE_WINDOW_SIZE),
-                'total_tips': 0,
+                "active": initial,
+                "window": deque(maxlen=LEAGUE_WINDOW_SIZE),
+                "total_tips": 0,
+                "consecutive_reds": 0,
+                "pause_until": None,
             }
             status_str = "ATIVA" if initial else "BLOQUEADA"
             print(f"[LeagueManager] Nova liga: {league} → {status_str} (inicial)")
-        return self.leagues[league]
+        info = self.leagues[league]
+        if "consecutive_reds" not in info: info["consecutive_reds"] = 0
+        if "pause_until" not in info: info["pause_until"] = None
+        return info
 
     def is_active(self, league):
         """
         Retorna (bool_ativa, motivo).
-        ✅ FIX: Com < LEAGUE_MIN_SAMPLES tips, respeita o status atual
-        sem bloquear — a liga só é reavaliada quando tiver amostras suficientes.
+        Verifica pausa temporaria por reds consecutivos antes da janela estatistica.
         """
         info = self._get_or_init(league)
+
+        # Verificar pausa temporaria por reds consecutivos
+        if info.get('pause_until'):
+            pause_until = info['pause_until']
+            if isinstance(pause_until, str):
+                pause_until = datetime.fromisoformat(pause_until)
+            now = datetime.now(MANAUS_TZ)
+            if pause_until.tzinfo is None:
+                pause_until = pause_until.replace(tzinfo=MANAUS_TZ)
+            if now < pause_until:
+                mins_left = int((pause_until - now).total_seconds() / 60)
+                return False, f'Pausada {LEAGUE_CONSECUTIVE_REDS} reds seguidos — retorna em {mins_left}min'
+            else:
+                info['pause_until'] = None
+                info['consecutive_reds'] = 0
+                print(f'[LeagueManager] Pausa encerrada: {league} reativada')
+
         window = info['window']
         n = len(window)
         if n < LEAGUE_MIN_SAMPLES:
-            # Retorna o status atual (True para novas ligas) — não bloqueia por falta de dados
-            motivo = f"Coletando dados ({n}/{LEAGUE_MIN_SAMPLES} tips)"
+            motivo = f'Coletando dados ({n}/{LEAGUE_MIN_SAMPLES} tips)'
             return info['active'], motivo
         pct = (sum(window) / n) * 100
-        return info['active'], f"{pct:.1f}% nas últimas {n} tips"
+        return info['active'], f'{pct:.1f}% nas ultimas {n} tips'
 
     def record_result(self, league, result_is_green):
         """
@@ -154,12 +173,33 @@ class LeagueManager:
         info['window'].append(1 if result_is_green else 0)
         info['total_tips'] += 1
 
+        # Rastrear reds consecutivos para pausa imediata
+        if result_is_green:
+            info['consecutive_reds'] = 0
+        else:
+            info['consecutive_reds'] = info.get('consecutive_reds', 0) + 1
+
+        # Pausa temporaria apos N reds consecutivos
+        if info['consecutive_reds'] >= LEAGUE_CONSECUTIVE_REDS:
+            pause_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_PAUSE_MINUTES)
+            info['pause_until'] = pause_until.isoformat()
+            info['consecutive_reds'] = 0
+            self.save()
+            msg_pausa = (
+                f'⏸ <b>LIGA PAUSADA: {league}</b>\n'
+                f'{LEAGUE_CONSECUTIVE_REDS} reds consecutivos\n'
+                f'Tips suspensas por {LEAGUE_PAUSE_MINUTES} minutos'
+            )
+            print(f'[LeagueManager] PAUSADA: {league} ({LEAGUE_CONSECUTIVE_REDS} reds seguidos)')
+            return True, False, msg_pausa
+
         window = info['window']
         n = len(window)
 
         if n < LEAGUE_MIN_SAMPLES:
             self.save()
             return False, info['active'], None
+
 
         pct = (sum(window) / n) * 100
         mudou = False
@@ -956,8 +996,9 @@ def fetch_live_matches():
                                      home_comp.get('player') or home_comp.get('nickName') or event.get('home_player'))
                 home_raw_text = home_competitor_name if '(' in home_competitor_name else (check_home_player or home_competitor_name)
 
-                if '(' in home_competitor_name and name_from_full_home != home_competitor_name:
-                    home_player = name_from_full_home
+                if '(' in home_competitor_name:
+                    # "Man City (fantazer)" → extrai "FANTAZER" → normaliza capitalização
+                    home_player = extract_pure_nick(home_competitor_name).capitalize()
                     home_source = "Full-Name-Parentheses"
                 else:
                     home_player = clean_player_name(check_home_player or home_competitor_name)
@@ -968,8 +1009,8 @@ def fetch_live_matches():
                                      away_comp.get('player') or away_comp.get('nickName') or event.get('away_player'))
                 away_raw_text = away_competitor_name if '(' in away_competitor_name else (check_away_player or away_competitor_name)
 
-                if '(' in away_competitor_name and name_from_full_away != away_competitor_name:
-                    away_player = name_from_full_away
+                if '(' in away_competitor_name:
+                    away_player = extract_pure_nick(away_competitor_name).capitalize()
                     away_source = "Full-Name-Parentheses"
                 else:
                     away_player = clean_player_name(check_away_player or away_competitor_name)
