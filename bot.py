@@ -2567,4 +2567,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[INFO] Bot encerrado pelo usuário")
     except Exception as e:
-        print(f"[ERRO FATAL] {e}"
+        print(f"[ERRO FATAL] {e}")
