@@ -1492,120 +1492,131 @@ def analyze_player_with_regime_check(matches, player_name):
 
 def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
     """
-    Nova lógica de confidence — baseada em métricas dos últimos 5 jogos
-    de CADA jogador individualmente, mais confronto direto.
+    Confidence v4 — recalibrado para refletir realidade do esoccer.
 
-    Pontuação máxima: 100 pts por jogador
-    Threshold de aprovação: média dos dois jogadores >= 70%
+    PROBLEMA ANTERIOR: Rose 3.4g/j + H2H 80% + forma 70% = 58% (errado).
+    Jogadores dominantes precisam chegar a 75-90% naturalmente.
 
-    FATOR 1 — HT marcado (15 pts, gradual)
-    FATOR 2 — HT sofrido (15 pts, gradual)
-    FATOR 3 — FT marcado (15 pts, gradual)
-    FATOR 4 — FT sofrido (15 pts, gradual)
-    FATOR 5 — Win% (10 pts, gradual)
-    FATOR 6 — H2H vantagem (20 pts, com fallback)
-    FATOR 7 — Forma recente (10 pts, sequência W/D/L)
+    NOVA ESCALA (100 pts):
+      F1 — FT marcado avg_5j    → até 35 pts  (dominante — é o que apostamos)
+      F2 — H2H vantagem         → até 25 pts  (confronto direto é forte preditor)
+      F3 — Forma recente 5j     → até 20 pts  (tendência atual > média histórica)
+      F4 — FT sofrido adversário→ até 10 pts  (defesa do oponente)
+      F5 — Win rate 5j          → até  5 pts  (resultado geral)
+      F6 — HT marcado avg_5j    → até  5 pts  (ritmo desde o início)
+    Total: 100 pts
+
+    Exemplos calibrados:
+      Rose: FT=3.4, H2H=80%, forma=70%, win=60%, HT=1.4 → ~78%  ✅
+      Jogador mediano: FT=2.0, H2H=50%, forma=50%, win=50% → ~45% ❌
+      Top jogador: FT=4.5, H2H=90%, forma=90%, win=80% → ~95%  ✅
     """
 
-    def score_player(stats, label=""):
+    def score_player(stats, opp_stats=None, label=""):
+        """
+        F1 FT marc:  35 pts — principal preditor de gols
+        F2 Forma 5j: 20 pts — tendência atual
+        F3 FT sofr:  10 pts — defesa do adversário (passado como opp_stats)
+        F4 Win rate:  5 pts — resultado geral
+        F5 HT marc:   5 pts — ritmo inicial
+        H2H: aplicado externamente (+25/+12/0)
+        """
         s = 0
         bd = []
 
-        ht_marc = stats.get('avg_scored_ht_5j', stats.get('avg_goals_scored_ht', 0))
-        ht_sofr = stats.get('avg_conceded_ht_5j', stats.get('avg_goals_conceded_ht', 0))
         ft_marc = stats.get('avg_scored_ft_5j', stats.get('avg_goals_scored_ft', 0))
-        ft_sofr = stats.get('avg_conceded_ft_5j', stats.get('avg_goals_conceded_ft', 0))
+        ht_marc = stats.get('avg_scored_ht_5j', stats.get('avg_goals_scored_ht', 0))
         win_pct = stats.get('win_pct_5j', stats.get('win_pct', 0))
         forma   = stats.get('forma_recente_pct', 50)
 
-        # F1: HT marcado (≥2.5=15, ≥1.8=10, ≥1.2=5, <1.2=0)
-        if ht_marc >= 2.5:   pts = 15
-        elif ht_marc >= 1.8: pts = 10
-        elif ht_marc >= 1.2: pts = 5
-        else:                pts = 0
-        s += pts
-        bd.append(f"HT marc {ht_marc:.1f}→+{pts}")
-
-        # F2: HT sofrido — threshold dinâmico: artilheiros (ht_marc>=1.8) sofrem mais por natureza
-        ht_bonus = 0.5 if ht_marc >= 1.8 else 0
-        if ht_sofr <= (1.0 + ht_bonus):   pts = 15
-        elif ht_sofr <= (1.5 + ht_bonus): pts = 10
-        elif ht_sofr <= (2.0 + ht_bonus): pts = 5
-        else:                              pts = 0
-        s += pts
-        bd.append(f"HT sofr {ht_sofr:.1f}→+{pts}")
-
-        # F3: FT marcado (≥3.5=15, ≥2.8=10, ≥2.0=5, <2.0=0)
-        if ft_marc >= 3.5:   pts = 15
-        elif ft_marc >= 2.8: pts = 10
-        elif ft_marc >= 2.0: pts = 5
+        # F1 — FT MARCADO (até 35 pts) — fator dominante
+        # Escala calibrada para ligas de esoccer (avg típico 2-5 gols/j)
+        if ft_marc >= 4.5:   pts = 35
+        elif ft_marc >= 3.5: pts = 28
+        elif ft_marc >= 2.8: pts = 20
+        elif ft_marc >= 2.0: pts = 12
+        elif ft_marc >= 1.5: pts = 6
         else:                pts = 0
         s += pts
         bd.append(f"FT marc {ft_marc:.1f}→+{pts}")
 
-        # F4: FT sofrido — threshold dinâmico por perfil ofensivo
-        # Artilheiros (ft_marc>=3.5) sofrem mais por natureza → limiares tolerantes
-        if ft_marc >= 3.5:   ft_lims = (3.0, 3.5, 4.5)  # tolerante
-        elif ft_marc >= 2.8: ft_lims = (2.5, 3.0, 3.5)  # moderado
-        else:                ft_lims = (2.0, 2.5, 3.0)   # padrão
-        if ft_sofr <= ft_lims[0]:   pts = 15
-        elif ft_sofr <= ft_lims[1]: pts = 10
-        elif ft_sofr <= ft_lims[2]: pts = 5
-        else:                       pts = 0
-        s += pts
-        bd.append(f"FT sofr {ft_sofr:.1f}→+{pts}")
-
-        # F5: Win% para jogadores normais / Ratio ofensivo para artilheiros
-        # Artilheiro que perde 7-6 ainda é ótimo para apostas de gols
-        # Ratio = ft_marc / (ft_marc + ft_sofr) — mede dominância ofensiva
-        if ft_marc >= 3.5:
-            ratio = ft_marc / (ft_marc + ft_sofr) if (ft_marc + ft_sofr) > 0 else 0
-            if ratio >= 0.55:   pts = 10
-            elif ratio >= 0.48: pts = 6
-            elif ratio >= 0.42: pts = 3
-            else:               pts = 0
-            bd.append(f"Ratio {ratio:.2f}→+{pts}")
-        else:
-            if win_pct >= 65:   pts = 10
-            elif win_pct >= 55: pts = 6
-            elif win_pct >= 45: pts = 3
-            else:               pts = 0
-            bd.append(f"Win {win_pct:.0f}%→+{pts}")
-        s += pts
-
-        # F6: Forma recente (0-10 pts proporcional)
-        pts = round((forma / 100) * 10)
+        # F2 — FORMA RECENTE 5j (até 20 pts) — tendência atual
+        # forma_recente_pct: 0-100% baseado em W/D/L recentes
+        if forma >= 80:   pts = 20
+        elif forma >= 65: pts = 14
+        elif forma >= 50: pts = 8
+        elif forma >= 35: pts = 3
+        else:             pts = 0
         s += pts
         bd.append(f"Forma {forma:.0f}%→+{pts}")
 
-        return min(100, s), bd
-
-    sc_home, bd_home = score_player(home_stats, "home")
-    sc_away, bd_away = score_player(away_stats, "away")
-
-    # F6: H2H — aplica ao JOGADOR com vantagem (+20), desvantagem (0)
-    # Se sem dados H2H suficientes, ambos recebem +10 (neutro)
-    if h2h_stats is not None:
-        # h2h_stats é calculado na perspectiva do home_player
-        h2h_win = h2h_stats.get('win_pct', 50)
-        if h2h_win >= 60:
-            sc_home = min(100, sc_home + 20)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+20")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+0")
-        elif h2h_win <= 40:
-            sc_away = min(100, sc_away + 20)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+20")
+        # F3 — FT SOFRIDO DO ADVERSÁRIO (até 10 pts)
+        # Mais gols sofridos pelo adversário = mais fácil marcar
+        if opp_stats is not None:
+            opp_sofr = opp_stats.get('avg_conceded_ft_5j', opp_stats.get('avg_goals_conceded_ft', 2.5))
         else:
-            # Paridade: +10 para ambos
-            sc_home = min(100, sc_home + 10)
-            sc_away = min(100, sc_away + 10)
-            bd_home.append(f"H2H paridade→+10")
-            bd_away.append(f"H2H paridade→+10")
+            opp_sofr = 2.5  # neutro
+        if opp_sofr >= 4.0:   pts = 10
+        elif opp_sofr >= 3.0: pts = 7
+        elif opp_sofr >= 2.0: pts = 4
+        elif opp_sofr >= 1.2: pts = 1
+        else:                 pts = 0
+        s += pts
+        bd.append(f"Opp sofre {opp_sofr:.1f}→+{pts}")
+
+        # F4 — WIN RATE 5j (até 5 pts)
+        if win_pct >= 70:   pts = 5
+        elif win_pct >= 55: pts = 3
+        elif win_pct >= 40: pts = 1
+        else:               pts = 0
+        s += pts
+        bd.append(f"Win {win_pct:.0f}%→+{pts}")
+
+        # F5 — HT MARCADO (até 5 pts) — ritmo inicial
+        if ht_marc >= 2.5:   pts = 5
+        elif ht_marc >= 1.5: pts = 3
+        elif ht_marc >= 0.8: pts = 1
+        else:                pts = 0
+        s += pts
+        bd.append(f"HT marc {ht_marc:.1f}→+{pts}")
+
+        return min(75, s), bd  # teto 75 antes do H2H (que adiciona até 25)
+
+    sc_home, bd_home = score_player(home_stats, opp_stats=away_stats, label="home")
+    sc_away, bd_away = score_player(away_stats, opp_stats=home_stats, label="away")
+
+    # H2H — até 25 pts para quem tem vantagem no confronto direto
+    # É o segundo fator mais importante após FT marcado
+    if h2h_stats is not None:
+        h2h_win = h2h_stats.get('win_pct', 50)
+        if h2h_win >= 65:
+            sc_home = min(100, sc_home + 25)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+25")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+0")
+        elif h2h_win >= 55:
+            sc_home = min(100, sc_home + 15)
+            sc_away = min(100, sc_away + 5)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+15")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+5")
+        elif h2h_win <= 35:
+            sc_away = min(100, sc_away + 25)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+25")
+        elif h2h_win <= 45:
+            sc_away = min(100, sc_away + 15)
+            sc_home = min(100, sc_home + 5)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+5")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+15")
+        else:
+            # Paridade 46-54%: +12 para ambos
+            sc_home = min(100, sc_home + 12)
+            sc_away = min(100, sc_away + 12)
+            bd_home.append(f"H2H paridade→+12")
+            bd_away.append(f"H2H paridade→+12")
     else:
-        # Sem H2H: +10 neutro para ambos (não penaliza)
-        sc_home = min(100, sc_home + 10)
-        sc_away = min(100, sc_away + 10)
+        # Sem H2H: +12 neutro (não penaliza, não bônus excessivo)
+        sc_home = min(100, sc_home + 12)
+        sc_away = min(100, sc_away + 12)
 
     avg_conf = (sc_home + sc_away) / 2
 
@@ -1789,6 +1800,17 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         if not ind_line:
             return None
         v         = ind_line["value"]
+
+        # ── LINHAS DE ALTA VARIÂNCIA — bloqueadas até sample >= 50 ──────────
+        # +4.5 individual e +5.5 têm variância muito alta em jogos de 6-12 min.
+        # Só habilitamos quando tiver histórico sólido para a linha específica.
+        LINHAS_BLOQUEADAS_IND = {4.5, 5.5}
+        if v in LINHAS_BLOQUEADAS_IND:
+            key_check = str(v).replace(".", "")
+            sample_size = player_stats.get(f"ft_scored_{key_check}_count", 0)
+            if sample_size < 50:
+                print(f"[BLOCKED IND LINHA] {player_raw}: +{v} bloqueado (sample={sample_size}<50)")
+                return None
         needed_v  = v - player_goals_now
         limit_v   = 1.5 if pct_elapsed > 0.60 else 2.0
         if needed_v > limit_v:
@@ -2481,18 +2503,42 @@ async def main_loop(bot):
                 avg_confidence  = conf_result['avg_confidence']
                 max_confidence  = max(home_confidence, away_confidence)
 
-                # GATE DE CONFIANÇA — mínimo 70% para qualquer tip
+                # ── GATE DINÂMICO ──────────────────────────────────────────
+                # Threshold base 65%. Ajustado pelo contexto ao vivo:
                 #
-                # GATE 1 — Apostas INDIVIDUAIS (gols de 1 jogador):
-                #   Passa se PELO MENOS 1 jogador >= 70%
+                #  Placar 0-0 inicio (< 30% tempo) → * 0.90 (mais difícil)
+                #  Jogo aberto (>= 2 gols marcados)→ * 1.00 (neutro)
+                #  Jogo em ritmo alto tardio        → * 1.10 (mais fácil)
                 #
-                # GATE 2 — Apostas TOTAIS do jogo (over X.5 FT total):
-                #   Passa se MÉDIA dos dois >= 70%
-                #
-                # Se nenhum gate passa → bloqueia
+                # GATE 1 — INDIVIDUAIS: passa se max_conf >= threshold
+                # GATE 2 — TOTAIS:      passa se avg_conf >= threshold
+                # ──────────────────────────────────────────────────────
 
-                gate_individual = max_confidence >= 70   # 1 jogador forte basta
-                gate_total      = avg_confidence  >= 70  # média mínima para totais
+                _timer_gate  = event.get('timer', {})
+                _minute_gate = _timer_gate.get('minute', 0)
+                _score_gate  = event.get('score', {})
+                _total_live  = _score_gate.get('home', 0) + _score_gate.get('away', 0)
+                _league_prof = LEAGUE_PROFILES.get(mapped_league, LEAGUE_PROFILES['DEFAULT'])
+                _dur_gate    = _league_prof.get('duration_min', 8)
+                _pct_elapsed = _minute_gate / max(1, _dur_gate)
+
+                BASE_GATE = 65
+                if _total_live == 0 and _pct_elapsed < 0.30:
+                    # 0-0 no início — jogo ainda não mostrou ritmo
+                    _gate_mult = 0.90
+                    _gate_ctx  = f"0-0 início ({_minute_gate}min) → *0.90"
+                elif _total_live >= 3 and _pct_elapsed >= 0.50:
+                    # Jogo em ritmo alto já na metade+ → confiança extra
+                    _gate_mult = 1.10
+                    _gate_ctx  = f"{_total_live} gols tardios ({_minute_gate}min) → *1.10"
+                else:
+                    _gate_mult = 1.00
+                    _gate_ctx  = f"{_total_live} gols, {_minute_gate}min → neutro"
+
+                dyn_threshold = BASE_GATE * _gate_mult
+                gate_individual = max_confidence >= dyn_threshold
+                gate_total      = avg_confidence  >= dyn_threshold
+                print(f"[GATE] base={BASE_GATE}% × {_gate_mult} = {dyn_threshold:.0f}% | {_gate_ctx}")
 
                 if not gate_individual and not gate_total:
                     bd_h = " | ".join(conf_result['breakdown_home'])
