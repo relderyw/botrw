@@ -590,8 +590,8 @@ def clean_player_name(name):
 # ✅ FILTRO DE QUALIDADE DA LIGA — Cenários favoráveis por tipo
 # =============================================================================
 
-SHORT_LEAGUES = {"BATTLE 8 MIN", "H2H 8 MIN", "VOLTA 6 MIN", "VALHALLA CUP", "VALKYRIE CUP"}
-LONG_LEAGUES  = {"GT LEAGUE 12 MIN", "CLA 10 MIN"}
+SHORT_LEAGUES = {"BATTLE 8 MIN", "H2H 8 MIN", "VOLTA 6 MIN", "VALKYRIE CUP"}
+LONG_LEAGUES  = {"GT LEAGUE 12 MIN", "CLA 10 MIN", "VALHALLA CUP"}  # VALHALLA = 2x6 = 12 min
 
 LEAGUE_QUALITY_CRITERIA = {
     "SHORT": {
@@ -707,11 +707,15 @@ def check_league_quality(league_key, last_n_matches):
     # Critérios OBRIGATÓRIOS — qualquer falha bloqueia imediatamente
     mandatory_keys = {"zero_zero_ht", "zero_zero_ft", "ht_over_05", "ft_over_25", "btts_ft"}
 
-    # Critérios SECUNDÁRIOS — score ponderado
-    secondary_weights = {
-        "ht_over_15": 2, "ht_over_25": 2, "btts_ht": 2,
-        "ft_over_35": 2, "ft_over_45": 2,
-        "avg_ht_min": 1, "avg_ft_min": 1,
+    # Critérios SECUNDÁRIOS FT — determinam aprovação (score >= 80%)
+    ft_secondary_weights = {
+        "ft_over_35": 3, "ft_over_45": 3, "avg_ft_min": 2,
+    }
+
+    # Critérios SECUNDÁRIOS HT — apenas informativo, NÃO bloqueia
+    # (HT tem variância natural em ligas longas — 6 min de 1º tempo)
+    ht_secondary_weights = {
+        "ht_over_15": 2, "ht_over_25": 2, "btts_ht": 2, "avg_ht_min": 1,
     }
 
     passed, failed = [], []
@@ -731,27 +735,48 @@ def check_league_quality(league_key, last_n_matches):
             failed.append(f"❌ OBRIG. {label}: {real:.0f}% (faltam {diff:.0f}pp)")
             mandatory_ok = False
 
-    # Verificar secundários (score ponderado)
-    sec_total_w  = 0
-    sec_passed_w = 0
-    for key, w in secondary_weights.items():
+    # Verificar secundários FT (DETERMINANTES)
+    ft_total_w  = 0
+    ft_passed_w = 0
+    for key, w in ft_secondary_weights.items():
         threshold = crit.get(key, 0)
         real      = real_values[key]
         ok        = real >= threshold
         label     = labels[key]
-        sec_total_w += w
+        ft_total_w += w
         if ok:
-            sec_passed_w += w
+            ft_passed_w += w
             passed.append(f"✅ {label}: {real:.0f}%")
         else:
             diff = threshold - real
             failed.append(f"❌ {label}: {real:.0f}% (faltam {diff:.0f}pp)")
 
-    sec_score = (sec_passed_w / sec_total_w * 100) if sec_total_w > 0 else 0
-    # Score geral: obrigatórios valem 60%, secundários valem 40%
-    score = (100 if mandatory_ok else 0) * 0.6 + sec_score * 0.4
+    ft_sec_score = (ft_passed_w / ft_total_w * 100) if ft_total_w > 0 else 0
 
-    aprovada = mandatory_ok and sec_score >= SECONDARY_THRESHOLD
+    # Verificar secundários HT (INFORMATIVOS — não bloqueiam)
+    ht_total_w  = 0
+    ht_passed_w = 0
+    for key, w in ht_secondary_weights.items():
+        threshold = crit.get(key, 0)
+        real      = real_values[key]
+        ok        = real >= threshold
+        label     = labels[key]
+        ht_total_w += w
+        if ok:
+            ht_passed_w += w
+            passed.append(f"✅ {label}: {real:.0f}%")
+        else:
+            diff = threshold - real
+            failed.append(f"⚠️ HT {label}: {real:.0f}% (faltam {diff:.0f}pp)")
+
+    ht_sec_score = (ht_passed_w / ht_total_w * 100) if ht_total_w > 0 else 0
+
+    # Score geral: obrigatórios 50% + FT secundário 40% + HT secundário 10%
+    score = (100 if mandatory_ok else 0) * 0.5 + ft_sec_score * 0.4 + ht_sec_score * 0.1
+
+    # APROVAÇÃO: obrigatórios todos passam + FT secundário >= 80%
+    # HT secundário NÃO bloqueia (apenas informa qualidade de apostas HT)
+    aprovada = mandatory_ok and ft_sec_score >= SECONDARY_THRESHOLD
 
     return aprovada, score, {
         "tipo": tipo, "passed": passed, "failed": failed, "score": score,
