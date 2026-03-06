@@ -352,13 +352,15 @@ HISTORY_LEAGUE_MAPPING = {
 # ✅ CORREÇÃO #2: THRESHOLDS POR LIGA
 # =============================================================================
 LEAGUE_PROFILES = {
-    "BATTLE 8 MIN":    {"avg_total": 5.5, "avg_player": 2.5, "min_player_avg": 2.0},
-    "VALHALLA CUP":    {"avg_total": 7.0, "avg_player": 3.5, "min_player_avg": 3.0},
-    "VALKYRIE CUP":    {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0},
-    "GT LEAGUE 12 MIN":{"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5},
-    "H2H 8 MIN":       {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5},
-    "CLA 10 MIN":      {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0},
-    "DEFAULT":         {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5},
+    "BATTLE 8 MIN":    {"avg_total": 5.5, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
+    "VALHALLA CUP":    {"avg_total": 7.0, "avg_player": 3.5, "min_player_avg": 3.0, "duration_min": 12},
+    "VALKYRIE CUP":    {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
+    "GT LEAGUE 12 MIN":{"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5, "duration_min": 12},
+    "H2H 8 MIN":       {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
+    "CLA 10 MIN":      {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 10},
+    "VOLTA 6 MIN":     {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 6},
+    "INT 8 MIN":       {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
+    "DEFAULT":         {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
 }
 
 # =============================================================================
@@ -626,25 +628,29 @@ LEAGUE_QUALITY_CRITERIA = {
 def check_league_quality(league_key, last_n_matches):
     """
     Verifica se a liga está em condição favorável para receber tips.
-    Analisa os últimos 8 jogos DA LIGA (era 5 — mais estabilidade estatística).
+    Analisa os últimos 5 jogos da liga.
 
-    ✅ FIX #2: Critério mudou de "TODOS devem passar" para "score ponderado >= 70%"
-    → Com 5 jogos e 12 critérios, "todos passam" reprova ligas boas ~38% das vezes
-    → Agora a liga pode falhar em até ~3 critérios menores e ainda ser aprovada
+    LÓGICA: Critérios OBRIGATÓRIOS + Critérios SECUNDÁRIOS ponderados.
 
-    Critérios têm pesos diferentes:
-      - Peso ALTO (crítico): zero_zero (partidas sem gols) — falha aqui penaliza muito
-      - Peso MÉDIO: métricas principais (ft_over_25, btts_ft, ht_over_05)
-      - Peso BAIXO: métricas secundárias (ht_over_25, ft_over_45)
+    OBRIGATÓRIOS (todos precisam passar — qualquer falha bloqueia):
+      - zero_zero_ht = 0%  (nenhum jogo sem gols no HT)
+      - zero_zero_ft = 0%  (nenhum jogo sem gols no FT)
+      - ht_over_05  = 100% (SHORT) / 100% (LONG)
+      - ft_over_25  = 100% (SHORT) / 100% (LONG)
+      - btts_ft     = 100% (SHORT) / 95%  (LONG)
+
+    SECUNDÁRIOS (score ponderado >= 80% do total):
+      - ht_over_15, ht_over_25, btts_ht
+      - ft_over_35, ft_over_45
+      - avg_ht_min, avg_ft_min
 
     Retorna: (aprovada: bool, score: float, detalhes: dict)
     """
-    MIN_MATCHES = 8  # era 5
-    APPROVAL_THRESHOLD = 70  # score ponderado mínimo para aprovar
+    MIN_MATCHES = 5
+    SECONDARY_THRESHOLD = 80  # % dos critérios secundários ponderados
 
     if not last_n_matches or len(last_n_matches) < MIN_MATCHES:
         n_found = len(last_n_matches) if last_n_matches else 0
-        # Sem dados suficientes → passa (não bloquear por falta de histórico)
         return True, 100, {
             "passed": [f"⚠️ Histórico insuficiente ({n_found}/{MIN_MATCHES}) — aprovado por falta de dados"],
             "failed": [],
@@ -652,24 +658,23 @@ def check_league_quality(league_key, last_n_matches):
             "score": 100
         }
 
-    last_5_matches = last_n_matches[:MIN_MATCHES]
-
-    n = len(last_5_matches)
+    last_n = last_n_matches[:MIN_MATCHES]
+    n = len(last_n)
 
     def pct(cond):
-        return sum(1 for m in last_5_matches if cond(m)) / n * 100
+        return sum(1 for m in last_n if cond(m)) / n * 100
 
-    ht05    = pct(lambda m: (m.get('home_score_ht',0) + m.get('away_score_ht',0)) >= 1)
-    ht15    = pct(lambda m: (m.get('home_score_ht',0) + m.get('away_score_ht',0)) >= 2)
-    ht25    = pct(lambda m: (m.get('home_score_ht',0) + m.get('away_score_ht',0)) >= 3)
-    btts_ht = pct(lambda m: m.get('home_score_ht',0) > 0 and m.get('away_score_ht',0) > 0)
-    zz_ht   = pct(lambda m: m.get('home_score_ht',0) == 0 and m.get('away_score_ht',0) == 0)
+    ht05    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 1)
+    ht15    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 2)
+    ht25    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 3)
+    btts_ht = pct(lambda m: m.get("home_score_ht",0) > 0 and m.get("away_score_ht",0) > 0)
+    zz_ht   = pct(lambda m: m.get("home_score_ht",0) == 0 and m.get("away_score_ht",0) == 0)
 
-    ft25    = pct(lambda m: (m.get('home_score_ft',0) + m.get('away_score_ft',0)) >= 3)
-    ft35    = pct(lambda m: (m.get('home_score_ft',0) + m.get('away_score_ft',0)) >= 4)
-    ft45    = pct(lambda m: (m.get('home_score_ft',0) + m.get('away_score_ft',0)) >= 5)
-    btts_ft = pct(lambda m: m.get('home_score_ft',0) > 0 and m.get('away_score_ft',0) > 0)
-    zz_ft   = pct(lambda m: m.get('home_score_ft',0) == 0 and m.get('away_score_ft',0) == 0)
+    ft25    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 3)
+    ft35    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 4)
+    ft45    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 5)
+    btts_ft = pct(lambda m: m.get("home_score_ft",0) > 0 and m.get("away_score_ft",0) > 0)
+    zz_ft   = pct(lambda m: m.get("home_score_ft",0) == 0 and m.get("away_score_ft",0) == 0)
 
     avg_ht = (ht05 + ht15 + ht25 + btts_ht) / 4
     avg_ft = (ft25 + ft35 + ft45 + btts_ft) / 4
@@ -699,53 +704,60 @@ def check_league_quality(league_key, last_n_matches):
         "avg_ht_min": "Média HT", "avg_ft_min": "Média FT",
     }
 
-    # ✅ FIX #2: Pesos por critério (alto = mais importante)
-    # zero_zero é crítico — liga com partidas 0-0 é ruim para apostas de gols
-    # métricas FT têm mais peso que HT (é o que apostamos)
-    # médias são indicadores gerais (peso médio)
-    weights = {
-        "zero_zero_ht": 3,   # CRÍTICO
-        "zero_zero_ft": 3,   # CRÍTICO
-        "ft_over_25":   2,   # ALTO
-        "btts_ft":      2,   # ALTO
-        "ht_over_05":   2,   # ALTO
-        "btts_ht":      1,   # MÉDIO
-        "ht_over_15":   1,   # MÉDIO
-        "ft_over_35":   1,   # MÉDIO
-        "avg_ft_min":   1,   # MÉDIO
-        "ht_over_25":   1,   # BAIXO
-        "ft_over_45":   1,   # BAIXO
-        "avg_ht_min":   1,   # BAIXO
+    # Critérios OBRIGATÓRIOS — qualquer falha bloqueia imediatamente
+    mandatory_keys = {"zero_zero_ht", "zero_zero_ft", "ht_over_05", "ft_over_25", "btts_ft"}
+
+    # Critérios SECUNDÁRIOS — score ponderado
+    secondary_weights = {
+        "ht_over_15": 2, "ht_over_25": 2, "btts_ht": 2,
+        "ft_over_35": 2, "ft_over_45": 2,
+        "avg_ht_min": 1, "avg_ft_min": 1,
     }
 
     passed, failed = [], []
-    total_weight = 0
-    passed_weight = 0
+    mandatory_ok = True
 
-    for key, threshold in crit.items():
-        real    = real_values[key]
-        label   = labels[key]
-        w       = weights.get(key, 1)
-        is_zz   = key.startswith("zero_zero")
-        ok      = (real == 0) if is_zz else (real >= threshold)
-        total_weight  += w
+    # Verificar obrigatórios
+    for key in mandatory_keys:
+        threshold = crit.get(key, 0)
+        real      = real_values[key]
+        is_zz     = key.startswith("zero_zero")
+        ok        = (real == 0) if is_zz else (real >= threshold)
+        label     = labels[key]
         if ok:
-            passed_weight += w
             passed.append(f"✅ {label}: {real:.0f}%")
         else:
-            diff = threshold - real if not is_zz else real
+            diff = real if is_zz else (threshold - real)
+            failed.append(f"❌ OBRIG. {label}: {real:.0f}% (faltam {diff:.0f}pp)")
+            mandatory_ok = False
+
+    # Verificar secundários (score ponderado)
+    sec_total_w  = 0
+    sec_passed_w = 0
+    for key, w in secondary_weights.items():
+        threshold = crit.get(key, 0)
+        real      = real_values[key]
+        ok        = real >= threshold
+        label     = labels[key]
+        sec_total_w += w
+        if ok:
+            sec_passed_w += w
+            passed.append(f"✅ {label}: {real:.0f}%")
+        else:
+            diff = threshold - real
             failed.append(f"❌ {label}: {real:.0f}% (faltam {diff:.0f}pp)")
 
-    # Score ponderado (0–100%)
-    score = (passed_weight / total_weight * 100) if total_weight > 0 else 0
+    sec_score = (sec_passed_w / sec_total_w * 100) if sec_total_w > 0 else 0
+    # Score geral: obrigatórios valem 60%, secundários valem 40%
+    score = (100 if mandatory_ok else 0) * 0.6 + sec_score * 0.4
 
-    # ✅ FIX #2: Aprovada se score ponderado >= APPROVAL_THRESHOLD (70%)
-    aprovada = score >= APPROVAL_THRESHOLD
+    aprovada = mandatory_ok and sec_score >= SECONDARY_THRESHOLD
 
     return aprovada, score, {
         "tipo": tipo, "passed": passed, "failed": failed, "score": score,
         "avg_ht": avg_ht, "avg_ft": avg_ft, "zz_ht": zz_ht, "zz_ft": zz_ft,
     }
+
 
 
 def get_league_last5(league_key, all_matches):
@@ -1597,207 +1609,210 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                         gate_individual=True, gate_total=True,
                         home_confidence=0, away_confidence=0):
     """
-    Avaliação de mercados com gate duplo:
-
-    gate_individual=True → pode avaliar apostas individuais (gols de 1 jogador)
-    gate_total=True      → pode avaliar apostas de total do jogo
-
-    Regra: só avalia o tipo de mercado que passou seu gate.
+    Avaliação com 6 filtros para atingir 75-85% de assertividade:
+    1. Gate duplo individual vs total
+    2. Projeção de ritmo ao vivo (tempo restante vs gols necessários)
+    3. Sem fallback artificial de 75% — sem dados históricos = sem aposta
+    4. Odd mínima 1.70
+    5. needed reduzido para 1.5 em jogos tardios (>60% do tempo)
+    6. Gate de confiança correlacionado com nível da aposta
     """
-    candidates = []  # Lista de candidatos, depois escolhemos apenas o melhor
+    candidates = []
 
-    timer = event.get('timer', {})
-    minute = timer.get('minute', 0)
-    second = timer.get('second', 0)
-    time_seconds = minute * 60 + second
+    timer   = event.get("timer", {})
+    minute  = timer.get("minute", 0)
+    second  = timer.get("second", 0)
 
-    league_key = event.get('mappedLeague', '')
-    home_raw = event.get('homeRaw', '').strip()
-    away_raw = event.get('awayRaw', '').strip()
-    home_player = event.get('homePlayer', 'P1')
-    away_player = event.get('awayPlayer', 'P2')
+    league_key    = event.get("mappedLeague", "")
+    home_raw      = event.get("homeRaw", "").strip()
+    away_raw      = event.get("awayRaw", "").strip()
+    home_player   = event.get("homePlayer", "P1")
+    away_player   = event.get("awayPlayer", "P2")
 
-    # Perfil da liga
-    league_profile = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
-    min_player_avg = league_profile['min_player_avg']
+    league_profile  = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
+    min_player_avg  = league_profile["min_player_avg"]
+    duration_min    = league_profile.get("duration_min", 8)
 
-    # H2H Stats
     h2h = get_h2h_stats(home_player, away_player)
 
     def get_weighted_val(h_val, a_val, h2h_val):
         base = (h_val + a_val) / 2
         if h2h is not None and h2h_val > 0:
-            return (base * 0.6 + h2h_val * 0.4)  # ✅ H2H tem peso maior quando disponível
+            return base * 0.6 + h2h_val * 0.4
         return base
 
-    # Thresholds de tempo por liga
-    MAX_HT_TIME = 210
-    if league_key == 'VOLTA 6 MIN':    MAX_HT_TIME = 150
-    elif league_key == 'CLA 10 MIN':   MAX_HT_TIME = 270
-    elif league_key == 'GT LEAGUE 12 MIN': MAX_HT_TIME = 330
+    MAX_HT_TIME    = int(duration_min * 60 * 0.55)
+    score          = event.get("score", {})
+    hg             = score.get("home", 0)
+    ag             = score.get("away", 0)
+    total_now      = hg + ag
+    pct_elapsed    = minute / max(1, duration_min)
+    mins_restantes = max(0.5, duration_min - minute - (second / 60))
 
-    score = event.get('score', {})
-    hg = score.get('home', 0)
-    ag = score.get('away', 0)
-    total_now = hg + ag
+    combined_ft_avg      = home_stats["avg_goals_scored_ft"] + away_stats["avg_goals_scored_ft"]
+    taxa_historica_jogo  = combined_ft_avg / duration_min  # gols/min esperados para o jogo
+
+    def ritmo_viavel(gols_faltando, margem=1.15):
+        if gols_faltando <= 0:
+            return True
+        taxa_necessaria = gols_faltando / mins_restantes
+        ok = taxa_necessaria <= taxa_historica_jogo * margem
+        if not ok:
+            print(f"[BLOCKED RITMO] precisa {taxa_necessaria:.2f}g/min, histórico {taxa_historica_jogo:.2f}g/min (margem {margem}x)")
+        return ok
 
     def parse_line(sv_str):
-        try: return float(sv_str.split('|')[-1])
+        try: return float(sv_str.split("|")[-1])
         except: return None
 
     def find_over_line(market_name_query):
         best_line = None
         q_lower = market_name_query.lower()
         for line in open_lines:
-            m_lower = line['market_name'].lower()
+            m_lower = line["market_name"].lower()
             if q_lower in m_lower:
                 if "tempo" not in q_lower and "tempo" in m_lower: continue
-                if "mais de" in line['odd_name'].lower() or line['price'] > 0:
-                    if "menos" in line['odd_name'].lower(): continue
-                    if line['price'] < 1.65: continue  # ✅ Odd mínima ligeiramente reduzida
-                    sv_val = parse_line(line['odd_sv'])
+                if "mais de" in line["odd_name"].lower() or line["price"] > 0:
+                    if "menos" in line["odd_name"].lower(): continue
+                    if line["price"] < 1.70: continue
+                    sv_val = parse_line(line["odd_sv"])
                     if sv_val is not None:
-                        if best_line is None or sv_val < best_line['value']:
-                            best_line = {'value': sv_val, 'odd_name': line['odd_name'], 'price': line['price']}
+                        if best_line is None or sv_val < best_line["value"]:
+                            best_line = {"value": sv_val, "odd_name": line["odd_name"], "price": line["price"]}
         return best_line
 
-    def find_sim_line(market_name_query):
-        q_lower = market_name_query.lower()
-        for line in open_lines:
-            m_lower = line['market_name'].lower()
-            if q_lower in m_lower:
-                if line['odd_name'].lower() == 'sim' and line['price'] >= 1.65:
-                    return line
-        return None
-
-    # -------------------------------------------------------------------------
-    # ✅ LÓGICA HT — Apostas de primeiro tempo (requer gate_total)
-    # -------------------------------------------------------------------------
-    if gate_total and time_seconds <= MAX_HT_TIME and total_now == 0:
+    # =========================================================================
+    # HT — Apostas de primeiro tempo
+    # Critérios do JOGADOR: ht_scored_05_pct/ht_scored_15_pct/ht_btts_pct
+    # =========================================================================
+    if gate_total and (minute * 60 + second) <= MAX_HT_TIME and total_now == 0:
         ht_line = find_over_line("1º tempo - total") or find_over_line("1ª tempo - Total de gols")
         if ht_line:
-            val = ht_line['value']
+            val = ht_line["value"]
+            combined_ht_avg = home_stats["avg_goals_scored_ht"] + away_stats["avg_goals_scored_ht"]
+            gols_faltando_ht = max(0, val + 0.5 - total_now)
+            ritmo_ok = ritmo_viavel(gols_faltando_ht)
+            avg_gate_ok = combined_ht_avg >= (val + 0.5)
 
-            # ✅ Para apostas HT, usamos a % de vezes que o TOTAL do jogo teve X gols no HT
-            # Mas agora verificamos se a MÉDIA individual de ambos suporta
-            home_ht_avg = home_stats['avg_goals_scored_ht']
-            away_ht_avg = away_stats['avg_goals_scored_ht']
-            combined_ht_avg = home_ht_avg + away_ht_avg
-
-            h2h_ht_val = h2h.get(f'ht_over_{str(val).replace(".","")}_pct', 0) if h2h else 0
+            # w_pct baseado em % histórica do JOGO (ambos os jogadores)
+            h2h_ht_val = h2h.get(f"ht_over_{str(val).replace('.','')}_pct", 0) if h2h else 0
             w_pct = get_weighted_val(
-                home_stats.get(f'ht_over_{str(val).replace(".","")}_pct', 0),
-                away_stats.get(f'ht_over_{str(val).replace(".","")}_pct', 0),
+                home_stats.get(f"ht_over_{str(val).replace('.','')}_pct", 0),
+                away_stats.get(f"ht_over_{str(val).replace('.','')}_pct", 0),
                 h2h_ht_val
             )
+            # BTTS HT médio dos jogadores
+            btts_ht_avg = (home_stats.get("ht_btts_pct", 0) + away_stats.get("ht_btts_pct", 0)) / 2
 
-            # ✅ NOVO GATE: Média combinada HT deve suportar o threshold
-            ht_needed_avg = val + 0.5  # ex: para over 1.5, precisa de avg >= 2.0
-            avg_gate_ok = combined_ht_avg >= ht_needed_avg
+            if val == 0.5 and w_pct >= 100 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
+                candidates.append({"name": "⚽ +0.5 GOL HT",  "odd": ht_line["price"], "score": w_pct * (ht_line["price"] - 1), "confidence_pct": w_pct})
+            elif val == 1.5 and w_pct >= 90 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
+                candidates.append({"name": "⚽ +1.5 GOLS HT", "odd": ht_line["price"], "score": w_pct * (ht_line["price"] - 1), "confidence_pct": w_pct})
+            elif w_pct > 0:
+                print(f"[BLOCKED HT] +{val}: w_pct={w_pct:.0f}% btts_ht={btts_ht_avg:.0f}% avg_gate={'✅' if avg_gate_ok else '❌'} ritmo={'✅' if ritmo_ok else '❌'}")
 
-            if val == 0.5 and w_pct >= 90 and avg_gate_ok:
-                score_val = w_pct * (ht_line["price"] - 1)
-                candidates.append({
-                    "name": "⚽ +0.5 GOL HT",
-                    "odd": ht_line["price"],
-                    "score": score_val,
-                    "confidence_pct": w_pct
-                })
-            elif val == 1.5 and w_pct >= 85 and avg_gate_ok:
-                score_val = w_pct * (ht_line["price"] - 1)
-                candidates.append({
-                    "name": "⚽ +1.5 GOLS HT",
-                    "odd": ht_line["price"],
-                    "score": score_val,
-                    "confidence_pct": w_pct
-                })
-
-    # -------------------------------------------------------------------------
-    # ✅ LÓGICA FT — Apostas de jogo completo / total de gols (requer gate_total)
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # FT TOTAL — Apostas de total do jogo
+    # Critérios: ft_over_X5_pct (média dos dois), ritmo, confiança >= 70%
+    # =========================================================================
     total_ft_line = find_over_line("Total de Gols") if gate_total else None
     if total_ft_line:
-        val = total_ft_line['value']
+        val    = total_ft_line["value"]
         needed = val - total_now
+        needed_limit = 1.5 if pct_elapsed > 0.60 else 2.0
+        avg_gate_ok  = combined_ft_avg >= (val * 0.85)
+        ritmo_ok     = ritmo_viavel(needed)
 
-        # ✅ GATE PRINCIPAL: média combinada dos dois jogadores deve suportar o threshold
-        combined_ft_avg = home_stats['avg_goals_scored_ft'] + away_stats['avg_goals_scored_ft']
-        avg_gate_ok = combined_ft_avg >= (val * 0.85)  # Média precisa ser 85% do threshold
-
-        if needed <= 2.0 and avg_gate_ok:
+        if needed <= needed_limit and avg_gate_ok and ritmo_ok:
             key_str = str(val).replace(".", "")
-            h2h_val = h2h.get(f'ft_over_{key_str}_pct', 0) if h2h else 0
+            h2h_val = h2h.get(f"ft_over_{key_str}_pct", 0) if h2h else 0
             w_pct = get_weighted_val(
-                home_stats.get(f'ft_over_{key_str}_pct', 0),
-                away_stats.get(f'ft_over_{key_str}_pct', 0),
+                home_stats.get(f"ft_over_{key_str}_pct", 0),
+                away_stats.get(f"ft_over_{key_str}_pct", 0),
                 h2h_val
             )
+            # Thresholds históricos por linha (SHORT/LONG já filtrados na liga)
+            threshold_map = {1.5: 92, 2.5: 88, 3.5: 85, 4.5: 83, 5.5: 81}
+            min_pct = threshold_map.get(val, 85)
+            # Confiança mínima sobe com nível da aposta (todos >= 70%)
+            conf_gate_map = {1.5: 70, 2.5: 70, 3.5: 72, 4.5: 75, 5.5: 78}
+            min_conf = conf_gate_map.get(val, 70)
 
-            # ✅ Thresholds mais rígidos que o original
-            threshold_ok = False
-            if val == 1.5 and w_pct >= 92:   threshold_ok = True
-            elif val == 2.5 and w_pct >= 88: threshold_ok = True
-            elif val == 3.5 and w_pct >= 85: threshold_ok = True
-            elif val == 4.5 and w_pct >= 82: threshold_ok = True
-            elif val == 5.5 and w_pct >= 80: threshold_ok = True
-
-            if threshold_ok:
-                score_val = w_pct * (total_ft_line["price"] - 1)
+            if w_pct >= min_pct and avg_confidence >= min_conf:
                 candidates.append({
                     "name": f"⚽ +{val} GOLS FT (TOTAL)",
                     "odd": total_ft_line["price"],
-                    "score": score_val,
+                    "score": w_pct * (total_ft_line["price"] - 1),
                     "confidence_pct": w_pct
                 })
+            elif w_pct > 0:
+                print(f"[BLOCKED FT] +{val}: w_pct={w_pct:.0f}% (min={min_pct}%) conf={avg_confidence:.0f}% (min={min_conf}%)")
 
-    # -------------------------------------------------------------------------
-    # ✅ LÓGICA INDIVIDUAL — Apostas em gols de UM jogador específico
-    #
-    # Requer gate_individual=True.
-    # Só avalia o jogador cujo confidence individual >= 65%.
-    # O adversário fraco NÃO bloqueia aposta no jogador forte.
-    # -------------------------------------------------------------------------
-
-    def evaluate_individual_player(player_raw, player_stats, player_goals_now, player_conf):
-        """Avalia se vale apostar nos gols individuais de um jogador."""
-
-        # ✅ NOVO: gate individual por jogador — só avalia quem tem conf >= 65%
-        if player_conf < 65:
+    # =========================================================================
+    # INDIVIDUAL — Gols de 1 jogador
+    # NOVO: avalia MARCADOS do jogador + SOFRIDOS do adversário
+    # =========================================================================
+    def evaluate_individual_player(player_raw, player_stats, opponent_stats, player_goals_now, player_conf):
+        # Gate de confiança global 70%
+        if player_conf < 70:
             return None
-
-        avg_individual = player_stats['avg_goals_scored_ft']
-
-        # Gate: jogador precisa ter média mínima para a liga
+        avg_individual = player_stats["avg_goals_scored_ft"]
         if avg_individual < min_player_avg:
             print(f"[BLOCKED IND] {player_raw}: média {avg_individual:.1f} < mínimo {min_player_avg}")
             return None
-
-        # Verificar mercado individual deste jogador
         ind_line = find_over_line(f"{player_raw} total")
         if not ind_line:
             return None
-
-        v = ind_line['value']
-        needed = v - player_goals_now
-
-        if needed > 2.0:
+        v         = ind_line["value"]
+        needed_v  = v - player_goals_now
+        limit_v   = 1.5 if pct_elapsed > 0.60 else 2.0
+        if needed_v > limit_v:
+            return None
+        # Ritmo individual
+        taxa_ind = avg_individual / duration_min
+        if needed_v > 0:
+            taxa_need = needed_v / mins_restantes
+            if taxa_need > taxa_ind * 1.20:
+                print(f"[BLOCKED IND RITMO] {player_raw}: {taxa_need:.2f}g/min > histórico {taxa_ind:.2f}g/min")
+                return None
+        key_str    = str(v).replace(".", "")
+        player_pct = player_stats.get(f"ft_scored_{key_str}_pct", 0)
+        # Sem dados históricos = sem aposta
+        if player_pct == 0:
+            print(f"[BLOCKED IND PCT] {player_raw}: sem dados para +{v} FT")
+            return None
+        # Gate de confiança correlacionado com linha
+        conf_ind_map = {1.5: 70, 2.5: 72, 3.5: 75, 4.5: 78}
+        if player_conf < conf_ind_map.get(v, 72):
+            print(f"[BLOCKED IND CONF] {player_raw}: conf={player_conf:.0f}% < {conf_ind_map.get(v,72)}% para +{v}")
+            return None
+        # Threshold histórico mínimo por linha
+        min_pct_ind = {1.5: 85, 2.5: 80, 3.5: 75, 4.5: 70}
+        if player_pct < min_pct_ind.get(v, 75):
             return None
 
-        key_str = str(v).replace(".", "")
-        player_pct = player_stats.get(f'ft_scored_{key_str}_pct', 0)
+        # ── ANÁLISE DE GOLS SOFRIDOS DO ADVERSÁRIO ──────────────────────────
+        # Se o adversário concede muitos gols, favorece nossa aposta.
+        # Se concede poucos, penaliza.
+        # Gols sofridos do adversário = gols_concedidos por jogo (avg_goals_conceded_ft)
+        opp_conceded_avg = opponent_stats.get("avg_goals_conceded_ft", 0)
+        opp_conceded_5j  = opponent_stats.get("avg_conceded_ft_5j", opp_conceded_avg)
 
-        if player_pct == 0:
-            if avg_individual >= v * 1.1:
-                player_pct = 75
-            else:
-                return None
+        # Threshold de gols concedidos: adversário precisa conceder >= min_player_avg
+        # (se ele é muito fechado, dificilmente nosso jogador vai atingir o threshold)
+        if opp_conceded_5j < min_player_avg * 0.8:
+            print(f"[BLOCKED IND OPP] {player_raw}: adversário concede apenas {opp_conceded_5j:.1f}g/j (mín. {min_player_avg*0.8:.1f})")
+            return None
 
-        if v <= 1.5 and player_pct < 85: return None
-        if v <= 2.5 and player_pct < 80: return None
-        if v <= 3.5 and player_pct < 75: return None
-        if v <= 4.5 and player_pct < 70: return None
+        # Boost no score se o adversário é muito vazado
+        opp_boost = 1.0
+        if opp_conceded_5j >= avg_individual * 1.2:
+            opp_boost = 1.10  # +10% no score
+        elif opp_conceded_5j < avg_individual * 0.8:
+            opp_boost = 0.90  # -10% no score (adversário fecha bem)
 
-        score_val = player_pct * (ind_line["price"] - 1)
+        score_val = player_pct * (ind_line["price"] - 1) * opp_boost
+        print(f"[IND OK] {player_raw} +{v}: marcados={player_pct:.0f}% opp_concede={opp_conceded_5j:.1f}g boost={opp_boost}")
         return {
             "name": f"⚽ {player_raw} +{v} GOLS FT",
             "odd": ind_line["price"],
@@ -1806,35 +1821,21 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         }
 
     if gate_individual:
-        home_candidate = evaluate_individual_player(home_raw, home_stats, hg, home_confidence)
-        if home_candidate:
-            candidates.append(home_candidate)
+        home_cand = evaluate_individual_player(home_raw, home_stats, away_stats, hg, home_confidence)
+        if home_cand: candidates.append(home_cand)
+        away_cand = evaluate_individual_player(away_raw, away_stats, home_stats, ag, away_confidence)
+        if away_cand: candidates.append(away_cand)
 
-        away_candidate = evaluate_individual_player(away_raw, away_stats, ag, away_confidence)
-        if away_candidate:
-            candidates.append(away_candidate)
-
-    # -------------------------------------------------------------------------
-    # ✅ CORREÇÃO #7: RETORNAR APENAS O MELHOR CANDIDATO POR JOGO
-    #
-    # O código original retornava TODAS as oportunidades encontradas.
-    # Isso causava 3-4 tips no mesmo jogo, multiplicando os reds.
-    # Agora retornamos apenas a aposta com maior score ponderado.
-    # -------------------------------------------------------------------------
     if not candidates:
         return []
 
-    # Ordenar por score (ponderado por confiança e odd)
-    candidates.sort(key=lambda x: x['score'], reverse=True)
-
-    # Retornar apenas o melhor
+    candidates.sort(key=lambda x: x["score"], reverse=True)
     best = candidates[0]
-    print(f"[SELEÇÃO] Melhor candidato: {best['name']} (score={best['score']:.1f}, conf={best['confidence_pct']:.0f}%)")
+    print(f"[SELEÇÃO] {best['name']} (score={best['score']:.1f}, conf={best['confidence_pct']:.0f}%)")
     if len(candidates) > 1:
         print(f"[SELEÇÃO] Descartados: {[c['name'] for c in candidates[1:]]}")
-
-    # Remove o campo 'score' e 'confidence_pct' antes de retornar (são internos)
     return [{"name": best["name"], "odd": best["odd"]}]
+
 
 
 # =============================================================================
@@ -2455,20 +2456,18 @@ async def main_loop(bot):
                 avg_confidence  = conf_result['avg_confidence']
                 max_confidence  = max(home_confidence, away_confidence)
 
-                # ✅ GATE DUPLO por tipo de aposta:
+                # GATE DE CONFIANÇA — mínimo 70% para qualquer tip
                 #
                 # GATE 1 — Apostas INDIVIDUAIS (gols de 1 jogador):
-                #   Passa se PELO MENOS 1 jogador >= 65%
-                #   Lógica: o adversário fraco não deve bloquear aposta no jogador forte
+                #   Passa se PELO MENOS 1 jogador >= 70%
                 #
                 # GATE 2 — Apostas TOTAIS do jogo (over X.5 FT total):
-                #   Passa se MÉDIA dos dois >= 60%
-                #   Lógica: ambos precisam contribuir para o total de gols
+                #   Passa se MÉDIA dos dois >= 70%
                 #
                 # Se nenhum gate passa → bloqueia
 
-                gate_individual = max_confidence >= 65   # 1 jogador forte basta
-                gate_total      = avg_confidence  >= 60  # ambos precisam contribuir
+                gate_individual = max_confidence >= 70   # 1 jogador forte basta
+                gate_total      = avg_confidence  >= 70  # média mínima para totais
 
                 if not gate_individual and not gate_total:
                     bd_h = " | ".join(conf_result['breakdown_home'])
