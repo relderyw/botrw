@@ -2503,9 +2503,26 @@ async def main_loop(bot):
                 for strat_obj in strategies:
                     strategy_name = strat_obj['name']
                     obs_odd = strat_obj['odd']
-                    print(f"[✓] OPORTUNIDADE: {strategy_name} (Odd: {obs_odd}) | Conf: {avg_confidence:.0f}%")
+
+                    # Para apostas INDIVIDUAIS, exibir confiança DO JOGADOR apostado
+                    # Para apostas TOTAIS, manter a média dos dois
+                    is_individual = '(TOTAL)' not in strategy_name and 'HT' not in strategy_name
+                    if is_individual:
+                        home_raw_up = event.get('homeRaw', '').upper()
+                        away_raw_up = event.get('awayRaw', '').upper()
+                        strat_up    = strategy_name.upper()
+                        if home_raw_up and home_raw_up in strat_up:
+                            display_confidence = home_confidence
+                        elif away_raw_up and away_raw_up in strat_up:
+                            display_confidence = away_confidence
+                        else:
+                            display_confidence = max(home_confidence, away_confidence)
+                    else:
+                        display_confidence = avg_confidence
+
+                    print(f"[✓] OPORTUNIDADE: {strategy_name} (Odd: {obs_odd}) | Conf: {display_confidence:.0f}%")
                     event['_liga_det'] = liga_det
-                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=avg_confidence)
+                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=display_confidence)
                     await asyncio.sleep(1)
 
             print("[INFO] Ciclo concluído. Aguardando 10s...")
