@@ -1585,36 +1585,52 @@ def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
     sc_home, bd_home = score_player(home_stats, opp_stats=away_stats, label="home")
     sc_away, bd_away = score_player(away_stats, opp_stats=home_stats, label="away")
 
-    # H2H — até 25 pts para quem tem vantagem no confronto direto
-    # É o segundo fator mais importante após FT marcado
+    # H2H — escala suave de 5 níveis (sem degraus bruscos)
+    # Eder 60% H2H antes recebia +15, agora recebe +20 (faixa 58-64%)
     if h2h_stats is not None:
         h2h_win = h2h_stats.get('win_pct', 50)
         if h2h_win >= 65:
+            # Domínio claro no confronto direto
             sc_home = min(100, sc_home + 25)
             bd_home.append(f"H2H {h2h_win:.0f}%→+25")
             bd_away.append(f"H2H {100-h2h_win:.0f}%→+0")
-        elif h2h_win >= 55:
+        elif h2h_win >= 58:
+            # Ligeira vantagem — degrau suavizado (era 55%→+15)
+            sc_home = min(100, sc_home + 20)
+            sc_away = min(100, sc_away + 3)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+20")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+3")
+        elif h2h_win >= 52:
+            # Paridade com leve favor home
             sc_home = min(100, sc_home + 15)
-            sc_away = min(100, sc_away + 5)
+            sc_away = min(100, sc_away + 8)
             bd_home.append(f"H2H {h2h_win:.0f}%→+15")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+5")
-        elif h2h_win <= 35:
-            sc_away = min(100, sc_away + 25)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+25")
-        elif h2h_win <= 45:
-            sc_away = min(100, sc_away + 15)
-            sc_home = min(100, sc_home + 5)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+5")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+15")
-        else:
-            # Paridade 46-54%: +12 para ambos
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+8")
+        elif h2h_win >= 46:
+            # Paridade equilibrada
             sc_home = min(100, sc_home + 12)
             sc_away = min(100, sc_away + 12)
             bd_home.append(f"H2H paridade→+12")
             bd_away.append(f"H2H paridade→+12")
+        elif h2h_win >= 42:
+            # Leve desvantagem home
+            sc_home = min(100, sc_home + 8)
+            sc_away = min(100, sc_away + 15)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+8")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+15")
+        elif h2h_win >= 35:
+            # Desvantagem clara home
+            sc_home = min(100, sc_home + 3)
+            sc_away = min(100, sc_away + 20)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+3")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+20")
+        else:
+            # Domínio do away
+            sc_away = min(100, sc_away + 25)
+            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
+            bd_away.append(f"H2H {100-h2h_win:.0f}%→+25")
     else:
-        # Sem H2H: +12 neutro (não penaliza, não bônus excessivo)
+        # Sem H2H: +12 neutro para ambos
         sc_home = min(100, sc_home + 12)
         sc_away = min(100, sc_away + 12)
 
