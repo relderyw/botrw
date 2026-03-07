@@ -1294,7 +1294,7 @@ def analyze_player_history(matches, player_name, window=10):
             'goals_list_ft': [], 'goals_list_ht': [],
             'ht_scored_05': 0, 'ht_scored_15': 0,
             'ft_scored_05': 0, 'ft_scored_15': 0,
-            'ft_scored_25': 0, 'ft_scored_35': 0,
+            'ft_scored_25': 0, 'ft_scored_35': 0, 'ft_scored_45': 0,
             'ht_over_05': 0, 'ht_over_15': 0, 'ht_over_25': 0,
             'ft_over_05': 0, 'ft_over_15': 0, 'ft_over_25': 0,
             'ft_over_35': 0, 'ft_over_45': 0,
@@ -1327,6 +1327,7 @@ def analyze_player_history(matches, player_name, window=10):
             if pg > 1: d['ft_scored_15'] += 1
             if pg > 2: d['ft_scored_25'] += 1
             if pg > 3: d['ft_scored_35'] += 1
+            if pg > 4: d['ft_scored_45'] += 1
             if pgh > 0: d['ht_scored_05'] += 1
             if pgh > 1: d['ht_scored_15'] += 1
 
@@ -1392,6 +1393,12 @@ def analyze_player_history(matches, player_name, window=10):
         'ft_scored_15_pct': (d10['ft_scored_15'] / n10) * 100,
         'ft_scored_25_pct': (d10['ft_scored_25'] / n10) * 100,
         'ft_scored_35_pct': (d10['ft_scored_35'] / n10) * 100,
+        'ft_scored_45_pct': (d10['ft_scored_45'] / n10) * 100,
+        # Counts usados pelo filtro de sample mínimo
+        'ft_scored_15_count': d10['ft_scored_15'],
+        'ft_scored_25_count': d10['ft_scored_25'],
+        'ft_scored_35_count': d10['ft_scored_35'],
+        'ft_scored_45_count': d10['ft_scored_45'],
         'btts_pct':    (d10['btts_count']    / n10) * 100,
         'ht_btts_pct': (d10['ht_btts_count'] / n10) * 100,
         'consistency_ft_3_plus_pct': (d10['ft_over_25'] / n10) * 100,
@@ -1817,16 +1824,19 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             return None
         v         = ind_line["value"]
 
-        # ── LINHAS DE ALTA VARIÂNCIA — bloqueadas até sample >= 50 ──────────
-        # +4.5 individual e +5.5 têm variância muito alta em jogos de 6-12 min.
-        # Só habilitamos quando tiver histórico sólido para a linha específica.
-        LINHAS_BLOQUEADAS_IND = {4.5, 5.5}
-        if v in LINHAS_BLOQUEADAS_IND:
+        # ── LINHAS +4.5 e +5.5 — exigem threshold histórico mais alto ─────
+        # Alta variância em jogos curtos → precisamos de dados reais.
+        # Bloqueamos APENAS se o jogador nunca atingiu essa linha (sample=0).
+        # Se tem histórico (mesmo que pequeno), usa o % real com threshold elevado.
+        LINHAS_ALTA_VARIANCIA = {4.5, 5.5}
+        if v in LINHAS_ALTA_VARIANCIA:
             key_check = str(v).replace(".", "")
             sample_size = player_stats.get(f"ft_scored_{key_check}_count", 0)
-            if sample_size < 50:
-                print(f"[BLOCKED IND LINHA] {player_raw}: +{v} bloqueado (sample={sample_size}<50)")
+            if sample_size == 0:
+                print(f"[BLOCKED IND LINHA] {player_raw}: +{v} bloqueado (sem histórico para essa linha)")
                 return None
+            # Com histórico disponível, threshold mais alto para compensar variância
+            # Será aplicado pelo min_pct_ind abaixo (já está em 70% para +4.5)
         needed_v  = v - player_goals_now
         limit_v   = 1.5 if pct_elapsed > 0.60 else 2.0
         if needed_v > limit_v:
