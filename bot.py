@@ -606,7 +606,7 @@ LEAGUE_QUALITY_CRITERIA = {
         "btts_ft":       100,
         "zero_zero_ft":    0,
         "avg_ht_min":     91,
-        "avg_ft_min":     92,
+        "avg_ft_min":     89,  # era 92 — 2pp acima da realidade da BATTLE
     },
     "LONG": {
         "ht_over_05":    100,
