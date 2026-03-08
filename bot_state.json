@@ -1,24 +1,11 @@
 {
-    "last_league_message_id": 67934,
+    "last_league_message_id": 67941,
     "league_stats": {
-        "Valhalla Cup 2026 Week #10": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
         "Valkyrie Cup 2026 Week #10": {
             "ht": {
                 "o05": 100,
-                "o15": 80,
-                "btts": 80
+                "o15": 60,
+                "btts": 60
             },
             "ft": {
                 "o15": 80,
@@ -31,11 +18,50 @@
             "ht": {
                 "o05": 100,
                 "o15": 40,
-                "btts": 40
+                "btts": 20
             },
             "ft": {
                 "o15": 100,
-                "o25": 60,
+                "o25": 80,
+                "btts": 80
+            },
+            "count": 5
+        },
+        "VOLTA - 6 MIN": {
+            "ht": {
+                "o05": 100,
+                "o15": 80,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 80,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Valhalla Cup 2026 Week #10": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "BATTLE 8 MIN": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 80,
                 "btts": 100
             },
             "count": 5
@@ -47,35 +73,9 @@
                 "btts": 20
             },
             "ft": {
-                "o15": 80,
-                "o25": 40,
-                "btts": 40
-            },
-            "count": 5
-        },
-        "BATTLE 8 MIN": {
-            "ht": {
-                "o05": 100,
                 "o15": 60,
-                "btts": 40
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "VOLTA - 6 MIN": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 80
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
+                "o25": 20,
+                "btts": 20
             },
             "count": 5
         },
@@ -83,7 +83,7 @@
             "ht": {
                 "o05": 100,
                 "o15": 100,
-                "btts": 80
+                "btts": 60
             },
             "ft": {
                 "o15": 100,
@@ -94,14 +94,14 @@
         },
         "GT LEAGUES": {
             "ht": {
-                "o05": 60,
-                "o15": 40,
-                "btts": 40
+                "o05": 80,
+                "o15": 20,
+                "btts": 20
             },
             "ft": {
-                "o15": 60,
+                "o15": 80,
                 "o25": 40,
-                "btts": 40
+                "btts": 20
             },
             "count": 5
         },
@@ -184,9 +184,12 @@
             "count": 5
         }
     },
-    "last_league_update_time": 1772948305.2305741,
+    "last_league_update_time": 1772948777.0348988,
     "last_summary": null,
     "last_daily_message_date": "2026-03-08",
-    "sent_match_ids": [],
+    "sent_match_ids": [
+        "15837917_FT",
+        "15837917_ANY"
+    ],
     "player_red_streak": {}
 }

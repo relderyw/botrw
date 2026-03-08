@@ -33,7 +33,9 @@ LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEve
 EVENT_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
 
 # Superbet
-SUPERBET_BATCH_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date?sportId=75&currentStatus=active"
+# URL dinamicamente atualizada no fetcher para incluir startDate
+_SUPERBET_BASE_URL = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date?sportId=75&currentStatus=active&offerState=live"
+SUPERBET_BATCH_API = _SUPERBET_BASE_URL # Fallback
 SUPERBET_STRUCT_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/struct"
 
 # Histórico / Backend Central
@@ -1058,8 +1060,12 @@ def update_superbet_struct():
 
     try:
         print("[INFO] Atualizando cache de torneios Superbet...")
-        headers = {'Accept': 'application/json',
-                   'User-Agent': 'Mozilla/5.0', 'Origin': 'https://superbet.bet.br'}
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+            'Origin': 'https://superbet.bet.br',
+            'Referer': 'https://superbet.bet.br/'
+        }
         r = requests.get(SUPERBET_STRUCT_API, headers=headers, timeout=20)
         if r.status_code == 200:
             data = r.json()
@@ -1098,9 +1104,17 @@ def update_superbet_struct():
 def fetch_superbet_live():
     update_superbet_struct()
     try:
-        headers = {'Accept': 'application/json',
-                   'User-Agent': 'Mozilla/5.0', 'Origin': 'https://superbet.bet.br'}
-        r = requests.get(SUPERBET_BATCH_API, headers=headers, timeout=15)
+        # Gerar startDate dinâmica (7 dias atrás) para satisfazer requisitos da API
+        past_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d') + "+06:00:00"
+        url = f"{_SUPERBET_BASE_URL}&startDate={past_date}"
+        
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+            'Origin': 'https://superbet.bet.br',
+            'Referer': 'https://superbet.bet.br/'
+        }
+        r = requests.get(url, headers=headers, timeout=15)
         if r.status_code != 200:
             return []
 

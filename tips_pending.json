@@ -1,1 +1,48 @@
-[]
+[
+    {
+        "event_id": "15837917",
+        "strategy": "⚽ Valencia CF (Shaq) +2.5 GOLS FT",
+        "sent_time": "2026-03-08T01:47:39.237628-04:00",
+        "status": "pending",
+        "message_id": 67943,
+        "message_text": "🟢 <b>Valhalla Cup 2026 Week #10 — ⚽ Valencia CF (Shaq) +2.5 GOLS FT</b>\n<b>@ 1.72</b>  |  Conf: 93%\n⏱ 01:00  📊 1-1\n─────────────────────\n<b>Holis</b>  ███████░░░ 2.8g/j\n<b>Shaq </b>  ██████████ 3.9g/j\n─────────────────────\nLiga 93%  |  BTTS 90%  |  HT+1.5 80%\n🎲 <a href=\"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId=15837917&sportId=66\">VER JOGO AO VIVO</a>",
+        "home_player": "Holis",
+        "away_player": "Shaq",
+        "league": "Valhalla Cup 2026 Week #10",
+        "tip_period": "FT",
+        "sent_minute": 1,
+        "homeTeamName": "Real Sociedad (Holis)",
+        "awayTeamName": "Valencia CF (Shaq)",
+        "liveTimeRaw": "1ª parte",
+        "startDateRaw": "2026-03-08T05:44:00Z",
+        "sent_scoreboard": "1-1",
+        "tipped_player_nick": "SHAQ",
+        "tipped_player_raw": "Shaq",
+        "sent_odd": 1.72,
+        "avg_confidence": 93,
+        "liga_det": {
+            "tipo": "SHORT (padrão)",
+            "passed": [
+                "✅ 0x0 HT: 0%",
+                "✅ +2.5 FT: 100%",
+                "✅ 0x0 FT: 0%",
+                "✅ +0.5 HT: 100%",
+                "✅ BTTS FT: 100%",
+                "✅ +3.5 FT: 100%",
+                "✅ +4.5 FT: 100%",
+                "✅ Média FT: 100%",
+                "✅ +1.5 HT: 100%"
+            ],
+            "failed": [
+                "⚠️ HT +2.5 HT: 80% (faltam 5pp)",
+                "⚠️ HT BTTS HT: 80% (faltam 8pp)",
+                "⚠️ HT Média HT: 90% (faltam 1pp)"
+            ],
+            "score": 92.85714285714286,
+            "avg_ht": 90.0,
+            "avg_ft": 100.0,
+            "zz_ht": 0.0,
+            "zz_ft": 0.0
+        }
+    }
+]
