@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from collections import Counter
 from telegram import Bot
 from telegram.request import HTTPXRequest
 import re
@@ -14,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 import statistics
 from io import BytesIO
 import json
+import unicodedata
 
 
 logging.basicConfig(
@@ -307,35 +309,52 @@ league_manager = LeagueManager()
 # =============================================================================
 
 LIVE_LEAGUE_MAPPING = {
+    # BATTLE 8 MIN (Battle)
     "E-Soccer - Battle - 8 minutos de jogo": "BATTLE 8 MIN",
     "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
+    "Battle - Internacional": "BATTLE 8 MIN",
+    "Battle - Internacional 1": "BATTLE 8 MIN",
+    "Champions League": "BATTLE 8 MIN",
+    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
+    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
+    "International": "INT 8 MIN",
+
+    # BATTLE 12 MIN (Champions 2x6)
+    "Battle - Liga dos Campeões": "BATTLE 12 MIN",
+    "Battle - Liga dos Campeões 2": "BATTLE 12 MIN",
+    "Champions League B 2×6": "BATTLE 12 MIN",
+    "Champions League B 2x6": "BATTLE 12 MIN",
+
+    # VOLTA 6 MIN
+    "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
+    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
+    "Battle - Volta Liga dos Campeões": "VOLTA 6 MIN",
+    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
+
+    # H2H 8 MIN
     "E-Soccer - H2H GG League - 8 minutos de jogo": "H2H 8 MIN",
     "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
     "H2H GG LEAGUE - E-FOOTBALL": "H2H 8 MIN",
     "H2H GG LEAGUE": "H2H 8 MIN",
+    "H2H GG - E-football": "H2H 8 MIN",
+    "H2H GG": "H2H 8 MIN",
+
+    # GT LEAGUE 12 MIN
     "E-Soccer - GT Leagues - 12 minutos de jogo": "GT LEAGUE 12 MIN",
     "Esoccer GT Leagues - 12 mins play": "GT LEAGUE 12 MIN",
     "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
-    "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
-    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
-    "H2H GG - E-football": "H2H 8 MIN",
-    "H2H GG": "H2H 8 MIN",
+    
+    # ADRIATIC (EAL)
+    "EAL - Premier League": "ADRIATIC",
+
+    # OUTRAS
     "Valhalla Cup": "VALHALLA CUP",
     "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
     "CLA": "CLA 10 MIN",
     "Cyber Live Arena": "CLA 10 MIN",
-    "Champions League B 2×6": "GT LEAGUE 12 MIN",
-    "Champions League B 2x6": "GT LEAGUE 12 MIN",
-    "Champions League": "BATTLE 8 MIN",
     "Champions Cyber League": "CLA 10 MIN",
     "Cyber League": "CLA 10 MIN",
-    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
-    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
-    "International": "INT 8 MIN",
-    # Ligas E-battles independentes (Bundesliga, Europa League, Super Lig, Premier League, etc.)
-    # NÃO mapeadas — mantêm seu nome original e são gerenciadas pelo LeagueManager dinamicamente
 }
 
 HISTORY_LEAGUE_MAPPING = {
@@ -354,18 +373,14 @@ HISTORY_LEAGUE_MAPPING = {
     "CLA": "CLA 10 MIN",
     "Champions League": "BATTLE 8 MIN",
     "Super Lig": "GT LEAGUE 12 MIN",
-    # Ligas com formato definido — mapeadas para o perfil correto
-    "Champions League B 2×6": "GT LEAGUE 12 MIN",
-    "Champions League B 2x6": "GT LEAGUE 12 MIN",
+    "Champions League B 2×6": "BATTLE 12 MIN",
+    "Champions League B 2x6": "BATTLE 12 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
     "International": "INT 8 MIN",
     "Champions Cyber League": "CLA 10 MIN",
     "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    # Ligas E-battles independentes — mantêm o próprio nome (gerenciadas dinamicamente)
-    # "Bundesliga", "Europa League", "Premier League", "Super Lig", etc.
-    # NÃO mapeadas aqui para preservar identidade e estatísticas próprias
 }
 
 # =============================================================================
@@ -373,16 +388,30 @@ HISTORY_LEAGUE_MAPPING = {
 # =============================================================================
 LEAGUE_PROFILES = {
     "BATTLE 8 MIN":    {"avg_total": 5.5, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
+    "BATTLE 12 MIN":   {"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5, "duration_min": 12},
     "VALHALLA CUP":    {"avg_total": 7.0, "avg_player": 3.5, "min_player_avg": 3.0, "duration_min": 12},
     "VALKYRIE CUP":    {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
     "GT LEAGUE 12 MIN": {"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5, "duration_min": 12},
     "H2H 8 MIN":       {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
     "CLA 10 MIN":      {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 10},
+    "ADRIATIC":        {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 10},
     "VOLTA 6 MIN":     {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 6},
     "INT 8 MIN":       {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
     "DEFAULT":         {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
 }
 
+# Jogadores conhecidos da liga H2H (override quando Superbet rotula incorretamente)
+H2H_OVERRIDE_PLAYERS = {
+    "JAEGER",
+    "EXECUTIONER",
+}
+# Jogadores que atuam na EAL/Adriatic (override quando rotulados como GT)
+EAL_OVERRIDE_PLAYERS = {
+    "ERIC",
+    "DEXTER",
+    "IRON",
+    "JUAN",
+}
 # =============================================================================
 # CACHE E ESTADO GLOBAL
 # =============================================================================
@@ -414,20 +443,67 @@ PLAYER_RED_COOLDOWN_MIN = 30
 def map_league_name(name: str, duration: str = "8 min") -> str:
     if not name:
         return "UNKNOWN"
+        
+    # Mapeamento estático de IDs da Superbet para nomes canônicos
+    # (Identificados via histórico de jogadores)
+    SUPERBET_ID_MAP = {
+        "71851": "GT LEAGUE 12 MIN",
+        "80560": "H2H 8 MIN",
+        "49965": "BATTLE 8 MIN",
+        "72619": "VOLTA 6 MIN",
+        "94993": "CLA 10 MIN", # Cyber Live Arena (2x5 min)
+        "74950": "GT LEAGUE 12 MIN",
+        "67383": "GT LEAGUE 12 MIN",
+        "72623": "BATTLE 12 MIN",
+        "71836": "BATTLE 8 MIN",
+        "49963": "BATTLE 8 MIN",
+        "49959": "BATTLE 8 MIN", # Battle - Premier League
+    }
+    
+    # Se for um nome padrão da Superbet com ID, mapear diretamente
+    if "Superbet League" in name:
+        tid = name.replace("Superbet League ", "").strip()
+        if tid in SUPERBET_ID_MAP:
+            return SUPERBET_ID_MAP[tid]
+
+    # Primeiro, tentar mapeamento direto via dicionário consolidado
+    MASTER_MAPPING = {
+        **LIVE_LEAGUE_MAPPING,
+        **HISTORY_LEAGUE_MAPPING
+    }
+    
+    if name in MASTER_MAPPING:
+        return MASTER_MAPPING[name]
+    
     original = name.upper()
 
+    # Fallback para nomes que contêm palavras-chave
     if "H2H" in original:
         return "H2H 8 MIN"
 
     if "BATTLE" in original:
-        if "6" in duration or "3 MIN" in duration.upper() or "VOLTA" in original:
-            return "VOLTA - 6 MIN"
+        if "VOLTA" in original or "3 MIN" in duration.upper() or "2X3" in original:
+            return "VOLTA 6 MIN"
+        if "12" in duration or "2X6" in original or "CHAMPIONS" in original or "CAMPEÕES" in original:
+            return "BATTLE 12 MIN"
         return "BATTLE 8 MIN"
 
     if "GT " in original or "GT LEAGUES" in original:
-        return "GT LEAGUES"
+        return "GT LEAGUE 12 MIN"
 
-    if "EAL" in original or "ADRIATIC" in original:
+    if "VALHALLA" in original:
+        return "VALHALLA CUP"
+
+    if "VALKYRIE" in original:
+        return "VALKYRIE CUP"
+
+    if "CLA " in original or "CYBER LIVE ARENA" in original:
+        return "CLA 10 MIN"
+
+    if "INT " in original or "INTERNATIONAL" in original:
+        return "INT 8 MIN"
+
+    if "ADRIATIC" in original or "EAL " in original:
         return "ADRIATIC"
 
     if "CHAMPIONS LEAGUE" in original and "BATTLE" not in original:
@@ -637,8 +713,8 @@ def clean_player_name(name):
 
 
 SHORT_LEAGUES = {"BATTLE 8 MIN", "H2H 8 MIN", "VOLTA 6 MIN", "VALKYRIE CUP"}
-LONG_LEAGUES = {"GT LEAGUE 12 MIN", "CLA 10 MIN",
-                "VALHALLA CUP"}  # VALHALLA = 2x6 = 12 min
+LONG_LEAGUES = {"GT LEAGUE 12 MIN", "BATTLE 12 MIN", "CLA 10 MIN",
+                "VALHALLA CUP", "ADRIATIC"}
 
 LEAGUE_QUALITY_CRITERIA = {
     "SHORT": {
@@ -854,6 +930,26 @@ def get_league_last5(league_key, all_matches):
     # ✅ FIX #2: 8 jogos (era 5) — mais estabilidade estatística
     return filtered[:8]
 
+def infer_primary_league_for_player(player_nick: str, min_samples=3, min_share=0.6):
+    all_matches = global_history_cache.get('matches', [])
+    if not all_matches or not player_nick:
+        return None
+    pname = player_nick.upper().strip()
+    pm = []
+    for m in all_matches[:40]:
+        hp = (m.get('home_player') or '').upper().strip()
+        ap = (m.get('away_player') or '').upper().strip()
+        if hp == pname or ap == pname:
+            lg = m.get('league_name') or ''
+            if lg and lg != 'Unknown':
+                pm.append(lg)
+    if len(pm) < min_samples:
+        return None
+    freq = Counter(pm)
+    primary, count = freq.most_common(1)[0]
+    if count / len(pm) >= min_share:
+        return primary
+    return None
 
 def extract_pure_nick_canonical(raw: str) -> str:
     if not raw or not isinstance(raw, str):
@@ -867,24 +963,6 @@ def extract_pure_nick_canonical(raw: str) -> str:
             return candidate.upper()
 
     clean_str = raw.strip()
-
-    # Lista canônica de times e siglas para remover
-    TEAM_KEYWORDS = [
-        'PSG', 'RMA', 'FCB', 'MC', 'LFC', 'MU', 'INT', 'MIL', 'JUV', 'ATM',
-        'ARS', 'CHE', 'TOT', 'DOR', 'BAY', 'NAP', 'ROM', 'BEN', 'POR', 'AJA',
-        'BRAZIL', 'FRANCE', 'GERMANY', 'ENGLAND', 'SPAIN', 'ITALY', 'PORTUGAL',
-        'ARGENTINA', 'NETHERLANDS', 'BELGIUM', 'PALMEIRAS', 'FLAMENGO', 'CORINTHIANS',
-        'SAO PAULO', 'SANTOS', 'GREMIO', 'INTERNACIONAL', 'CRUZEIRO', 'ATLETICO',
-        'CITY', 'UNITED', 'RIVER PLATE', 'BOCA JUNIORS', 'MILAN', 'INTER', 'REAL MADRID',
-        'BARCELONA', 'LIVERPOOL', 'CHELSEA', 'TOTTENHAM', 'BAYERN', 'BORUSSIA', 'LEICESTER',
-        'WOLFSBURG', 'LEIPZIG', 'LEVERKUSEN', 'VALENCIA', 'SEVILLA', 'VILLARREAL',
-        'MONACO', 'LYON', 'MARSEILLE', 'LAZIO', 'FEYENOORD', 'PSV', 'SPORTING'
-    ]
-
-    # Remover palavras de times (case insensitive)
-    for team in TEAM_KEYWORDS:
-        clean_str = re.sub(rf'\b{re.escape(team)}\b',
-                           '', clean_str, flags=re.IGNORECASE).strip()
 
     # Remover hífens ou pontos extras no início/fim
     clean_str = re.sub(r'^[-·]+|[-·]+$', '', clean_str).strip()
@@ -1049,52 +1127,162 @@ def find_best_match_for_tip(tip, recent_matches):
 # FUNÇÕES DE REQUISIÇÃO
 # =============================================================================
 
+# ── CONSTANTES – Mapeamento por categoryId (âncora primária da API Superbet) ─
+# Mais estável que matching por nome (categoryId raramente muda)
+SUPERBET_CATEGORY_MAP = {
+    954:  "H2H 8 MIN",        # E-Sport Futebol
+    1293: "CLA 10 MIN",       # Cyber Live Arena
+    1269: "GT LEAGUE 12 MIN", # GT Sports
+    1588: "ADRIATIC",         # eAdriatic League
+    # 1294 = E-Sport Battle → classificado pelo nome (3 ligas diferentes)
+}
+
+
+# ── FUNÇÕES AUXILIARES ────────────────────────────────────────────────────────
+
+def _classify_battle_tournament(name: str) -> str:
+    """
+    Distingue variantes de Battle (categoryId=1294) pelo nome do torneio.
+
+    Exemplos conhecidos da API:
+      "Battle - Volta Liga dos Campeões"  → VOLTA 6 MIN  (2x3 min)
+      "Battle - Volta Internacional"       → VOLTA 6 MIN
+      "Battle - Liga dos Campeões 2"       → BATTLE 12 MIN (2x6 min)
+      "Battle - Internacional 1"           → BATTLE 8 MIN  (2x4 min)
+      "Battle - Portugal Primera"          → BATTLE 8 MIN
+      "Battle - Argentina Super League"    → BATTLE 8 MIN
+    """
+    n = name.upper()
+    # Volta = 2x3 min = 6 min total
+    if "VOLTA" in n:
+        return "VOLTA 6 MIN"
+    # Liga dos Campeões 2 = 2x6 min = 12 min total
+    if ("LIGA DOS CAMP" in n or "LIGA DE CAMP" in n) and ("2" in n or " II" in n):
+        return "BATTLE 12 MIN"
+    # Todos os outros = 2x4 min = 8 min total
+    return "BATTLE 8 MIN"
+
+
+def _classify_by_name_fallback(name: str) -> str:
+    """
+    Fallback por nome para categorias desconhecidas ou novas.
+    Chamado quando categoryId não está em SUPERBET_CATEGORY_MAP.
+    """
+    n = name.upper()
+    if "H2H" in n:                                        return "H2H 8 MIN"
+    if "CYBER LIVE" in n or " CLA" in n:                  return "CLA 10 MIN"
+    if "GT" in n and ("LIGA" in n or "LEAGUE" in n):      return "GT LEAGUE 12 MIN"
+    if "ADRIATIC" in n or "EAL " in n:                    return "ADRIATIC"
+    if "VALHALLA" in n:                                   return "VALHALLA CUP"
+    if "VALKYRIE" in n:                                   return "VALKYRIE CUP"
+    if "VOLTA" in n:                                      return "VOLTA 6 MIN"
+    if "BATTLE" in n and ("CAMP" in n or "2X6" in n):     return "BATTLE 12 MIN"
+    if "BATTLE" in n:                                     return "BATTLE 8 MIN"
+    return name  # retorna original para poder logar o desconhecido
+
+
 # =========================================================================
-# ✅ SUPERBET STRUCT CACHE
+# ✅ SUPERBET TOURNAMENTS CACHE (VIA SPORT API)
 # =========================================================================
+
 def update_superbet_struct():
+    """
+    Atualiza o cache de torneios Superbet via API dinâmica.
+
+    Estratégia de classificação (por ordem de prioridade):
+    1. categoryId — âncora primária (estável, raramente muda)
+    2. Nome do torneio — distingue variantes dentro da mesma categoria (ex: Battle)
+    3. Fallback estático — garante funcionamento mesmo se a API falhar
+    """
     global superbet_tournaments, superbet_last_struct_update
     now = time.time()
-    if now - superbet_last_struct_update < 3600:
+
+    # Respeitar TTL de 10 minutos
+    if now - superbet_last_struct_update < 600:
         return
 
+    url = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/sport/75/tournaments"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://superbet.bet.br',
+        'Referer': 'https://superbet.bet.br/'
+    }
+
     try:
-        print("[INFO] Atualizando cache de torneios Superbet...")
-        headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-            'Origin': 'https://superbet.bet.br',
-            'Referer': 'https://superbet.bet.br/'
-        }
-        r = requests.get(SUPERBET_STRUCT_API, headers=headers, timeout=20)
-        if r.status_code == 200:
-            data = r.json()
-            # Superbet costuma retornar uma lista quando não filtramos ?active=true
-            tournaments_list = data if isinstance(
-                data, list) else data.get('data', [])
+        print("[INFO] Atualizando cache de torneios Superbet (Sport 75)...")
+        r = requests.get(url, headers=headers, timeout=15)
 
-            new_cache = {}
-            for t in tournaments_list:
-                if not isinstance(t, dict):
-                    continue
-                tid = str(t.get('id', ''))
-                if not tid:
-                    continue
-                name = t.get('name', '')
-                footers = t.get('footers', [])
-                duration = "8 min"
-                for f in footers:
-                    txt = f.get('text', '')
-                    if 'x' in txt and 'min' in txt.lower():
-                        duration = txt
-                        break
-                new_cache[tid] = {"name": name, "duration": duration}
-
-            superbet_tournaments = new_cache
+        # 304 = Not Modified = cache válido, ainda marca como atualizado
+        if r.status_code == 304:
             superbet_last_struct_update = now
-            print(f"[✓] Cache Superbet atualizado: {len(new_cache)} torneios.")
+            print("[✓] Superbet tournaments: sem alterações (304).")
+            return
+
+        if r.status_code != 200:
+            raise ValueError(f"HTTP {r.status_code}")
+
+        data = r.json()
+        categories = data.get('data', [])
+        new_map = {}
+        unmapped = []
+
+        for cat in categories:
+            cat_id   = cat.get('categoryId')
+            cat_name = cat.get('localNames', {}).get('pt-BR', '?')
+
+            for comp in cat.get('competitions', []):
+                tid   = str(comp.get('tournamentId'))
+                tname = comp.get('localNames', {}).get('pt-BR', '')
+                if not tid or not tname:
+                    continue
+
+                # ── Classificação por categoryId (âncora primária) ──
+                if cat_id in SUPERBET_CATEGORY_MAP:
+                    league = SUPERBET_CATEGORY_MAP[cat_id]
+
+                elif cat_id == 1294:  # E-Sport Battle — distinguir por nome
+                    league = _classify_battle_tournament(tname)
+
+                else:
+                    # Categoria nova/desconhecida — tentar por nome
+                    league = _classify_by_name_fallback(tname)
+                    if league == tname:  # não foi mapeado
+                        unmapped.append(f"tid={tid} '{tname}' cat={cat_id}/{cat_name}")
+
+                new_map[tid] = {"name": league, "raw": tname, "cat_id": cat_id}
+
+        if new_map:
+            superbet_tournaments.update(new_map)
+            superbet_last_struct_update = now
+            print(f"[✓] Superbet tournaments: {len(new_map)} torneios mapeados.")
+            for tid, v in sorted(new_map.items(), key=lambda x: x[1]['name']):
+                print(f"    tid={tid:>6} → {v['name']:<22} (raw: {v['raw']})")
+            if unmapped:
+                print(f"[WARN] Torneios sem mapeamento (nova categoria?): {unmapped}")
+        else:
+            print("[WARN] API retornou 0 torneios — mantendo cache anterior.")
+
     except Exception as e:
-        print(f"[ERROR] update_superbet_struct: {e}")
+        print(f"[WARN] update_superbet_struct falhou ({e}) — usando fallback estático.")
+
+        # Fallback estático mínimo — garante que o bot não para
+        # Atualizar se a Superbet criar novos torneios
+        STATIC_FALLBACK = {
+            "80560": "H2H 8 MIN",           # H2H - GG League
+            "71851": "BATTLE 12 MIN",        # Battle - Liga dos Campeões 2
+            "49965": "BATTLE 8 MIN",         # Battle - Internacional 1
+            "81987": "BATTLE 8 MIN",         # Battle - Portugal Primera
+            "81988": "BATTLE 8 MIN",         # Battle - Argentina Super League
+            "72619": "VOLTA 6 MIN",          # Battle - Volta Liga dos Campeões
+            "72621": "VOLTA 6 MIN",          # Battle - Volta Internacional
+            "94993": "CLA 10 MIN",           # Cyber Live Arena
+            "62997": "GT LEAGUE 12 MIN",     # GT - Liga dos Campeões 4
+            "67383": "ADRIATIC",             # EAL - Premier League
+        }
+        for tid, league in STATIC_FALLBACK.items():
+            if tid not in superbet_tournaments:
+                superbet_tournaments[tid] = {"name": league}
+        superbet_last_struct_update = now  # evita retry em loop
 
 # =========================================================================
 # ✅ FETCHERS
@@ -1143,10 +1331,29 @@ def fetch_superbet_live():
                 away_nick = extract_pure_nick_canonical(away_raw)
 
                 t_id = str(event.get('tournamentId'))
-                cached = superbet_tournaments.get(t_id, {})
-                league_raw = cached.get('name', f"Superbet League {t_id}")
-                duration = cached.get('duration', '8 min')
+                cached = superbet_tournaments.get(t_id)
+                if isinstance(cached, dict):
+                    league_raw = cached.get('name', f"Superbet League {t_id}")
+                elif isinstance(cached, str):
+                    league_raw = cached
+                else:
+                    league_raw = f"Superbet League {t_id}"
+                duration = "8 min"
                 mapped_league = map_league_name(league_raw, duration)
+                # Override: se jogadores conhecidos de H2H aparecerem sob Valhalla/Valkyrie via Superbet
+                if mapped_league in {"VALHALLA CUP", "VALKYRIE CUP"}:
+                    if home_nick in H2H_OVERRIDE_PLAYERS or away_nick in H2H_OVERRIDE_PLAYERS:
+                        mapped_league = "H2H 8 MIN"
+                # Override: se jogadores típicos da EAL aparecerem rotulados como GT, ajustar para ADRIATIC
+                if mapped_league == "GT LEAGUE 12 MIN":
+                    if home_nick in EAL_OVERRIDE_PLAYERS or away_nick in EAL_OVERRIDE_PLAYERS:
+                        mapped_league = "ADRIATIC"
+                # Inferência dinâmica por histórico do jogador (substitui overrides fixos quando confiável)
+                if mapped_league in {"GT LEAGUE 12 MIN", "Superbet League", "UNKNOWN"}:
+                    ph = infer_primary_league_for_player(home_nick)
+                    pa = infer_primary_league_for_player(away_nick)
+                    if ph and pa and ph == pa and ph != mapped_league:
+                        mapped_league = ph
 
                 # Placar e Tempo
                 meta = event.get('metadata', {})
@@ -1155,6 +1362,14 @@ def fetch_superbet_live():
 
                 # Superbet live costuma dar o minuto no campo matchTime
                 minute = int(event.get('matchTime', 0) or 0)
+
+                def _slug(s: str) -> str:
+                    norm = unicodedata.normalize('NFKD', s)
+                    norm = ''.join([c for c in norm if not unicodedata.combining(c)])
+                    norm = re.sub(r'[\(\)]', ' ', norm)
+                    norm = re.sub(r'[^a-zA-Z0-9]+', '-', norm).strip('-')
+                    return norm.lower()
+                superbet_link = f"https://superbet.bet.br/odds/e-sport-futebol/{_slug(home_raw)}-x-{_slug(away_raw)}-{event_id}/?t=offer-live-{t_id}&mdt=o"
 
                 normalized.append({
                     'id': f"sb-{event_id}",
@@ -1168,6 +1383,8 @@ def fetch_superbet_live():
                     'awayRaw': away_raw,
                     'homeTeamName': home_raw,
                     'awayTeamName': away_raw,
+                    'tournamentId': t_id,
+                    'superbetLink': superbet_link,
                     'timer': {
                         'minute': minute,
                         'second': 0,
@@ -1331,6 +1548,50 @@ def fetch_event_markets(event_id):
 
     except Exception as e:
         print(f"[WARN] Erro ao buscar mercados para {event_id}: {e}")
+        return []
+
+
+def fetch_superbet_event_markets(event_id):
+    try:
+        # Remover prefixo 'sb-' se existir
+        pure_id = event_id.replace('sb-', '')
+        url = f"https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/{pure_id}"
+
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+            'Origin': 'https://superbet.bet.br',
+            'Referer': 'https://superbet.bet.br/'
+        }
+
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        # A estrutura da Superbet tem as odds dentro de data[0]['odds']
+        event_data_list = data.get('data', [])
+        if not event_data_list:
+            return []
+
+        event_data = event_data_list[0]
+        odds_list = event_data.get('odds') or []
+        open_lines = []
+
+        for odd in odds_list:
+            if not isinstance(odd, dict):
+                continue
+            if odd.get('status') == 'active':
+                open_lines.append({
+                    'market_name': odd.get('marketName', ''),
+                    'odd_name': odd.get('name', ''),
+                    'odd_sv': odd.get('specialBetValue', ''),
+                    'price': odd.get('price', 0)
+                })
+
+        return open_lines
+
+    except Exception as e:
+        print(f"[WARN] Erro ao buscar mercados Superbet para {event_id}: {e}")
         return []
 
 
@@ -2271,8 +2532,13 @@ def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_
     # Link do jogo
     link_str = ""
     if event_id:
-        url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
-        link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
+        if str(event_id).startswith('sb-'):
+            sb_url = event.get('superbetLink', '')
+            if sb_url:
+                link_str = f'🎲 <a href="{sb_url}">VER JOGO AO VIVO</a>'
+        else:
+            url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
+            link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
 
     # ── MONTAR MENSAGEM ──────────────────────────────────────
     msg = f"{semaphore} <b>{league_display} — {strategy}</b>\n"
@@ -2340,14 +2606,20 @@ def format_league_stats_text(stats):
     Funciona perfeitamente no mobile sem depender de alinhamento.
     """
     LIGAS_MONITORADAS = {
-        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
-        "GT LEAGUE 12 MIN", "CLA 10 MIN", "H2H 8 MIN",
-        "VOLTA 6 MIN", "INT 8 MIN",
+        "GT LEAGUE 12 MIN", "BATTLE 8 MIN", "H2H 8 MIN",
+        "VALHALLA CUP", "VALKYRIE CUP", "CLA 10 MIN",
+        "INT 8 MIN", "VOLTA 6 MIN", "ADRIATIC"
     }
     ORDER = [
-        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
-        "GT LEAGUE 12 MIN", "CLA 10 MIN",
-        "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
+        "GT LEAGUE 12 MIN",
+        "BATTLE 8 MIN",
+        "H2H 8 MIN",
+        "VALHALLA CUP",
+        "VALKYRIE CUP",
+        "CLA 10 MIN",
+        "INT 8 MIN",
+        "VOLTA 6 MIN",
+        "ADRIATIC"
     ]
 
     def badge(avg):
@@ -2773,7 +3045,11 @@ async def main_loop(bot):
                     continue
 
                 # Buscar mercados abertos
-                open_lines = fetch_event_markets(event_id)
+                if str(event_id).startswith('sb-'):
+                    open_lines = fetch_superbet_event_markets(event_id)
+                else:
+                    open_lines = fetch_event_markets(event_id)
+
                 if not open_lines:
                     print(f"[INFO] Evento {event_id}: Sem mercados abertos.")
                     continue
@@ -2930,9 +3206,9 @@ async def main_loop(bot):
                     await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=display_confidence)
                     await asyncio.sleep(1)
 
-            print("[INFO] Ciclo concluído. Aguardando 10s...")
+            print("[INFO] Ciclo concluído. Aguardando 5s...")
             save_state()
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
         except Exception as e:
             print(f"[ERROR] main_loop: {e}")

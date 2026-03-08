@@ -1,15 +1,40 @@
 {
-  "Valkyrie Cup 2026 Week #10": {
+  "BATTLE 8 MIN": {
     "active": true,
     "window": [],
     "total_tips": 0
   },
-  "Valhalla Cup 3 2026 Week #10": {
+  "ADRIATIC": {
     "active": true,
     "window": [],
     "total_tips": 0
   },
-  "Valhalla Cup 2026 Week #10": {
+  "H2H 8 MIN": {
+    "active": false,
+    "window": [],
+    "total_tips": 0
+  },
+  "CLA 10 MIN": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "VOLTA 6 MIN": {
+    "active": false,
+    "window": [],
+    "total_tips": 0
+  },
+  "GT LEAGUE 12 MIN": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "VALKYRIE CUP": {
+    "active": true,
+    "window": [],
+    "total_tips": 0
+  },
+  "VALHALLA CUP": {
     "active": true,
     "window": [],
     "total_tips": 0
