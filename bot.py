@@ -428,6 +428,7 @@ sent_tips = []
 sent_match_ids = set()
 last_summary = None
 last_league_message_id = None
+last_status_report_message_id = None
 league_stats = {}
 last_league_update_time = 0
 
@@ -1332,28 +1333,42 @@ def fetch_superbet_live():
 
                 t_id = str(event.get('tournamentId'))
                 cached = superbet_tournaments.get(t_id)
+
+                # Verificar se o mapeamento veio de categoryId (âncora confiável)
+                # O dict gerado pelo update_superbet_struct inclui 'cat_id' quando mapeado por categoryId
+                mapped_by_category = isinstance(cached, dict) and cached.get('cat_id') is not None
+
                 if isinstance(cached, dict):
                     league_raw = cached.get('name', f"Superbet League {t_id}")
                 elif isinstance(cached, str):
                     league_raw = cached
                 else:
                     league_raw = f"Superbet League {t_id}"
+
                 duration = "8 min"
                 mapped_league = map_league_name(league_raw, duration)
-                # Override: se jogadores conhecidos de H2H aparecerem sob Valhalla/Valkyrie via Superbet
-                if mapped_league in {"VALHALLA CUP", "VALKYRIE CUP"}:
-                    if home_nick in H2H_OVERRIDE_PLAYERS or away_nick in H2H_OVERRIDE_PLAYERS:
-                        mapped_league = "H2H 8 MIN"
-                # Override: se jogadores típicos da EAL aparecerem rotulados como GT, ajustar para ADRIATIC
-                if mapped_league == "GT LEAGUE 12 MIN":
-                    if home_nick in EAL_OVERRIDE_PLAYERS or away_nick in EAL_OVERRIDE_PLAYERS:
-                        mapped_league = "ADRIATIC"
-                # Inferência dinâmica por histórico do jogador (substitui overrides fixos quando confiável)
-                if mapped_league in {"GT LEAGUE 12 MIN", "Superbet League", "UNKNOWN"}:
-                    ph = infer_primary_league_for_player(home_nick)
-                    pa = infer_primary_league_for_player(away_nick)
-                    if ph and pa and ph == pa and ph != mapped_league:
-                        mapped_league = ph
+
+                # Overrides por lista de jogadores conhecidos — apenas quando NÃO veio de categoryId
+                # (categoryId já é a fonte mais confiável; não faz sentido sobrescrever)
+                if not mapped_by_category:
+                    # Override: jogadores H2H aparecendo sob Valhalla/Valkyrie
+                    if mapped_league in {"VALHALLA CUP", "VALKYRIE CUP"}:
+                        if home_nick in H2H_OVERRIDE_PLAYERS or away_nick in H2H_OVERRIDE_PLAYERS:
+                            mapped_league = "H2H 8 MIN"
+                    # Override: jogadores EAL aparecendo rotulados como GT
+                    if mapped_league == "GT LEAGUE 12 MIN":
+                        if home_nick in EAL_OVERRIDE_PLAYERS or away_nick in EAL_OVERRIDE_PLAYERS:
+                            mapped_league = "ADRIATIC"
+                    # Inferência dinâmica por histórico — só para ligas genuinamente desconhecidas
+                    unknown_league = (
+                        league_raw.startswith("Superbet League ")
+                        or mapped_league in {"UNKNOWN", "GT LEAGUE 12 MIN"}
+                    )
+                    if unknown_league:
+                        ph = infer_primary_league_for_player(home_nick)
+                        pa = infer_primary_league_for_player(away_nick)
+                        if ph and pa and ph == pa and ph != mapped_league:
+                            mapped_league = ph
 
                 # Placar e Tempo
                 meta = event.get('metadata', {})
@@ -2835,7 +2850,7 @@ async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats, avg_co
 # =============================================================================
 
 async def check_results(bot):
-    global last_summary, last_league_message_id, daily_stats, last_daily_message_date
+    global last_summary, last_league_message_id, last_status_report_message_id, daily_stats, last_daily_message_date
     try:
         recent = fetch_recent_matches(num_pages=30, use_cache=False)
         today_date = datetime.now(MANAUS_TZ)
@@ -2987,9 +3002,17 @@ async def check_results(bot):
         if last_daily_message_date != today_str:
             last_daily_message_date = today_str
             try:
-                await bot.send_message(
+                # Deletar mensagem anterior de status antes de enviar a nova
+                if last_status_report_message_id:
+                    try:
+                        await bot.delete_message(chat_id=CHAT_ID, message_id=last_status_report_message_id)
+                    except:
+                        pass
+                    last_status_report_message_id = None
+                msg_status = await bot.send_message(
                     chat_id=CHAT_ID, text=league_manager.get_status_report(), parse_mode="HTML"
                 )
+                last_status_report_message_id = msg_status.message_id
             except Exception as e:
                 print(f"[WARN] Erro ao enviar status das ligas: {e}")
             save_state()
@@ -3206,9 +3229,9 @@ async def main_loop(bot):
                     await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=display_confidence)
                     await asyncio.sleep(1)
 
-            print("[INFO] Ciclo concluído. Aguardando 5s...")
+            print("[INFO] Ciclo concluído. Aguardando 10s...")
             save_state()
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
         except Exception as e:
             print(f"[ERROR] main_loop: {e}")
