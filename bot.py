@@ -33,7 +33,7 @@ LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEve
 EVENT_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
 
 # Superbet
-SUPERBET_BATCH_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date?compression=true&sportId=75&currentStatus=active"
+SUPERBET_BATCH_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date?sportId=75&currentStatus=active"
 SUPERBET_STRUCT_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/struct"
 
 # Histórico / Backend Central
@@ -1069,7 +1069,11 @@ def update_superbet_struct():
 
             new_cache = {}
             for t in tournaments_list:
-                tid = str(t.get('id'))
+                if not isinstance(t, dict):
+                    continue
+                tid = str(t.get('id', ''))
+                if not tid:
+                    continue
                 name = t.get('name', '')
                 footers = t.get('footers', [])
                 duration = "8 min"
@@ -1105,6 +1109,8 @@ def fetch_superbet_live():
         normalized = []
 
         for event in events:
+            if not isinstance(event, dict):
+                continue
             try:
                 # Verificações básicas
                 if event.get('sportId') != 75:

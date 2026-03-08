@@ -1,23 +1,10 @@
 {
-    "last_league_message_id": 66501,
+    "last_league_message_id": 67934,
     "league_stats": {
-        "CLA 10 MIN": {
+        "Valhalla Cup 2026 Week #10": {
             "ht": {
                 "o05": 100,
                 "o15": 80,
-                "btts": 40
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "VALKYRIE CUP": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
                 "btts": 60
             },
             "ft": {
@@ -27,94 +14,42 @@
             },
             "count": 5
         },
-        "Champions VOLTA league 4x4 (2x3 mins)": {
+        "Valkyrie Cup 2026 Week #10": {
             "ht": {
                 "o05": 100,
-                "o15": 100,
+                "o15": 80,
                 "btts": 80
             },
             "ft": {
+                "o15": 80,
+                "o25": 80,
+                "btts": 80
+            },
+            "count": 5
+        },
+        "Valhalla Cup 3 2026 Week #10": {
+            "ht": {
+                "o05": 100,
+                "o15": 40,
+                "btts": 40
+            },
+            "ft": {
                 "o15": 100,
-                "o25": 100,
+                "o25": 60,
                 "btts": 100
             },
             "count": 5
         },
         "H2H 8 MIN": {
             "ht": {
-                "o05": 40,
+                "o05": 80,
                 "o15": 20,
-                "btts": 0
+                "btts": 20
             },
             "ft": {
                 "o15": 80,
-                "o25": 20,
-                "btts": 20
-            },
-            "count": 5
-        },
-        "VALHALLA CUP": {
-            "ht": {
-                "o05": 100,
-                "o15": 60,
-                "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "INT 8 MIN": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 80
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "GT LEAGUE 12 MIN": {
-            "ht": {
-                "o05": 80,
-                "o15": 60,
-                "btts": 20
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 80,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "Seria A (Virtual eComp)": {
-            "ht": {
-                "o05": 80,
-                "o15": 40,
-                "btts": 20
-            },
-            "ft": {
-                "o15": 60,
-                "o25": 60,
-                "btts": 60
-            },
-            "count": 5
-        },
-        "Volta Bundesliga 4x4 (2x3 mins)": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 100
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
+                "o25": 40,
+                "btts": 40
             },
             "count": 5
         },
@@ -122,85 +57,33 @@
             "ht": {
                 "o05": 100,
                 "o15": 60,
-                "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        " CLA-UA World Cyber Cup (UA)": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "Volta Premier League 4x4 (2x3 mins)": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 60
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "La Liga (Virtual eComp)": {
-            "ht": {
-                "o05": 100,
-                "o15": 20,
-                "btts": 20
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 40,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "La Liga": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 80
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "Ligue 1": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
                 "btts": 40
             },
             "ft": {
                 "o15": 100,
-                "o25": 80,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "VOLTA - 6 MIN": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
                 "btts": 80
             },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
             "count": 5
         },
-        "Volta Seria A 4x4 (2x3 mins)": {
+        "ADRIATIC": {
             "ht": {
                 "o05": 100,
                 "o15": 100,
-                "btts": 60
+                "btts": 80
             },
             "ft": {
                 "o15": 100,
@@ -209,75 +92,101 @@
             },
             "count": 5
         },
-        "Conference League": {
+        "GT LEAGUES": {
             "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 100
+                "o05": 60,
+                "o15": 40,
+                "btts": 40
             },
             "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "FA Cup": {
-            "ht": {
-                "o05": 100,
                 "o15": 60,
-                "btts": 20
+                "o25": 40,
+                "btts": 40
+            },
+            "count": 5
+        },
+        "Cyber Live Arena": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
             },
             "ft": {
-                "o15": 80,
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Superbet League 94993": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Superbet League 72624": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 100
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "Superbet League 80560": {
+            "ht": {
+                "o05": 100,
+                "o15": 40,
+                "btts": 40
+            },
+            "ft": {
+                "o15": 100,
                 "o25": 60,
                 "btts": 60
             },
             "count": 5
         },
-        "Volta Europa League": {
+        "Superbet League 49960": {
             "ht": {
                 "o05": 100,
-                "o15": 100,
+                "o15": 80,
                 "btts": 60
             },
             "ft": {
                 "o15": 100,
                 "o25": 100,
-                "btts": 100
+                "btts": 80
             },
             "count": 5
         },
-        "Serie A": {
-            "ht": {
-                "o05": 100,
-                "o15": 100,
-                "btts": 40
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "Volta International II 4x4 (2x3 mins)": {
+        "Superbet League 97337": {
             "ht": {
                 "o05": 100,
                 "o15": 80,
-                "btts": 80
+                "btts": 60
             },
             "ft": {
                 "o15": 100,
-                "o25": 100,
+                "o25": 80,
                 "btts": 100
             },
             "count": 5
         }
     },
-    "last_league_update_time": 1772400444.3658798,
+    "last_league_update_time": 1772948305.2305741,
     "last_summary": null,
-    "last_daily_message_date": "2026-03-01",
+    "last_daily_message_date": "2026-03-08",
     "sent_match_ids": [],
     "player_red_streak": {}
 }
