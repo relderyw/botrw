@@ -1375,8 +1375,15 @@ def fetch_superbet_live():
                 hg = int(meta.get('homeTeamScore', 0) or 0)
                 ag = int(meta.get('awayTeamScore', 0) or 0)
 
-                # Superbet live costuma dar o minuto no campo matchTime
-                minute = int(event.get('matchTime', 0) or 0)
+                # Extrai minuto prioritariamente do metadata
+                try:
+                    minute_raw = meta.get('minutes', event.get('matchTime', 0))
+                    minute = int(minute_raw) if minute_raw else 0
+                except (ValueError, TypeError):
+                    minute = 0
+                    
+                period_status = meta.get('periodStatus', '')
+                time_label = f"{period_status} {minute:02d}'".strip() if period_status else f"{minute:02d}'"
 
                 def _slug(s: str) -> str:
                     norm = unicodedata.normalize('NFKD', s)
@@ -1403,7 +1410,7 @@ def fetch_superbet_live():
                     'timer': {
                         'minute': minute,
                         'second': 0,
-                        'formatted': f"{minute:02d}:00"
+                        'formatted': time_label
                     },
                     'score': {'home': hg, 'away': ag},
                     'scoreboard': f"{hg}-{ag}",
