@@ -1082,44 +1082,54 @@ def find_best_match_for_tip(tip, recent_matches):
 
             is_internal = str(m.get('id', '')).startswith('int_')
 
+            # Simplificação: comparamos o tempo de envio da tip com o tempo de realização/término
+            # Se a tip foi enviada ANTES do jogo terminar e as nicks batem, é o mesmo jogo.
+            # Delta aceitável: tip enviada até 45 min ANTES do término no histórico.
+            delta_sec = (m_time - tip_time).total_seconds()
+            
             if is_internal:
-                delta_finish = (m_time - tip_time).total_seconds()
-                if delta_finish < 180:
+                # Partida no histórico termina após a tip ser enviada
+                if -120 < delta_sec < 3600: # tip enviada até 1h antes do fim ou 2 min dps
+                    start_diff = abs(delta_sec - 600) # Preferência por volta de 10min de gap
+                else:
                     continue
-                if delta_finish > 2400:
-                    continue
-                start_diff = abs(delta_finish - 600)
             else:
-                delta_start = (m_time - tip_start_time).total_seconds()
-                if delta_start < -240:
+                # Live match
+                delta_start = abs((m_time - tip_start_time).total_seconds())
+                if delta_start < 2400:
+                    start_diff = delta_start
+                else:
                     continue
-                if delta_start > 2400:
-                    continue
-                start_diff = abs(delta_start)
 
         except Exception as e:
             continue
 
         try:
+            # Verificação de placar para evitar matching com jogos passados dos mesmos players
             sent_h, sent_a = map(int, tip.get(
                 'sent_scoreboard', '0-0').split('-'))
-            # home_score_ft pode ser apenas o 2T em algumas ligas.
-            # Para garantir, comparamos com o total acumulado (ht + ft).
-            # Se ht+ft >= placar enviado, o jogo é candidato válido.
+            
             m_ht_h = int(m.get('home_score_ht', 0) or 0)
             m_ht_a = int(m.get('away_score_ht', 0) or 0)
-            final_h = m_ht_h + int(m.get('home_score_ft', 0) or 0)
-            final_a = m_ht_a + int(m.get('away_score_ft', 0) or 0)
+            m_ft_h = int(m.get('home_score_ft', 0) or 0)
+            m_ft_a = int(m.get('away_score_ft', 0) or 0)
+            
+            # Se m_ft_x for menor que m_ht_x, tratamos como sendo apenas os gols do 2T
+            final_h = m_ft_h if m_ft_h >= m_ht_h else (m_ht_h + m_ft_h)
+            final_a = m_ft_a if m_ft_a >= m_ht_a else (m_ht_a + m_ft_a)
+            
+            # Se o placar final no histórico é MENOR que o placar quando a tip foi enviada, não é esse jogo.
             if sent_h > final_h or sent_a > final_a:
                 continue
-        except:
+        except Exception as e:
+            # print(f"[DEBUG] Erro check placar match: {e}")
             pass
 
         if start_diff < best_diff:
             best_diff = start_diff
             best = m
 
-    if best and best_diff <= 1800:
+    if best and best_diff <= 3600:
         return best
     return None
 
@@ -2243,7 +2253,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
 
     def ritmo_viavel(gols_faltando, margem=1.15):
         if gols_faltando <= 0:
-            return True
+            return False  # Se já bateu a linha, não é "viável" enviar a tip
         taxa_necessaria = gols_faltando / mins_restantes
         ok = taxa_necessaria <= taxa_historica_jogo * margem
         if not ok:
@@ -2304,10 +2314,10 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             btts_ht_avg = (home_stats.get("ht_btts_pct", 0) +
                            away_stats.get("ht_btts_pct", 0)) / 2
 
-            if val == 0.5 and w_pct >= 100 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
+            if val == 0.5 and w_pct >= 100 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok and gols_faltando_ht > 0:
                 candidates.append({"name": "⚽ +0.5 GOL HT",  "odd": ht_line["price"], "score": w_pct * (
                     ht_line["price"] - 1), "confidence_pct": w_pct})
-            elif val == 1.5 and w_pct >= 90 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
+            elif val == 1.5 and w_pct >= 90 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok and gols_faltando_ht > 0:
                 candidates.append({"name": "⚽ +1.5 GOLS HT", "odd": ht_line["price"], "score": w_pct * (
                     ht_line["price"] - 1), "confidence_pct": w_pct})
             elif w_pct > 0:
@@ -2341,7 +2351,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             conf_gate_map = {1.5: 70, 2.5: 70, 3.5: 72, 4.5: 75, 5.5: 78}
             min_conf = conf_gate_map.get(val, 70)
 
-            if w_pct >= min_pct and avg_confidence >= min_conf:
+            if w_pct >= min_pct and avg_confidence >= min_conf and needed > 0:
                 candidates.append({
                     "name": f"⚽ +{val} GOLS FT (TOTAL)",
                     "odd": total_ft_line["price"],
@@ -2434,6 +2444,10 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
             opp_boost = 1.10  # +10% no score
         elif opp_conceded_5j < avg_individual * 0.8:
             opp_boost = 0.90  # -10% no score (adversário fecha bem)
+
+        if needed_v <= 0:
+            print(f"[BLOCKED IND JÁ BATEU] {player_raw}: precisava {v}, já tem {player_goals_now}")
+            return None
 
         score_val = player_pct * (ind_line["price"] - 1) * opp_boost
         print(
