@@ -1,11 +1,11 @@
 {
-    "last_league_message_id": 68123,
+    "last_league_message_id": 68343,
     "league_stats": {
-        "VALHALLA CUP": {
+        "VALKYRIE CUP": {
             "ht": {
                 "o05": 100,
                 "o15": 100,
-                "btts": 40
+                "btts": 80
             },
             "ft": {
                 "o15": 100,
@@ -14,29 +14,29 @@
             },
             "count": 5
         },
-        "H2H 8 MIN": {
+        "VALHALLA CUP": {
             "ht": {
-                "o05": 60,
-                "o15": 20,
+                "o05": 100,
+                "o15": 80,
                 "btts": 20
             },
             "ft": {
-                "o15": 80,
-                "o25": 20,
-                "btts": 60
+                "o15": 100,
+                "o25": 100,
+                "btts": 80
             },
             "count": 5
         },
-        "VALKYRIE CUP": {
+        "H2H 8 MIN": {
             "ht": {
                 "o05": 80,
-                "o15": 80,
-                "btts": 80
+                "o15": 40,
+                "btts": 20
             },
             "ft": {
-                "o15": 80,
-                "o25": 80,
-                "btts": 80
+                "o15": 60,
+                "o25": 40,
+                "btts": 60
             },
             "count": 5
         },
@@ -47,9 +47,22 @@
                 "btts": 40
             },
             "ft": {
-                "o15": 80,
-                "o25": 60,
+                "o15": 100,
+                "o25": 80,
                 "btts": 80
+            },
+            "count": 5
+        },
+        "ADRIATIC": {
+            "ht": {
+                "o05": 100,
+                "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
             },
             "count": 5
         },
@@ -57,6 +70,19 @@
             "ht": {
                 "o05": 100,
                 "o15": 100,
+                "btts": 80
+            },
+            "ft": {
+                "o15": 100,
+                "o25": 100,
+                "btts": 100
+            },
+            "count": 5
+        },
+        "CLA 10 MIN": {
+            "ht": {
+                "o05": 100,
+                "o15": 80,
                 "btts": 60
             },
             "ft": {
@@ -66,65 +92,26 @@
             },
             "count": 5
         },
-        "GT LEAGUE 12 MIN": {
+        "GT LEAGUES": {
             "ht": {
                 "o05": 100,
-                "o15": 40,
-                "btts": 40
+                "o15": 100,
+                "btts": 100
             },
             "ft": {
                 "o15": 100,
                 "o25": 100,
                 "btts": 100
-            },
-            "count": 5
-        },
-        "ADRIATIC": {
-            "ht": {
-                "o05": 100,
-                "o15": 60,
-                "btts": 40
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 80,
-                "btts": 80
-            },
-            "count": 5
-        },
-        "CLA 10 MIN": {
-            "ht": {
-                "o05": 80,
-                "o15": 20,
-                "btts": 20
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 100
-            },
-            "count": 5
-        },
-        "Virtual Bundesliga": {
-            "ht": {
-                "o05": 100,
-                "o15": 80,
-                "btts": 40
-            },
-            "ft": {
-                "o15": 100,
-                "o25": 100,
-                "btts": 80
             },
             "count": 5
         }
     },
-    "last_league_update_time": 1773009007.2808356,
+    "last_league_update_time": 1773109302.471742,
     "last_summary": null,
     "last_daily_message_date": "2026-03-08",
     "sent_match_ids": [
-        "15837917_ANY",
-        "15837917_FT"
+        "15837917_FT",
+        "15837917_ANY"
     ],
     "player_red_streak": {}
 }
