@@ -909,17 +909,21 @@ def find_best_match_for_tip(tip, recent_matches):
             else:
                 dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
 
-            if dt.tzinfo is not None:
-                m_time = dt.astimezone(MANAUS_TZ)
-            else:
-                import pytz
-                sp_tz = pytz.timezone('America/Sao_Paulo')
-                m_time = sp_tz.localize(dt).astimezone(MANAUS_TZ)
+            # ✅ FIX FUSO: normalizar AMBAS as datas para UTC antes de comparar.
+            # Antes usava Sao Paulo (UTC-3) como fallback enquanto tip_time estava em
+            # Manaus (UTC-4), gerando até 1h de diferença e tirando jogos da janela.
+            if dt.tzinfo is None:
+                # Sem fuso → assumir UTC (padrão das APIs internas)
+                dt = dt.replace(tzinfo=timezone.utc)
+            m_time_utc = dt.astimezone(timezone.utc)
+            tip_time_utc = tip_time.astimezone(timezone.utc)
 
-            delta_sec = (m_time - tip_time).total_seconds()
-            if abs(delta_sec) > 1800:  # 30 mins max difference
+            delta_sec = (m_time_utc - tip_time_utc).total_seconds()
+            # ✅ FIX JANELA: 60 min (era 30 min) para absorver latência do histórico
+            # especialmente para ligas Superbet que sincronizam com atraso.
+            if abs(delta_sec) > 3600:
                 continue
-                
+
             start_diff = abs(delta_sec)
 
         except Exception as e:
@@ -927,13 +931,15 @@ def find_best_match_for_tip(tip, recent_matches):
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            # home_score_ft pode ser apenas o 2T em algumas ligas.
-            # Para garantir, comparamos com o total acumulado (ht + ft).
-            # Se ht+ft >= placar enviado, o jogo é candidato válido.
-            m_ht_h = int(m.get('home_score_ht', 0) or 0)
-            m_ht_a = int(m.get('away_score_ht', 0) or 0)
-            final_h = m_ht_h + int(m.get('home_score_ft', 0) or 0)
-            final_a = m_ht_a + int(m.get('away_score_ft', 0) or 0)
+            # ✅ FIX PLACAR: home_score_ft já é o TOTAL do jogo (não apenas o 2T).
+            # Antes somávamos ht + ft inflando o placar (ex: 2+3=5 quando real=3),
+            # o que fazia o filtro rejeitar matches válidos onde sent_h > final inflado.
+            final_h = int(m.get('home_score_ft', 0) or 0)
+            final_a = int(m.get('away_score_ft', 0) or 0)
+            if final_h == 0 and final_a == 0:
+                # Fallback: se ft não disponível, usar ht como total mínimo
+                final_h = int(m.get('home_score_ht', 0) or 0)
+                final_a = int(m.get('away_score_ht', 0) or 0)
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
@@ -2971,10 +2977,10 @@ async def results_checker(bot):
     while True:
         try:
             await check_results(bot)
-            await asyncio.sleep(120)
+            await asyncio.sleep(600)   # ✅ Verifica a cada 10 min; sem match → tip fica pendente e é tentada novamente no próximo ciclo
         except Exception as e:
             print(f"[ERROR] results_checker: {e}")
-            await asyncio.sleep(120)
+            await asyncio.sleep(600)
 
 
 # =============================================================================
