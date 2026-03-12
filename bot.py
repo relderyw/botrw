@@ -2352,11 +2352,18 @@ def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_
     # HT relevante
     ht_pct = (home_stats_summary.get('ht_over_15_pct', 0) + away_stats_summary.get('ht_over_15_pct', 0)) / 2
 
-    # Link do jogo
+    # Link do jogo — Superbet ou Estrela Bet conforme a fonte do evento
     link_str = ""
     if event_id:
-        url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
-        link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
+        superbet_link = event.get('superbetLink', '')
+        if superbet_link:
+            # Evento Superbet → link direto para o mercado Superbet
+            link_str = f'🎲 <a href="{superbet_link}">VER JOGO AO VIVO</a>'
+        else:
+            # Evento Altenar (Estrela Bet) → link Estrela Bet
+            clean_id = str(event_id).replace('sb-', '')
+            url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={clean_id}&sportId=66"
+            link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
 
     # ── MONTAR MENSAGEM ──────────────────────────────────────
     msg  = f"{semaphore} <b>{league_display} — {strategy}</b>\n"
@@ -2843,8 +2850,24 @@ async def main_loop(bot):
                     print(f"[SKIP] {reason}")
                     continue
 
-                # Buscar mercados abertos — Superbet usa endpoint próprio
-                if str(event_id).startswith('sb-'):
+                # ✅ ROTEAMENTO POR CASA DE APOSTAS
+                # VALKYRIE CUP e VALHALLA CUP → Estrela Bet (eventos Altenar)
+                # Todas as demais ligas → Superbet (odds e mercados)
+                ESTRELA_BET_LIGAS = {"VALKYRIE CUP", "VALHALLA CUP"}
+                is_superbet_event = str(event_id).startswith('sb-')
+
+                if mapped_league in ESTRELA_BET_LIGAS and is_superbet_event:
+                    # Liga Estrela Bet detectada como evento Superbet → ignorar
+                    print(f"[SKIP-FONTE] {mapped_league} requer Estrela Bet — ignorando evento Superbet")
+                    continue
+
+                if mapped_league not in ESTRELA_BET_LIGAS and not is_superbet_event:
+                    # Demais ligas devem usar Superbet → ignorar evento Altenar
+                    print(f"[SKIP-FONTE] {mapped_league} requer Superbet — ignorando evento Altenar")
+                    continue
+
+                # Buscar mercados abertos da fonte correta
+                if is_superbet_event:
                     open_lines = fetch_superbet_event_markets(event_id)
                 else:
                     open_lines = fetch_event_markets(event_id)
