@@ -901,7 +901,10 @@ def find_best_match_for_tip(tip, recent_matches):
         start_diff = float('inf')
 
         try:
-            dt_str = m.get('data_realizacao', '')
+            # ✅ FIX TEMPORAL: usar started_at se disponível (mais próximo do momento da tip)
+            # data_realizacao = finished_at (após o jogo) → pode estar 10-15min depois da tip
+            # started_at = início do jogo → a tip é enviada durante o jogo
+            dt_str = m.get('started_at') or m.get('data_realizacao', '')
             if not dt_str:
                 continue
             if 'T' in str(dt_str) or 'Z' in str(dt_str):
@@ -910,30 +913,30 @@ def find_best_match_for_tip(tip, recent_matches):
                 dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
 
             # ✅ FIX FUSO: normalizar AMBAS as datas para UTC antes de comparar.
-            # Antes usava Sao Paulo (UTC-3) como fallback enquanto tip_time estava em
-            # Manaus (UTC-4), gerando até 1h de diferença e tirando jogos da janela.
             if dt.tzinfo is None:
-                # Sem fuso → assumir UTC (padrão das APIs internas)
                 dt = dt.replace(tzinfo=timezone.utc)
             m_time_utc = dt.astimezone(timezone.utc)
             tip_time_utc = tip_time.astimezone(timezone.utc)
 
             delta_sec = (m_time_utc - tip_time_utc).total_seconds()
-            # ✅ FIX JANELA: 60 min (era 30 min) para absorver latência do histórico
-            # especialmente para ligas Superbet que sincronizam com atraso.
-            if abs(delta_sec) > 3600:
+            # ✅ FIX JANELA: 90 min para cobrir:
+            #   - tip enviada durante o jogo (ex: min 2 de um jogo de 8min)
+            #   - latência da API de histórico (pode demorar minutos para aparecer)
+            #   - Superbet que sincroniza com atraso extra
+            # Usando started_at: delta pode ser negativo (tip após o início) até +90min
+            # Usando data_realizacao/finished_at: delta positivo (jogo termina depois da tip)
+            if delta_sec < -600 or delta_sec > 5400:  # -10min antes até +90min depois
                 continue
 
             start_diff = abs(delta_sec)
 
         except Exception as e:
+            print(f"[WARN] find_best_match parse error: {e} | dt_str={dt_str!r}")
             continue
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
             # ✅ FIX PLACAR: home_score_ft já é o TOTAL do jogo (não apenas o 2T).
-            # Antes somávamos ht + ft inflando o placar (ex: 2+3=5 quando real=3),
-            # o que fazia o filtro rejeitar matches válidos onde sent_h > final inflado.
             final_h = int(m.get('home_score_ft', 0) or 0)
             final_a = int(m.get('away_score_ft', 0) or 0)
             if final_h == 0 and final_a == 0:
@@ -949,7 +952,8 @@ def find_best_match_for_tip(tip, recent_matches):
             best_diff = start_diff
             best = m
 
-    if best and best_diff <= 1800:
+    # Aceitar match se dentro da janela de 90min
+    if best and best_diff <= 5400:
         return best
     return None
 
@@ -1534,11 +1538,29 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
                                         m.get('away_player_name') or m.get('away_player_raw') or m.get('away_competitor_name', ''))
         match_id = m.get('event_id') or m.get('id') or m.get('_id', 'unk')
 
+        # ✅ FIX TIMEZONE: detectar fuso corretamente em timestamps como '2026-03-11T20:52:08-04:00'
+        # A condição anterior era `'+' not in fin_at` mas timestamps com offset negativo
+        # (ex: -04:00) não contêm '+', gerando strings inválidas como '...T20:52:08-04:00Z'.
+        # Agora verificamos se já existe qualquer indicador de timezone (Z, + ou padrão ±HH:MM).
+        import re as _re
+        def _normalize_dt_str(s):
+            s = str(s)
+            if not s:
+                return s
+            # Já tem fuso (termina com Z ou tem +HH:MM ou -HH:MM no final)
+            if s.endswith('Z') or _re.search(r'[+-]\d{2}:\d{2}$', s):
+                return s
+            # Sem fuso → assumir UTC
+            return s + 'Z'
+
         if m.get('finished_at'):
-            fin_at = str(m.get('finished_at'))
-            data_realizacao = f"{fin_at}Z" if not fin_at.endswith('Z') and '+' not in fin_at else fin_at
+            data_realizacao = _normalize_dt_str(m.get('finished_at'))
         else:
             data_realizacao = f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat()
+
+        # Salvar started_at para melhor comparação temporal no matching
+        started_at_raw = m.get('started_at', '')
+        started_at_norm = _normalize_dt_str(started_at_raw) if started_at_raw else ''
 
         all_combined.append({
             'id': f"int_{match_id}",
@@ -1550,6 +1572,7 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             'home_team_logo': m.get('home_team_logo', ''),
             'away_team_logo': m.get('away_team_logo', ''),
             'data_realizacao': data_realizacao,
+            'started_at': started_at_norm,
             'home_score_ht': m.get('home_score_ht', 0) or 0,
             'away_score_ht': m.get('away_score_ht', 0) or 0,
             'home_score_ft': m.get('home_score_ft', 0) or 0,
@@ -2640,11 +2663,13 @@ async def check_results(bot):
                 min_wait = 240 if tip.get('tip_period') == 'HT' else 480
 
             if elapsed < min_wait:
+                print(f"[AGUARDANDO] {tip.get('home_player')} vs {tip.get('away_player')} — {elapsed:.0f}s/{min_wait}s")
                 continue
 
+            print(f"[CHECK] Buscando resultado: {tip.get('home_player')} vs {tip.get('away_player')} ({tip.get('league')}) — {elapsed:.0f}s desde envio")
             matched = find_best_match_for_tip(tip, recent)
             if not matched:
-                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match")
+                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match no histórico ({len(recent)} jogos)")
                 continue
 
             strategy = tip['strategy']
