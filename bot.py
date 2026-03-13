@@ -901,10 +901,7 @@ def find_best_match_for_tip(tip, recent_matches):
         start_diff = float('inf')
 
         try:
-            # ✅ FIX TEMPORAL: usar started_at se disponível (mais próximo do momento da tip)
-            # data_realizacao = finished_at (após o jogo) → pode estar 10-15min depois da tip
-            # started_at = início do jogo → a tip é enviada durante o jogo
-            dt_str = m.get('started_at') or m.get('data_realizacao', '')
+            dt_str = m.get('data_realizacao', '')
             if not dt_str:
                 continue
             if 'T' in str(dt_str) or 'Z' in str(dt_str):
@@ -912,37 +909,42 @@ def find_best_match_for_tip(tip, recent_matches):
             else:
                 dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
 
-            # ✅ FIX FUSO: normalizar AMBAS as datas para UTC antes de comparar.
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            m_time_utc = dt.astimezone(timezone.utc)
-            tip_time_utc = tip_time.astimezone(timezone.utc)
+            if dt.tzinfo is not None:
+                m_time = dt.astimezone(MANAUS_TZ)
+            else:
+                import pytz
+                sp_tz = pytz.timezone('America/Sao_Paulo')
+                m_time = sp_tz.localize(dt).astimezone(MANAUS_TZ)
 
-            delta_sec = (m_time_utc - tip_time_utc).total_seconds()
-            # ✅ FIX JANELA: 90 min para cobrir:
-            #   - tip enviada durante o jogo (ex: min 2 de um jogo de 8min)
-            #   - latência da API de histórico (pode demorar minutos para aparecer)
-            #   - Superbet que sincroniza com atraso extra
-            # Usando started_at: delta pode ser negativo (tip após o início) até +90min
-            # Usando data_realizacao/finished_at: delta positivo (jogo termina depois da tip)
-            if delta_sec < -600 or delta_sec > 5400:  # -10min antes até +90min depois
-                continue
+            is_internal = str(m.get('id', '')).startswith('int_')
 
-            start_diff = abs(delta_sec)
+            if is_internal:
+                delta_finish = (m_time - tip_time).total_seconds()
+                if delta_finish < 180:
+                    continue
+                if delta_finish > 2400:
+                    continue
+                start_diff = abs(delta_finish - 600)
+            else:
+                delta_start = (m_time - tip_start_time).total_seconds()
+                if delta_start < -240:
+                    continue
+                if delta_start > 2400:
+                    continue
+                start_diff = abs(delta_start)
 
         except Exception as e:
-            print(f"[WARN] find_best_match parse error: {e} | dt_str={dt_str!r}")
             continue
 
         try:
             sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            # ✅ FIX PLACAR: home_score_ft já é o TOTAL do jogo (não apenas o 2T).
-            final_h = int(m.get('home_score_ft', 0) or 0)
-            final_a = int(m.get('away_score_ft', 0) or 0)
-            if final_h == 0 and final_a == 0:
-                # Fallback: se ft não disponível, usar ht como total mínimo
-                final_h = int(m.get('home_score_ht', 0) or 0)
-                final_a = int(m.get('away_score_ht', 0) or 0)
+            # home_score_ft pode ser apenas o 2T em algumas ligas.
+            # Para garantir, comparamos com o total acumulado (ht + ft).
+            # Se ht+ft >= placar enviado, o jogo é candidato válido.
+            m_ht_h = int(m.get('home_score_ht', 0) or 0)
+            m_ht_a = int(m.get('away_score_ht', 0) or 0)
+            final_h = m_ht_h + int(m.get('home_score_ft', 0) or 0)
+            final_a = m_ht_a + int(m.get('away_score_ft', 0) or 0)
             if sent_h > final_h or sent_a > final_a:
                 continue
         except:
@@ -952,8 +954,7 @@ def find_best_match_for_tip(tip, recent_matches):
             best_diff = start_diff
             best = m
 
-    # Aceitar match se dentro da janela de 90min
-    if best and best_diff <= 5400:
+    if best and best_diff <= 1800:
         return best
     return None
 
@@ -1538,29 +1539,11 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
                                         m.get('away_player_name') or m.get('away_player_raw') or m.get('away_competitor_name', ''))
         match_id = m.get('event_id') or m.get('id') or m.get('_id', 'unk')
 
-        # ✅ FIX TIMEZONE: detectar fuso corretamente em timestamps como '2026-03-11T20:52:08-04:00'
-        # A condição anterior era `'+' not in fin_at` mas timestamps com offset negativo
-        # (ex: -04:00) não contêm '+', gerando strings inválidas como '...T20:52:08-04:00Z'.
-        # Agora verificamos se já existe qualquer indicador de timezone (Z, + ou padrão ±HH:MM).
-        import re as _re
-        def _normalize_dt_str(s):
-            s = str(s)
-            if not s:
-                return s
-            # Já tem fuso (termina com Z ou tem +HH:MM ou -HH:MM no final)
-            if s.endswith('Z') or _re.search(r'[+-]\d{2}:\d{2}$', s):
-                return s
-            # Sem fuso → assumir UTC
-            return s + 'Z'
-
         if m.get('finished_at'):
-            data_realizacao = _normalize_dt_str(m.get('finished_at'))
+            fin_at = str(m.get('finished_at'))
+            data_realizacao = f"{fin_at}Z" if not fin_at.endswith('Z') and '+' not in fin_at else fin_at
         else:
             data_realizacao = f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat()
-
-        # Salvar started_at para melhor comparação temporal no matching
-        started_at_raw = m.get('started_at', '')
-        started_at_norm = _normalize_dt_str(started_at_raw) if started_at_raw else ''
 
         all_combined.append({
             'id': f"int_{match_id}",
@@ -1572,7 +1555,6 @@ def fetch_recent_matches(num_pages=10, use_cache=True):
             'home_team_logo': m.get('home_team_logo', ''),
             'away_team_logo': m.get('away_team_logo', ''),
             'data_realizacao': data_realizacao,
-            'started_at': started_at_norm,
             'home_score_ht': m.get('home_score_ht', 0) or 0,
             'away_score_ht': m.get('away_score_ht', 0) or 0,
             'home_score_ft': m.get('home_score_ft', 0) or 0,
@@ -2080,10 +2062,10 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         return ok
 
     def parse_line(sv_str):
-        try: return float(str(sv_str).split("|")[-1].replace('+', '').strip())
+        try: return float(sv_str.split("|")[-1])
         except: return None
 
-    def find_over_line(market_name_query, current_goals=0):
+    def find_over_line(market_name_query):
         best_line = None
         q_lower = market_name_query.lower()
         for line in open_lines:
@@ -2094,7 +2076,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
                     if "menos" in line["odd_name"].lower(): continue
                     if line["price"] < 1.70: continue
                     sv_val = parse_line(line["odd_sv"])
-                    if sv_val is not None and sv_val > current_goals:
+                    if sv_val is not None:
                         if best_line is None or sv_val < best_line["value"]:
                             best_line = {"value": sv_val, "odd_name": line["odd_name"], "price": line["price"]}
         return best_line
@@ -2104,7 +2086,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     # Critérios do JOGADOR: ht_scored_05_pct/ht_scored_15_pct/ht_btts_pct
     # =========================================================================
     if gate_total and (minute * 60 + second) <= MAX_HT_TIME and total_now == 0:
-        ht_line = find_over_line("1º tempo - total", total_now) or find_over_line("1ª tempo - Total de gols", total_now)
+        ht_line = find_over_line("1º tempo - total") or find_over_line("1ª tempo - Total de gols")
         if ht_line:
             val = ht_line["value"]
             combined_ht_avg = home_stats["avg_goals_scored_ht"] + away_stats["avg_goals_scored_ht"]
@@ -2133,7 +2115,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
     # FT TOTAL — Apostas de total do jogo
     # Critérios: ft_over_X5_pct (média dos dois), ritmo, confiança >= 70%
     # =========================================================================
-    total_ft_line = find_over_line("Total de Gols", total_now) if gate_total else None
+    total_ft_line = find_over_line("Total de Gols") if gate_total else None
     if total_ft_line:
         val    = total_ft_line["value"]
         needed = val - total_now
@@ -2178,7 +2160,7 @@ def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_li
         if avg_individual < min_player_avg:
             print(f"[BLOCKED IND] {player_raw}: média {avg_individual:.1f} < mínimo {min_player_avg}")
             return None
-        ind_line = find_over_line(f"{player_raw} total", player_goals_now)
+        ind_line = find_over_line(f"{player_raw} total")
         if not ind_line:
             return None
         v         = ind_line["value"]
@@ -2352,18 +2334,11 @@ def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_
     # HT relevante
     ht_pct = (home_stats_summary.get('ht_over_15_pct', 0) + away_stats_summary.get('ht_over_15_pct', 0)) / 2
 
-    # Link do jogo — Superbet ou Estrela Bet conforme a fonte do evento
+    # Link do jogo
     link_str = ""
     if event_id:
-        superbet_link = event.get('superbetLink', '')
-        if superbet_link:
-            # Evento Superbet → link direto para o mercado Superbet
-            link_str = f'🎲 <a href="{superbet_link}">VER JOGO AO VIVO</a>'
-        else:
-            # Evento Altenar (Estrela Bet) → link Estrela Bet
-            clean_id = str(event_id).replace('sb-', '')
-            url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={clean_id}&sportId=66"
-            link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
+        url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
+        link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
 
     # ── MONTAR MENSAGEM ──────────────────────────────────────
     msg  = f"{semaphore} <b>{league_display} — {strategy}</b>\n"
@@ -2670,13 +2645,11 @@ async def check_results(bot):
                 min_wait = 240 if tip.get('tip_period') == 'HT' else 480
 
             if elapsed < min_wait:
-                print(f"[AGUARDANDO] {tip.get('home_player')} vs {tip.get('away_player')} — {elapsed:.0f}s/{min_wait}s")
                 continue
 
-            print(f"[CHECK] Buscando resultado: {tip.get('home_player')} vs {tip.get('away_player')} ({tip.get('league')}) — {elapsed:.0f}s desde envio")
             matched = find_best_match_for_tip(tip, recent)
             if not matched:
-                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match no histórico ({len(recent)} jogos)")
+                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match")
                 continue
 
             strategy = tip['strategy']
@@ -2850,24 +2823,8 @@ async def main_loop(bot):
                     print(f"[SKIP] {reason}")
                     continue
 
-                # ✅ ROTEAMENTO POR CASA DE APOSTAS
-                # VALKYRIE CUP e VALHALLA CUP → Estrela Bet (eventos Altenar)
-                # Todas as demais ligas → Superbet (odds e mercados)
-                ESTRELA_BET_LIGAS = {"VALKYRIE CUP", "VALHALLA CUP"}
-                is_superbet_event = str(event_id).startswith('sb-')
-
-                if mapped_league in ESTRELA_BET_LIGAS and is_superbet_event:
-                    # Liga Estrela Bet detectada como evento Superbet → ignorar
-                    print(f"[SKIP-FONTE] {mapped_league} requer Estrela Bet — ignorando evento Superbet")
-                    continue
-
-                if mapped_league not in ESTRELA_BET_LIGAS and not is_superbet_event:
-                    # Demais ligas devem usar Superbet → ignorar evento Altenar
-                    print(f"[SKIP-FONTE] {mapped_league} requer Superbet — ignorando evento Altenar")
-                    continue
-
-                # Buscar mercados abertos da fonte correta
-                if is_superbet_event:
+                # Buscar mercados abertos — Superbet usa endpoint próprio
+                if str(event_id).startswith('sb-'):
                     open_lines = fetch_superbet_event_markets(event_id)
                 else:
                     open_lines = fetch_event_markets(event_id)
@@ -3025,10 +2982,10 @@ async def results_checker(bot):
     while True:
         try:
             await check_results(bot)
-            await asyncio.sleep(600)   # ✅ Verifica a cada 10 min; sem match → tip fica pendente e é tentada novamente no próximo ciclo
+            await asyncio.sleep(120)
         except Exception as e:
             print(f"[ERROR] results_checker: {e}")
-            await asyncio.sleep(600)
+            await asyncio.sleep(120)
 
 
 # =============================================================================
