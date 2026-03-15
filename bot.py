@@ -1502,8 +1502,12 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
 # FORMATAÇÃO DE MENSAGENS
 # =============================================================================
 def _bar(val, max_val=6.0):
+    """
+    Barra visual de progresso.
+    Usa '●' para preenchido e '○' para vazio — contraste claro no Telegram dark/light.
+    """
     filled = min(10, round(val / max_val * 10))
-    return "█" * filled + "░" * (10 - filled)
+    return "●" * filled + "○" * (10 - filled)
 
 
 def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
@@ -1519,6 +1523,9 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
     p2_ht  = p2_st.get('avg_ht', 0) if p2_st else 0
     lg_ht  = lg_st.get('avg_ht', 0) if lg_st else 0
     lg_ft  = lg_st.get('avg_ft', 0) if lg_st else 0
+    # max_val dinâmico: escala relativa aos dois players, mínimo 4.0
+    # Assim um player com 3.0g/j (acima da média) aparece como ████████ não █████
+    max_ft = max(p1_ft, p2_ft, 4.0)
 
     # Link ao vivo
     eid = event.get('id', '')
@@ -1537,8 +1544,8 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
     msg += f"<b>@ {odd}</b>\n"
     msg += f"⏱ {timer}  |  📊 {score}\n"
     msg += "─────────────────────\n"
-    msg += f"<b>{home.ljust(pad)}</b>  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft)}\n"
-    msg += f"<b>{away.ljust(pad)}</b>  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft)}\n"
+    msg += f"<b>{home.ljust(pad)}</b>  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft, max_ft)}\n"
+    msg += f"<b>{away.ljust(pad)}</b>  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft, max_ft)}\n"
     msg += "─────────────────────\n"
     msg += f"Liga: HT {lg_ht:.1f}g/j  |  FT {lg_ft:.1f}g/j"
     if link:
