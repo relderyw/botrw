@@ -986,13 +986,23 @@ def _rebuild_stats_cache(matches):
     new_players = {}
     new_leagues = {}
 
+    # Log das ligas únicas no histórico — ajuda a identificar nomes não mapeados
+    mapped_leagues   = set()
+    unmapped_leagues = set()
+    for lg in sorted(leagues):
+        mapped = map_league(lg)
+        if mapped != lg:
+            mapped_leagues.add(f"{lg!r} → {mapped!r}")
+        else:
+            unmapped_leagues.add(lg)
+
     # Computar stats por player
     for nick in nicks:
         st = player_stats(nick, matches, last_n=5)
         if st:
             new_players[nick] = st
 
-    # Computar stats por liga
+    # Computar stats por liga (nome já mapeado pelo fetch_history)
     for lg in leagues:
         st = league_stats(lg, matches, last_n=5)
         if st and not st.get('estimated'):
@@ -1004,6 +1014,13 @@ def _rebuild_stats_cache(matches):
         'ts':      time.time(),
     }
     print(f"[stats_cache] {len(new_players)} players | {len(new_leagues)} ligas")
+    # Ligas com dados reais no histórico
+    known = sorted(new_leagues.keys())
+    print(f"[stats_cache] ligas com dados: {known}")
+    # Ligas do LEAGUE_PROFILES sem dados no histórico
+    missing = [lg for lg in LEAGUE_PROFILES if lg != 'DEFAULT' and lg not in new_leagues]
+    if missing:
+        print(f"[stats_cache] ligas SEM dados (EST): {missing}")
 
 
 def get_player_stats_cached(player_name):
@@ -1984,15 +2001,17 @@ async def main_loop(bot):
                 sc = event.get('score', {})
                 timer_now = event.get('timer', {})
                 sc        = event.get('score', {})
-                print(f"  [EV] {home_p} vs {away_p} | {mapped} | "
-                      f"{sc.get('home',0)}-{sc.get('away',0)} "
-                      f"| min {timer_now.get('minute',0)} "
-                      f"({'HT' if timer_now.get('minute',0) < get_profile(mapped).get('ht_dur',4) else '2T'})")
-                print(f"    p1: HT={p1_s['avg_ht']:.1f}marc {p1_s['avg_ht_sof']:.1f}sof "
-                      f"FT={p1_s['avg_ft']:.1f}marc {p1_s['avg_ft_sof']:.1f}sof ({p1_s['games']}j)")
-                print(f"    p2: HT={p2_s['avg_ht']:.1f}marc {p2_s['avg_ht_sof']:.1f}sof "
-                      f"FT={p2_s['avg_ft']:.1f}marc {p2_s['avg_ft_sof']:.1f}sof ({p2_s['games']}j)")
-                print(f"    liga: HT={lg_s['avg_ht']:.1f} FT={lg_s['avg_ft']:.1f} "
+                sc_h  = sc.get('home', 0)
+                sc_a  = sc.get('away', 0)
+                mn    = timer_now.get('minute', 0)
+                per   = 'HT' if mn < get_profile(mapped).get('ht_dur', 4) else '2T'
+                pref  = f"[{home_p[:6]}x{away_p[:6]}]"
+                print(f"  {pref} {mapped} | {sc_h}-{sc_a} min {mn} ({per})")
+                print(f"  {pref}   p1 {home_p}: HT={p1_s['avg_ht']:.1f}m/{p1_s['avg_ht_sof']:.1f}s "
+                      f"FT={p1_s['avg_ft']:.1f}m/{p1_s['avg_ft_sof']:.1f}s ({p1_s['games']}j)")
+                print(f"  {pref}   p2 {away_p}: HT={p2_s['avg_ht']:.1f}m/{p2_s['avg_ht_sof']:.1f}s "
+                      f"FT={p2_s['avg_ft']:.1f}m/{p2_s['avg_ft_sof']:.1f}s ({p2_s['games']}j)")
+                print(f"  {pref}   liga HT={lg_s['avg_ht']:.1f} FT={lg_s['avg_ft']:.1f} "
                       f"({lg_s['games']}j{' EST' if lg_s.get('estimated') else ''})")
 
                 tips = evaluate_strategies(event, p1_s, p2_s, lg_s, lines)
