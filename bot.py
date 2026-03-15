@@ -1,3075 +1,2022 @@
-import os
-import time
+"""
+BOT FIFA v5.0 — REESCRITO DO ZERO
+Critérios diretos baseados nos últimos 5 jogos de cada player + liga.
+Sem sistema de confidence, sem funil excessivo, sem filtros impossíveis.
+
+CRITÉRIOS (ligas 8 min):
+  GATE HT: liga_avg_ht >= 3.2  +  p1_avg_ht >= 2.1  +  p2_avg_ht >= 2.1
+  +0.5 HT : p1_ht >= 1.5  E  p2_ht >= 1.5
+  +1.5 HT : p1_ht >= 2.1  E  p2_ht >= 2.1  (+ gate)
+  +2.5 HT : p1_ht >= 2.6  E  p2_ht >= 2.6  (+ gate 4.0)
+  BTTS HT : p1_btts_ht >= 60%  E  p2_btts_ht >= 60%
+  +2.5 FT : p1_ft + p2_ft >= 5.0
+  +3.5 FT : p1_ft + p2_ft >= 6.5
+  +4.5 FT : p1_ft + p2_ft >= 8.0
+  BTTS FT : p1_btts_ft >= 70%  E  p2_btts_ft >= 70%
+  +1.5 IND: player_avg_ft >= 2.2  E  pct_scored_2+ >= 70%
+  +2.5 IND: player_avg_ft >= 3.2  E  pct_scored_3+ >= 60%
+  +3.5 IND: player_avg_ft >= 4.2  E  pct_scored_4+ >= 50%
+"""
+
+import os, time, re, json, asyncio, logging, concurrent.futures
 import requests
-import asyncio
-import concurrent.futures
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict
+from collections import deque
 from telegram import Bot
 from telegram.request import HTTPXRequest
-import re
-import logging
-from PIL import Image, ImageDraw, ImageFont
-import statistics
-from io import BytesIO
-import json
-
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s %(levelname)s %(message)s',
     datefmt='%H:%M:%S'
 )
 
 # =============================================================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÃO
 # =============================================================================
 BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
-CHAT_ID = "-1001981134607"
-
-LIVE_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventCount=0&sportId=66&catIds=2085,1571,1728,1594,2086,1729,2130"
-EVENT_API_URL = "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
-
-# Superbet
-_SUPERBET_BASE_URL = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date?sportId=75&currentStatus=active&offerState=live"
-SUPERBET_BATCH_API = _SUPERBET_BASE_URL
-SUPERBET_STRUCT_API = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/struct"
-
-HISTORY_API_URL = "https://rwtips-k8j2.onrender.com/api/history"
-
-AUTH_HEADER = "Bearer 444c7677f71663b246a40600ff53a8880240086750fda243735e849cdeba9702"
-
+CHAT_ID   = "-1001981134607"
 MANAUS_TZ = timezone(timedelta(hours=-4))
-SAO_PAULO_TZ = timezone(timedelta(hours=-3))
+
+ALTENAR_LIVE  = (
+    "https://sb2frontend-altenar2.biahosted.com/api/widget/GetLiveEvents"
+    "?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1"
+    "&numFormat=en-GB&countryCode=BR&eventCount=0&sportId=66"
+    "&catIds=2085,1571,1728,1594,2086,1729,2130"
+)
+ALTENAR_EVENT = (
+    "https://sb2frontend-altenar2.biahosted.com/api/widget/GetEventDetails"
+    "?culture=pt-BR&timezoneOffset=-180&integration=estrelabet&deviceType=1"
+    "&numFormat=en-GB&countryCode=BR&eventId={}&showNonBoosts=false"
+)
+SUPERBET_LIVE   = (
+    "https://production-superbet-offer-br.freetls.fastly.net"
+    "/v2/pt-BR/events/by-date?sportId=75&currentStatus=active&offerState=live"
+)
+SUPERBET_STRUCT = (
+    "https://production-superbet-offer-br.freetls.fastly.net"
+    "/v2/pt-BR/sport/75/tournaments"
+)
+SUPERBET_EVENT  = (
+    "https://production-superbet-offer-br.freetls.fastly.net"
+    "/v2/pt-BR/events/{}"
+)
+HISTORY_URL = "https://rwtips-k8j2.onrender.com/api/history"
 
 # =============================================================================
-# ✅ CORREÇÃO #1: SISTEMA DINÂMICO DE LIGAS (substituiu whitelist estática)
-# Cada liga tem uma janela deslizante das últimas 20 tips.
-# Bloqueia automaticamente se cair abaixo de 48% de assertividade.
-# Desbloqueia automaticamente se subir acima de 72%.
-# Notificação no Telegram quando o status muda.
+# CRITÉRIOS POR TIPO DE LIGA
+# =============================================================================
+# =============================================================================
+# CRITÉRIOS POR TIPO DE LIGA
+#
+# Todas as apostas HT são enviadas durante o 1ºT.
+# Todas as apostas FT são enviadas durante o 2ºT.
+# Médias baseadas nos últimos 5 jogos do player (independente do adversário).
+# Médias de liga baseadas nos últimos 5 jogos da liga.
 # =============================================================================
 
-from collections import deque
+# 6 min (Volta) e 8 min (Battle, H2H, Valkyrie) — mesmos critérios
+CRIT_8MIN = {
+    # ── Gate geral ─────────────────────────────────────────────────
+    # HT: liga e ambos players precisam passar para liberar QUALQUER aposta HT
+    "ht_gate_league": 2.7,   # média gols HT da liga (últimos 5j)
+    "ht_gate_p":      1.8,   # média gols HT marcados de CADA player (últimos 5j)
+    # FT: liga e ambos players precisam passar para liberar QUALQUER aposta FT
+    "ft_gate_league": 3.7,   # média gols FT da liga (últimos 5j)
+    "ft_gate_p":      2.1,   # média gols FT marcados de CADA player (últimos 5j)
 
-LEAGUE_UNLOCK_THRESHOLD = 72   # % para desbloquear liga bloqueada
-LEAGUE_RELOCK_THRESHOLD = 60   # % para bloquear liga ativa (abaixo de 60% → bloqueia)
-LEAGUE_WINDOW_SIZE      = 20   # Janela deslizante (últimas N tips)
-LEAGUE_MIN_SAMPLES      = 8    # Mínimo de amostras antes de decidir bloqueio estatístico
-LEAGUE_CONSECUTIVE_REDS = 2    # Reds consecutivos para pausar liga temporariamente (mesmo sem amostras suficientes)
-LEAGUE_PAUSE_MINUTES    = 30   # Minutos de pausa após reds consecutivos
+    # ── Apostas HT (1ºT) ───────────────────────────────────────────
+    # +0.5 HT   | Placar: 0x0
+    "ht_05": {"p1_marc": 1.3, "p2_marc": 1.3},
+    # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
+    "ht_15": {"p1_marc": 1.7, "p2_marc": 1.7},
+    # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
+    "ht_25": {"p1_marc": 2.0, "p2_marc": 2.0},
+    # BTTS HT   | Placar: total <= 1
+    "ht_btts": {"p1_marc": 1.3, "p1_sof": 1.0, "p2_marc": 1.3, "p2_sof": 1.0},
 
-# Status inicial de cada liga (baseado no histórico disponível)
-# True = começa ATIVA | False = começa BLOQUEADA (precisa provar)
-LEAGUE_INITIAL_STATUS = {
-    "BATTLE 8 MIN":      True,   # 60% histórico → ativa
-    "VALHALLA CUP":      True,   # Alta pontuação → ativa
-    "VALKYRIE CUP":      True,   # Ativa
-    "GT LEAGUE 12 MIN":  True,   # Ativa
-    "CLA 10 MIN":        True,   # Ativa
-    "H2H 8 MIN":         False,  # 0% no dia → bloqueada, precisa provar
-    "La Liga":           False,  # 0% → bloqueada
-    "INT 8 MIN":         False,  # 25% → bloqueada
-    "VOLTA 6 MIN":       False,  # Bloqueada
-    "Ligue 1":           True,   # 66% → ativa (monitorada)
-    "Serie A":           False,  # Bloqueada inicialmente
-    "Conference League": False,  # Bloqueada inicialmente
-    "Champions League":  False,  # Variável → bloqueada até provar
-    "Bundesliga":        False,
-    "Premier League":    False,
-    "Europa League":     False,
+    # ── Apostas FT (2ºT) ───────────────────────────────────────────
+    # +1.5 FT   | Placar: 0 gols
+    "ft_15": {"p1_marc": 1.7, "p2_marc": 1.7},
+    # +2.5 FT   | Placar: < 2 gols
+    "ft_25": {"p1_marc": 1.5, "p2_marc": 1.5},
+    # +3.5 FT   | Placar: < 3 gols
+    "ft_35": {"p1_marc": 2.2, "p2_marc": 2.2},
+    # +4.5 FT   | Placar: <= 3 gols
+    "ft_45": {"p1_marc": 2.7, "p2_marc": 2.7},
+    # BTTS FT   | Placar: total <= 1
+    "ft_btts": {"p1_marc": 1.0, "p1_sof": 1.0, "p2_marc": 1.0, "p2_sof": 1.0},
+
+    "min_odd": 1.55,
 }
 
+# 6 min (Volta) — mesmos critérios do 8 min
+CRIT_6MIN = CRIT_8MIN
 
-class LeagueManager:
-    """
-    Gerencia o status de cada liga com base em performance real das tips.
-    Estado persistido em league_performance.json.
-    """
+# 10 min (CLA, Adriatic) e 12 min (GT, Valhalla, Battle 12)
+CRIT_12MIN = {
+    # ── Gate geral ─────────────────────────────────────────────────
+    "ht_gate_league": 3.2,
+    "ht_gate_p":      2.0,
+    "ft_gate_league": 4.1,
+    "ft_gate_p":      2.4,
 
-    def __init__(self, state_file='league_performance.json'):
-        self.state_file = state_file
-        self.leagues = {}
-        self._load()
+    # ── Apostas HT (1ºT) ───────────────────────────────────────────
+    # +0.5 HT   | Placar: 0x0
+    "ht_05": {"p1_marc": 1.5, "p2_marc": 1.5},
+    # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
+    "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9},
+    # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
+    "ht_25": {"p1_marc": 2.2, "p2_marc": 2.2},
+    # BTTS HT   | Placar: total <= 1
+    "ht_btts": {"p1_marc": 1.6, "p1_sof": 1.0, "p2_marc": 1.6, "p2_sof": 1.0},
 
-    def _load(self):
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                for league, info in data.items():
-                    self.leagues[league] = {
-                        'active': info.get('active', False),
-                        'window': deque(info.get('window', []), maxlen=LEAGUE_WINDOW_SIZE),
-                        'total_tips': info.get('total_tips', 0),
-                    }
-                print(f"[LeagueManager] {len(self.leagues)} ligas carregadas")
-            except Exception as e:
-                print(f"[LeagueManager] Erro ao carregar: {e}")
+    # ── Apostas FT (2ºT) ───────────────────────────────────────────
+    # +1.5 FT   | Placar: 0 gols
+    "ft_15": {"p1_marc": 1.9, "p2_marc": 1.9},
+    # +2.5 FT   | Placar: < 2 gols
+    "ft_25": {"p1_marc": 2.2, "p2_marc": 2.2},
+    # +3.5 FT   | Placar: < 3 gols
+    "ft_35": {"p1_marc": 2.7, "p2_marc": 2.7},
+    # +4.5 FT   | Placar: <= 3 gols
+    "ft_45": {"p1_marc": 3.0, "p2_marc": 3.0},
+    # BTTS FT   | Placar: total <= 1
+    "ft_btts": {"p1_marc": 1.9, "p1_sof": 1.3, "p2_marc": 1.9, "p2_sof": 1.3},
 
-    def save(self):
-        try:
-            data = {
-                league: {
-                    'active': info['active'],
-                    'window': list(info['window']),
-                    'total_tips': info['total_tips'],
-                }
-                for league, info in self.leagues.items()
-            }
-            with open(self.state_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"[LeagueManager] Erro ao salvar: {e}")
+    "min_odd": 1.55,
+}
 
-    def _get_or_init(self, league):
-        if league not in self.leagues:
-            initial = LEAGUE_INITIAL_STATUS.get(league, True)
-            self.leagues[league] = {
-                "active": initial,
-                "window": deque(maxlen=LEAGUE_WINDOW_SIZE),
-                "total_tips": 0,
-                "consecutive_reds": 0,
-                "pause_until": None,
-            }
-            status_str = "ATIVA" if initial else "BLOQUEADA"
-            print(f"[LeagueManager] Nova liga: {league} → {status_str} (inicial)")
-        info = self.leagues[league]
-        if "consecutive_reds" not in info: info["consecutive_reds"] = 0
-        if "pause_until" not in info: info["pause_until"] = None
-        return info
+LEAGUE_PROFILES = {
+    "BATTLE 8 MIN":    {"crit": "8MIN",  "duration": 8,  "ht_dur": 4},
+    "BATTLE 12 MIN":   {"crit": "12MIN", "duration": 12, "ht_dur": 6},
+    "H2H 8 MIN":       {"crit": "8MIN",  "duration": 8,  "ht_dur": 4},
+    "VALKYRIE CUP":    {"crit": "8MIN",  "duration": 8,  "ht_dur": 4},
+    "VALHALLA CUP":    {"crit": "12MIN", "duration": 12, "ht_dur": 6},
+    "GT LEAGUE 12 MIN":{"crit": "12MIN", "duration": 12, "ht_dur": 6},
+    "CLA 10 MIN":      {"crit": "12MIN", "duration": 10, "ht_dur": 5},
+    "ADRIATIC":        {"crit": "12MIN", "duration": 10, "ht_dur": 5},
+    "VOLTA 6 MIN":     {"crit": "6MIN",  "duration": 6,  "ht_dur": 3},
+    "DEFAULT":         {"crit": "8MIN",  "duration": 8,  "ht_dur": 4},
+}
 
-    def is_active(self, league):
-        """
-        Retorna (bool_ativa, motivo).
-        Verifica pausa temporaria por reds consecutivos antes da janela estatistica.
-        """
-        info = self._get_or_init(league)
+def get_crit(league_key):
+    prof = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
+    crit_key = prof["crit"]
+    if crit_key == "12MIN": return CRIT_12MIN
+    if crit_key == "6MIN":  return CRIT_6MIN
+    return CRIT_8MIN
 
-        # Verificar pausa temporaria por reds consecutivos
-        if info.get('pause_until'):
-            pause_until = info['pause_until']
-            if isinstance(pause_until, str):
-                pause_until = datetime.fromisoformat(pause_until)
-            now = datetime.now(MANAUS_TZ)
-            if pause_until.tzinfo is None:
-                pause_until = pause_until.replace(tzinfo=MANAUS_TZ)
-            if now < pause_until:
-                mins_left = int((pause_until - now).total_seconds() / 60)
-                return False, f'Pausada {LEAGUE_CONSECUTIVE_REDS} reds seguidos — retorna em {mins_left}min'
-            else:
-                info['pause_until'] = None
-                info['consecutive_reds'] = 0
-                print(f'[LeagueManager] Pausa encerrada: {league} reativada')
-
-        window = info['window']
-        n = len(window)
-        if n < LEAGUE_MIN_SAMPLES:
-            motivo = f'Coletando dados ({n}/{LEAGUE_MIN_SAMPLES} tips)'
-            return info['active'], motivo
-        pct = (sum(window) / n) * 100
-        return info['active'], f'{pct:.1f}% nas ultimas {n} tips'
-
-    def record_result(self, league, result_is_green):
-        """
-        Registra resultado e verifica se deve mudar status da liga.
-        Retorna (mudou_status, novo_status, mensagem_telegram_ou_None).
-        """
-        info = self._get_or_init(league)
-        info['window'].append(1 if result_is_green else 0)
-        info['total_tips'] += 1
-
-        # Rastrear reds consecutivos para pausa imediata
-        if result_is_green:
-            info['consecutive_reds'] = 0
-        else:
-            info['consecutive_reds'] = info.get('consecutive_reds', 0) + 1
-
-        # Pausa temporaria apos N reds consecutivos
-        if info['consecutive_reds'] >= LEAGUE_CONSECUTIVE_REDS:
-            pause_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_PAUSE_MINUTES)
-            info['pause_until'] = pause_until.isoformat()
-            info['consecutive_reds'] = 0
-            self.save()
-            msg_pausa = (
-                f'⏸ <b>LIGA PAUSADA: {league}</b>\n'
-                f'{LEAGUE_CONSECUTIVE_REDS} reds consecutivos\n'
-                f'Tips suspensas por {LEAGUE_PAUSE_MINUTES} minutos'
-            )
-            print(f'[LeagueManager] PAUSADA: {league} ({LEAGUE_CONSECUTIVE_REDS} reds seguidos)')
-            return True, False, msg_pausa
-
-        window = info['window']
-        n = len(window)
-
-        if n < LEAGUE_MIN_SAMPLES:
-            self.save()
-            return False, info['active'], None
-
-
-        pct = (sum(window) / n) * 100
-        mudou = False
-        mensagem = None
-
-        if not info['active'] and pct >= LEAGUE_UNLOCK_THRESHOLD:
-            info['active'] = True
-            mudou = True
-            mensagem = (
-                f"🟢 <b>LIGA DESBLOQUEADA: {league}</b>\n"
-                f"Assertividade: {pct:.1f}% nas últimas {n} tips\n"
-                f"✅ Tips desta liga foram reativadas!"
-            )
-            print(f"[LeagueManager] 🟢 DESBLOQUEADA: {league} ({pct:.1f}%)")
-
-        elif info['active'] and pct < LEAGUE_RELOCK_THRESHOLD:
-            info['active'] = False
-            mudou = True
-            mensagem = (
-                f"🔴 <b>LIGA BLOQUEADA: {league}</b>\n"
-                f"Assertividade caiu para {pct:.1f}% nas últimas {n} tips\n"
-                f"⏸ Tips desta liga suspensas temporariamente."
-            )
-            print(f"[LeagueManager] 🔴 BLOQUEADA: {league} ({pct:.1f}%)")
-
-        self.save()
-        return mudou, info['active'], mensagem
-
-    def register_league(self, league):
-        """
-        Registra uma liga ao vivo mesmo sem tips ainda.
-        Chamado sempre que o bot encontra um evento, garantindo que
-        TODAS as ligas apareçam no relatório desde o primeiro ciclo.
-        """
-        self._get_or_init(league)
-        self.save()
-
-    def get_status_report(self):
-        """Relatório completo de TODAS as ligas conhecidas, com ou sem tips."""
-        if not self.leagues:
-            return "📊 <b>STATUS DAS LIGAS</b>\n\nNenhuma liga registrada ainda."
-
-        ativas     = {k: v for k, v in self.leagues.items() if v['active']}
-        bloqueadas = {k: v for k, v in self.leagues.items() if not v['active']}
-
-        lines = [
-            "📊 <b>STATUS DAS LIGAS (Dinâmico)</b>",
-            f"<i>🟢 Ativas: {len(ativas)} | 🔴 Bloqueadas: {len(bloqueadas)} | Total: {len(self.leagues)}</i>\n"
-        ]
-
-        for titulo, grupo in [("🟢 ATIVAS", ativas), ("🔴 BLOQUEADAS", bloqueadas)]:
-            if not grupo:
-                continue
-            lines.append(f"<b>{titulo}</b>")
-            for league, info in sorted(grupo.items()):
-                window = info['window']
-                n      = len(window)
-                total  = info['total_tips']
-                if n >= LEAGUE_MIN_SAMPLES:
-                    pct        = (sum(window) / n) * 100
-                    bar_filled = int(pct / 10)
-                    bar        = "█" * bar_filled + "░" * (10 - bar_filled)
-                    stats_str  = f"{pct:.0f}% [{bar}] (últ. {n} tips)"
-                elif n > 0:
-                    stats_str  = f"coletando... ({n}/{LEAGUE_MIN_SAMPLES} amostras)"
-                else:
-                    stats_str  = "sem tips ainda"
-                emoji = "🟢" if info['active'] else "🔴"
-                lines.append(f"  {emoji} <b>{league}</b>: {stats_str} | {total} total")
-            lines.append("")
-
-        lines.append(
-            f"<i>Bloqueia &lt;{LEAGUE_RELOCK_THRESHOLD}% | "
-            f"Desbloqueia &gt;{LEAGUE_UNLOCK_THRESHOLD}% "
-            f"(janela {LEAGUE_WINDOW_SIZE} tips)</i>"
-        )
-        return "\n".join(lines)
-
-
-# Instância global
-league_manager = LeagueManager()
+def get_profile(league_key):
+    return LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
 
 # =============================================================================
 # MAPEAMENTO DE LIGAS
 # =============================================================================
-
-LIVE_LEAGUE_MAPPING = {
-    "E-Soccer - Battle - 8 minutos de jogo": "BATTLE 8 MIN",
-    "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
-    "E-Soccer - H2H GG League - 8 minutos de jogo": "H2H 8 MIN",
-    "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
-    "H2H GG LEAGUE - E-FOOTBALL": "H2H 8 MIN",
-    "H2H GG LEAGUE": "H2H 8 MIN",
-    "E-Soccer - GT Leagues - 12 minutos de jogo": "GT LEAGUE 12 MIN",
-    "Esoccer GT Leagues - 12 mins play": "GT LEAGUE 12 MIN",
-    "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
-    "E-Soccer - Battle Volta - 6 minutos de jogo": "VOLTA 6 MIN",
-    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
-    "H2H GG - E-football": "H2H 8 MIN",
-    "H2H GG": "H2H 8 MIN",
-    "Valhalla Cup": "VALHALLA CUP",
-    "Valhalla League": "VALHALLA CUP",
+LIVE_MAP = {
+    "E-Soccer - Battle - 8 minutos de jogo":          "BATTLE 8 MIN",
+    "Esoccer Battle - 8 mins play":                    "BATTLE 8 MIN",
+    "E-Soccer - H2H GG League - 8 minutos de jogo":   "H2H 8 MIN",
+    "Esoccer H2H GG League - 8 mins play":             "H2H 8 MIN",
+    "H2H GG LEAGUE - E-FOOTBALL":                      "H2H 8 MIN",
+    "H2H GG LEAGUE":                                   "H2H 8 MIN",
+    "H2H GG":                                          "H2H 8 MIN",
+    "E-Soccer - GT Leagues - 12 minutos de jogo":      "GT LEAGUE 12 MIN",
+    "Esoccer GT Leagues - 12 mins play":               "GT LEAGUE 12 MIN",
+    "Esoccer GT Leagues \u2013 12 mins play":          "GT LEAGUE 12 MIN",
+    "E-Soccer - Battle Volta - 6 minutos de jogo":     "VOLTA 6 MIN",
+    "Esoccer Battle Volta - 6 mins play":              "VOLTA 6 MIN",
+    "Valhalla Cup": "VALHALLA CUP", "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
-    "CLA": "CLA 10 MIN",
-    "Cyber Live Arena": "CLA 10 MIN",
-    "Champions League B 2×6": "GT LEAGUE 12 MIN",
-    "Champions League B 2x6": "GT LEAGUE 12 MIN",
-    "Champions League": "BATTLE 8 MIN",
-    "Champions Cyber League": "CLA 10 MIN",
-    "Cyber League": "CLA 10 MIN",
-    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
-    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
-    "International": "INT 8 MIN",
-    # Ligas E-battles independentes (Bundesliga, Europa League, Super Lig, Premier League, etc.)
-    # NÃO mapeadas — mantêm seu nome original e são gerenciadas pelo LeagueManager dinamicamente
+    "CLA": "CLA 10 MIN", "Cyber Live Arena": "CLA 10 MIN",
+    "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
+    "Champions League B 2\u00d76": "GT LEAGUE 12 MIN",
+    "Champions League B 2x6":   "GT LEAGUE 12 MIN",
+    "ESportsBattle. Club World Cup (2x4 mins)":  "BATTLE 8 MIN",
+    "ESportsBattle. Premier League (2x4 mins)":  "BATTLE 8 MIN",
+    "Volta International III 4x4 (2x3 mins)":    "VOLTA 6 MIN",
 }
-
-HISTORY_LEAGUE_MAPPING = {
-    "Battle 6m": "VOLTA 6 MIN",
-    "Battle 8m": "BATTLE 8 MIN",
-    "H2H 8m": "H2H 8 MIN",
-    "GT Leagues 12m": "GT LEAGUE 12 MIN",
+HIST_MAP = {
+    "Battle 6m": "VOLTA 6 MIN", "Battle 8m": "BATTLE 8 MIN",
+    "H2H 8m": "H2H 8 MIN", "GT Leagues 12m": "GT LEAGUE 12 MIN",
     "GT League 12m": "GT LEAGUE 12 MIN",
-    "Esoccer Battle - 8 mins play": "BATTLE 8 MIN",
-    "Esoccer Battle Volta - 6 mins play": "VOLTA 6 MIN",
-    "Esoccer GT Leagues – 12 mins play": "GT LEAGUE 12 MIN",
-    "Esoccer H2H GG League - 8 mins play": "H2H 8 MIN",
-    "Valhalla Cup": "VALHALLA CUP",
-    "Valkyrie Cup": "VALKYRIE CUP",
-    "CLA League": "CLA 10 MIN",
-    "CLA": "CLA 10 MIN",
-    "Champions League": "BATTLE 8 MIN",
-    "Super Lig": "GT LEAGUE 12 MIN",
-    # Ligas com formato definido — mapeadas para o perfil correto
-    "Champions League B 2×6": "GT LEAGUE 12 MIN",
-    "Champions League B 2x6": "GT LEAGUE 12 MIN",
+    "Esoccer Battle - 8 mins play":           "BATTLE 8 MIN",
+    "Esoccer Battle Volta - 6 mins play":     "VOLTA 6 MIN",
+    "Esoccer GT Leagues \u2013 12 mins play": "GT LEAGUE 12 MIN",
+    "Esoccer H2H GG League - 8 mins play":   "H2H 8 MIN",
+    "Valhalla Cup": "VALHALLA CUP", "Valkyrie Cup": "VALKYRIE CUP",
+    "CLA League": "CLA 10 MIN", "CLA": "CLA 10 MIN",
+    "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)": "VOLTA 6 MIN",
-    "International": "INT 8 MIN",
-    "Champions Cyber League": "CLA 10 MIN",
-    "Cyber League": "CLA 10 MIN",
-    "ESportsBattle. Premier League (2x4 mins)": "BATTLE 8 MIN",
-    # Ligas E-battles independentes — mantêm o próprio nome (gerenciadas dinamicamente)
-    # "Bundesliga", "Europa League", "Premier League", "Super Lig", etc.
-    # NÃO mapeadas aqui para preservar identidade e estatísticas próprias
+    "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
 }
 
-# =============================================================================
-# ✅ CORREÇÃO #2: THRESHOLDS POR LIGA
-# =============================================================================
-LEAGUE_PROFILES = {
-    "BATTLE 8 MIN":    {"avg_total": 5.5, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
-    "BATTLE 12 MIN":   {"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5, "duration_min": 12},
-    "VALHALLA CUP":    {"avg_total": 7.0, "avg_player": 3.5, "min_player_avg": 3.0, "duration_min": 12},
-    "VALKYRIE CUP":    {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
-    "GT LEAGUE 12 MIN":{"avg_total": 6.0, "avg_player": 3.0, "min_player_avg": 2.5, "duration_min": 12},
-    "H2H 8 MIN":       {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
-    "CLA 10 MIN":      {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 10},
-    "ADRIATIC":        {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 10},
-    "VOLTA 6 MIN":     {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 6},
-    "INT 8 MIN":       {"avg_total": 5.0, "avg_player": 2.5, "min_player_avg": 2.0, "duration_min": 8},
-    "DEFAULT":         {"avg_total": 4.0, "avg_player": 2.0, "min_player_avg": 1.5, "duration_min": 8},
-}
-
-# =============================================================================
-# CACHE E ESTADO GLOBAL
-# =============================================================================
-player_stats_cache = {}
-CACHE_TTL = 300
-
-global_history_cache = {
-    'matches': [],
-    'timestamp': 0
-}
-HISTORY_CACHE_TTL = 120
-
-sent_tips = []
-sent_match_ids = set()
-last_summary = None
-last_league_message_id = None
-league_stats = {}
-last_league_update_time = 0
-
-daily_stats = {}
-last_daily_message_date = None
-
-# ✅ CORREÇÃO #3: Stop-loss por jogador
-player_red_streak = {}
-PLAYER_RED_STREAK_BLOCK = 3
-
-# Cache Global Superbet (mapeamento dinâmico de torneios)
-superbet_tournaments = {}   # {tid: {"name": liga_canonica, "raw": nome_api, "cat_id": int}}
-superbet_last_struct_update = 0
-PLAYER_RED_COOLDOWN_MIN = 30
-
-
-def map_league_name(name):
+def map_league(name):
     if not name: return "Unknown"
-    if name in LIVE_LEAGUE_MAPPING: return LIVE_LEAGUE_MAPPING[name]
-    if name in HISTORY_LEAGUE_MAPPING: return HISTORY_LEAGUE_MAPPING[name]
-    n_upper = name.upper()
-    for key, value in LIVE_LEAGUE_MAPPING.items():
-        if n_upper.startswith(key.upper()): return value
-    for key, value in HISTORY_LEAGUE_MAPPING.items():
-        if n_upper.startswith(key.upper()): return value
+    if name in LIVE_MAP: return LIVE_MAP[name]
+    if name in HIST_MAP: return HIST_MAP[name]
+    nu = name.upper()
+    for k, v in LIVE_MAP.items():
+        if nu.startswith(k.upper()): return v
+    for k, v in HIST_MAP.items():
+        if nu.startswith(k.upper()): return v
     return name
 
-
-def is_league_approved(mapped_league):
-    return league_manager.is_active(mapped_league)
-
-
-def is_player_on_cooldown(player_nick):
-    nick = player_nick.upper().strip()
-    if nick not in player_red_streak:
-        return False, 0
-    streak_data = player_red_streak[nick]
-    if streak_data['reds'] < PLAYER_RED_STREAK_BLOCK:
-        return False, 0
-    elapsed = (datetime.now(MANAUS_TZ) - streak_data['last_red_time']).total_seconds() / 60
-    if elapsed < PLAYER_RED_COOLDOWN_MIN:
-        return True, PLAYER_RED_COOLDOWN_MIN - elapsed
-    player_red_streak[nick] = {'reds': 0, 'last_red_time': None}
-    return False, 0
+# =============================================================================
+# LEAGUE MANAGER — auto-bloqueio/desbloqueio por performance
+# =============================================================================
+LEAGUE_INITIAL = {lg: True for lg in LEAGUE_PROFILES if lg != "DEFAULT"}
+LEAGUE_RELOCK  = 55  # % → bloqueia
+LEAGUE_UNLOCK  = 68  # % → desbloqueia
+LEAGUE_WINDOW  = 15  # últimas N tips
+LEAGUE_MIN_TIPS = 5  # amostras mínimas para decisão
 
 
-def update_player_red_streak(player_nick, result):
-    nick = player_nick.upper().strip()
-    if result == 'green':
-        player_red_streak[nick] = {'reds': 0, 'last_red_time': None}
-    else:
-        current = player_red_streak.get(nick, {'reds': 0, 'last_red_time': None})
-        player_red_streak[nick] = {
-            'reds': current['reds'] + 1,
-            'last_red_time': datetime.now(MANAUS_TZ)
-        }
+class LeagueManager:
+    def __init__(self, fn='league_perf.json'):
+        self.fn = fn
+        self.leagues = {}
+        self._load()
+
+    def _load(self):
+        if os.path.exists(self.fn):
+            try:
+                with open(self.fn) as f:
+                    raw = json.load(f)
+                for lg, d in raw.items():
+                    self.leagues[lg] = {
+                        'active': d.get('active', True),
+                        'window': deque(d.get('window', []), maxlen=LEAGUE_WINDOW),
+                        'total':  d.get('total', 0),
+                    }
+            except Exception as e:
+                print(f"[LM] load error: {e}")
+
+    def save(self):
+        try:
+            with open(self.fn, 'w') as f:
+                json.dump(
+                    {lg: {'active': v['active'], 'window': list(v['window']), 'total': v['total']}
+                     for lg, v in self.leagues.items()},
+                    f, indent=2
+                )
+        except Exception as e:
+            print(f"[LM] save error: {e}")
+
+    def _ensure(self, league):
+        if league not in self.leagues:
+            self.leagues[league] = {
+                'active': LEAGUE_INITIAL.get(league, True),
+                'window': deque(maxlen=LEAGUE_WINDOW),
+                'total': 0,
+            }
+        return self.leagues[league]
+
+    def is_active(self, league):
+        d = self._ensure(league)
+        n = len(d['window'])
+        if n < LEAGUE_MIN_TIPS:
+            return d['active'], f"coletando dados ({n}/{LEAGUE_MIN_TIPS})"
+        pct = sum(d['window']) / n * 100
+        return d['active'], f"{pct:.0f}% | {n} tips"
+
+    def record(self, league, green):
+        d = self._ensure(league)
+        d['window'].append(1 if green else 0)
+        d['total'] += 1
+        n = len(d['window'])
+        if n < LEAGUE_MIN_TIPS:
+            self.save()
+            return False, None
+        pct = sum(d['window']) / n * 100
+        changed, msg = False, None
+        if not d['active'] and pct >= LEAGUE_UNLOCK:
+            d['active'] = True; changed = True
+            msg = f"🟢 <b>LIGA ATIVA: {league}</b>\n{pct:.0f}% nas últimas {n} tips"
+        elif d['active'] and pct < LEAGUE_RELOCK:
+            d['active'] = False; changed = True
+            msg = f"🔴 <b>LIGA PAUSADA: {league}</b>\n{pct:.0f}% nas últimas {n} tips"
+        self.save()
+        return changed, msg
+
+    def register(self, league):
+        self._ensure(league)
+
+    def status(self):
+        if not self.leagues:
+            return "📊 Nenhuma liga registrada."
+        lines = ["📊 <b>STATUS DAS LIGAS</b>\n"]
+        for lg, d in sorted(self.leagues.items()):
+            n = len(d['window'])
+            if n >= LEAGUE_MIN_TIPS:
+                pct = sum(d['window']) / n * 100
+                bar = "█" * int(pct / 10) + "░" * (10 - int(pct / 10))
+                st  = f"{pct:.0f}% {bar}"
+            elif n:
+                st = f"coletando ({n}/{LEAGUE_MIN_TIPS})"
+            else:
+                st = "sem tips"
+            e = "🟢" if d['active'] else "🔴"
+            lines.append(f"{e} <b>{lg}</b>: {st} | {d['total']} total")
+        return "\n".join(lines)
+
+
+league_manager = LeagueManager()
+
+# =============================================================================
+# ESTADO GLOBAL
+# =============================================================================
+history_cache  = {'matches': [], 'ts': 0}
+HISTORY_TTL    = 120   # segundos
+
+# Cache de stats pré-computados (atualizado junto com o histórico)
+# Evita re-varredura de 800+ partidas a cada ciclo
+stats_cache = {
+    'players': {},       # {nick_upper: {avg_ht, avg_ft, avg_ht_sof, avg_ft_sof, games}}
+    'leagues': {},       # {league_name: {avg_ht, avg_ft, games}}
+    'ts':       0,       # timestamp da última atualização
+}
+STATS_TTL = 120          # atualiza junto com o histórico (2 min)
+
+sent_tips       = []   # lista de dicts
+sent_keys       = set()  # "{event_id}_HT" e "{event_id}_FT"
+player_cooldown = {}   # {nick: datetime_liberacao}
+
+daily_stats     = {}   # {"2026-03-14": {"green": N, "red": N}}
+last_summary    = None
+last_daily_date = None
+
+sb_tournaments     = {}   # {tid: {"name": liga_canonica, "raw": str}}
+sb_struct_ts       = 0
+
+PLAYER_COOLDOWN_MIN = 30   # minutos de cooldown após 3 reds seguidos
+PLAYER_RED_BLOCK    = 3
 
 
 def save_state():
     try:
         state = {
-            'last_league_message_id': last_league_message_id,
-            'league_stats': league_stats,
-            'last_league_update_time': last_league_update_time,
+            'sent_keys': list(sent_keys),
+            'player_cooldown': {k: v.isoformat() for k, v in player_cooldown.items()},
             'last_summary': last_summary,
-            'last_daily_message_date': last_daily_message_date,
-            'sent_match_ids': list(sent_match_ids),
-            'player_red_streak': {
-                k: {**v, 'last_red_time': v['last_red_time'].isoformat() if v.get('last_red_time') else None}
-                for k, v in player_red_streak.items()
-            },
+            'last_daily_date': last_daily_date,
         }
-        with open('bot_state.json', 'w', encoding='utf-8') as f:
-            json.dump(state, f, indent=4, ensure_ascii=False)
+        with open('bot_state.json', 'w') as f:
+            json.dump(state, f, indent=2)
 
         pending = [
-            {**tip, 'sent_time': tip['sent_time'].isoformat()}
-            for tip in sent_tips if tip.get('status') == 'pending'
+            {**t, 'sent_time': t['sent_time'].isoformat()}
+            for t in sent_tips if t.get('status') == 'pending'
         ]
-        with open('tips_pending.json', 'w', encoding='utf-8') as f:
-            json.dump(pending, f, indent=4, ensure_ascii=False)
+        with open('tips_pending.json', 'w') as f:
+            json.dump(pending, f, indent=2)
     except Exception as e:
-        print(f"[ERROR] save_state: {e}")
+        print(f"[save_state] {e}")
 
 
-def save_tip_result(tip, ht_home, ht_away, ft_home, ft_away):
+def save_result(tip, ht_h, ht_a, ft_h, ft_a):
     try:
-        results = {}
-        if os.path.exists('tips_results.json'):
-            with open('tips_results.json', 'r', encoding='utf-8') as f:
-                results = json.load(f)
-
-        sent_time = tip['sent_time']
-        if isinstance(sent_time, str):
-            sent_time = datetime.fromisoformat(sent_time)
-        date_key = sent_time.astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
-
-        if date_key not in results:
-            results[date_key] = []
-
-        results[date_key].append({
-            'sent_time': sent_time.isoformat(),
-            'strategy': tip.get('strategy', ''),
-            'status': tip.get('status', ''),
-            'home_player': tip.get('home_player', ''),
-            'away_player': tip.get('away_player', ''),
-            'league': tip.get('league', ''),
-            'tip_period': tip.get('tip_period', ''),
-            'message_id': tip.get('message_id'),
-            'result_ht': f"{ht_home}-{ht_away}",
-            'result_ft': f"{ft_home}-{ft_away}",
+        fname = 'tips_results.json'
+        data = {}
+        if os.path.exists(fname):
+            with open(fname) as f:
+                data = json.load(f)
+        sent = tip['sent_time']
+        if isinstance(sent, str):
+            sent = datetime.fromisoformat(sent)
+        dk = sent.astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
+        data.setdefault(dk, []).append({
+            'strategy': tip.get('strategy'),
+            'status':   tip.get('status'),
+            'league':   tip.get('league'),
+            'home':     tip.get('home_player'),
+            'away':     tip.get('away_player'),
+            'ht':       f"{ht_h}-{ht_a}",
+            'ft':       f"{ft_h}-{ft_a}",
         })
-
-        with open('tips_results.json', 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
+        with open(fname, 'w') as f:
+            json.dump(data, f, indent=2)
     except Exception as e:
-        print(f"[ERROR] save_tip_result: {e}")
+        print(f"[save_result] {e}")
 
 
 def load_state():
-    global last_league_message_id, league_stats, last_league_update_time, last_summary
-    global sent_match_ids, sent_tips, daily_stats, last_daily_message_date, player_red_streak
+    global sent_keys, player_cooldown, last_summary, last_daily_date, sent_tips, daily_stats
     try:
         if os.path.exists('bot_state.json'):
-            with open('bot_state.json', 'r', encoding='utf-8') as f:
-                state = json.load(f)
-            last_league_message_id = state.get('last_league_message_id')
-            league_stats = state.get('league_stats', {})
-            last_league_update_time = state.get('last_league_update_time', 0)
-            last_summary = state.get('last_summary')
-            last_daily_message_date = state.get('last_daily_message_date')
-            sent_match_ids = set(state.get('sent_match_ids', []))
-            raw_streak = state.get('player_red_streak', {})
-            for k, v in raw_streak.items():
-                player_red_streak[k] = {
-                    'reds': v.get('reds', 0),
-                    'last_red_time': datetime.fromisoformat(v['last_red_time']) if v.get('last_red_time') else None
-                }
+            with open('bot_state.json') as f:
+                s = json.load(f)
+            sent_keys   = set(s.get('sent_keys', []))
+            last_summary = s.get('last_summary')
+            last_daily_date = s.get('last_daily_date')
+            for k, v in s.get('player_cooldown', {}).items():
+                player_cooldown[k] = datetime.fromisoformat(v)
 
-        sent_tips = []
         if os.path.exists('tips_pending.json'):
-            with open('tips_pending.json', 'r', encoding='utf-8') as f:
+            with open('tips_pending.json') as f:
                 raw = json.load(f)
-            for tip in raw:
+            for t in raw:
                 try:
-                    tip['sent_time'] = datetime.fromisoformat(tip['sent_time'])
-                    sent_tips.append(tip)
+                    t['sent_time'] = datetime.fromisoformat(t['sent_time'])
+                    sent_tips.append(t)
                 except:
-                    continue
+                    pass
 
-        daily_stats = {}
         if os.path.exists('tips_results.json'):
-            with open('tips_results.json', 'r', encoding='utf-8') as f:
+            with open('tips_results.json') as f:
                 results = json.load(f)
-            for date_key, tips_list in results.items():
-                g = sum(1 for t in tips_list if t.get('status') == 'green')
-                r = sum(1 for t in tips_list if t.get('status') == 'red')
-                daily_stats[date_key] = {'green': g, 'red': r}
+            for dk, tips in results.items():
+                g = sum(1 for t in tips if t.get('status') == 'green')
+                r = sum(1 for t in tips if t.get('status') == 'red')
+                daily_stats[dk] = {'green': g, 'red': r}
 
-        print(f"[DEBUG] Estado carregado: {len(sent_tips)} tips pendentes")
+        print(f"[load_state] {len(sent_tips)} tips pendentes, {len(sent_keys)} keys")
     except Exception as e:
-        print(f"[ERROR] load_state: {e}")
+        print(f"[load_state] {e}")
 
 
 # =============================================================================
 # UTILITÁRIOS
 # =============================================================================
-
-def clean_player_name(name):
-    if not name or not isinstance(name, str):
-        return ""
-    if name.isupper() and ' ' not in name and 2 <= len(name) <= 15:
-        return name
-    match = re.search(r'\((.*?)\)', name)
-    if not match:
-        for sep in [' - ', ' vs ', ' / ']:
-            if sep in name:
-                parts = name.split(sep)
-                p1, p2 = parts[0].strip(), parts[1].strip()
-                if ' ' in p1 and ' ' not in p2: return p2
-                if ' ' in p2 and ' ' not in p1: return p1
-                return p2
-        return name.strip()
-
-    content_match = match.group(1).strip()
-    outside = name.replace(f"({content_match})", "").strip()
-
-    league_words = ['MINS', 'PLAY', 'LEAGUE', 'GT', 'BATTLE', 'VOLTA', 'ESOCCER', 'INTERNATIONAL', 'PART']
-    if any(word in content_match.upper() for word in league_words):
-        return outside.strip()
-
-    def get_player_score(s):
-        score = 0
-        if not s: return -50
-        if ' ' not in s: score += 20
-        if s.isupper() and len(s) > 1: score += 25
-        if '_' in s: score += 35
-        if any(char.isdigit() for char in s):
-            if re.search(r'\s(04|09|II|III)$', s) or s.endswith('04') or s.endswith('09'):
-                score -= 15
-            else:
-                score += 20
-        score -= len(s) * 1.0
-        return score
-
-    score_content = get_player_score(content_match)
-    score_outside = get_player_score(outside)
-    if score_content > score_outside - 10:
-        return content_match
-    return outside
-
-# =============================================================================
-# ✅ FILTRO DE QUALIDADE DA LIGA — Cenários favoráveis por tipo
-# =============================================================================
-
-SHORT_LEAGUES = {"BATTLE 8 MIN", "H2H 8 MIN", "VOLTA 6 MIN", "VALKYRIE CUP"}
-LONG_LEAGUES  = {"GT LEAGUE 12 MIN", "CLA 10 MIN", "VALHALLA CUP"}  # VALHALLA = 2x6 = 12 min
-
-LEAGUE_QUALITY_CRITERIA = {
-    "SHORT": {
-        "ht_over_05":    100,
-        "ht_over_15":     90,
-        "ht_over_25":     85,
-        "btts_ht":        88,
-        "zero_zero_ht":    0,
-        "ft_over_25":    100,
-        "ft_over_35":     88,
-        "ft_over_45":     80,
-        "btts_ft":       100,
-        "zero_zero_ft":    0,
-        "avg_ht_min":     91,
-        "avg_ft_min":     89,  # era 92 — 2pp acima da realidade da BATTLE
-    },
-    "LONG": {
-        "ht_over_05":    100,
-        "ht_over_15":    100,
-        "ht_over_25":     93,
-        "btts_ht":        88,
-        "zero_zero_ht":    0,
-        "ft_over_25":    100,
-        "ft_over_35":    100,
-        "ft_over_45":     94,
-        "btts_ft":        95,
-        "zero_zero_ft":    0,
-        "avg_ht_min":     95,
-        "avg_ft_min":     97,
-    },
-}
-
-
-def check_league_quality(league_key, last_n_matches):
-    """
-    Verifica se a liga está em condição favorável para receber tips.
-    Analisa os últimos 5 jogos da liga.
-
-    LÓGICA: Critérios OBRIGATÓRIOS + Critérios SECUNDÁRIOS ponderados.
-
-    OBRIGATÓRIOS (todos precisam passar — qualquer falha bloqueia):
-      - zero_zero_ht = 0%  (nenhum jogo sem gols no HT)
-      - zero_zero_ft = 0%  (nenhum jogo sem gols no FT)
-      - ht_over_05  = 100% (SHORT) / 100% (LONG)
-      - ft_over_25  = 100% (SHORT) / 100% (LONG)
-      - btts_ft     = 100% (SHORT) / 95%  (LONG)
-
-    SECUNDÁRIOS (score ponderado >= 80% do total):
-      - ht_over_15, ht_over_25, btts_ht
-      - ft_over_35, ft_over_45
-      - avg_ht_min, avg_ft_min
-
-    Retorna: (aprovada: bool, score: float, detalhes: dict)
-    """
-    MIN_MATCHES = 5
-    SECONDARY_THRESHOLD = 80  # % dos critérios secundários ponderados
-
-    if not last_n_matches or len(last_n_matches) < MIN_MATCHES:
-        n_found = len(last_n_matches) if last_n_matches else 0
-        return True, 100, {
-            "passed": [f"⚠️ Histórico insuficiente ({n_found}/{MIN_MATCHES}) — aprovado por falta de dados"],
-            "failed": [],
-            "tipo": "SEM DADOS",
-            "score": 100
-        }
-
-    last_n = last_n_matches[:MIN_MATCHES]
-    n = len(last_n)
-
-    def pct(cond):
-        return sum(1 for m in last_n if cond(m)) / n * 100
-
-    ht05    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 1)
-    ht15    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 2)
-    ht25    = pct(lambda m: (m.get("home_score_ht",0) + m.get("away_score_ht",0)) >= 3)
-    btts_ht = pct(lambda m: m.get("home_score_ht",0) > 0 and m.get("away_score_ht",0) > 0)
-    zz_ht   = pct(lambda m: m.get("home_score_ht",0) == 0 and m.get("away_score_ht",0) == 0)
-
-    ft25    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 3)
-    ft35    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 4)
-    ft45    = pct(lambda m: (m.get("home_score_ft",0) + m.get("away_score_ft",0)) >= 5)
-    btts_ft = pct(lambda m: m.get("home_score_ft",0) > 0 and m.get("away_score_ft",0) > 0)
-    zz_ft   = pct(lambda m: m.get("home_score_ft",0) == 0 and m.get("away_score_ft",0) == 0)
-
-    avg_ht = (ht05 + ht15 + ht25 + btts_ht) / 4
-    avg_ft = (ft25 + ft35 + ft45 + btts_ft) / 4
-
-    if league_key in SHORT_LEAGUES:
-        crit = LEAGUE_QUALITY_CRITERIA["SHORT"]
-        tipo = "SHORT (6-8 min)"
-    elif league_key in LONG_LEAGUES:
-        crit = LEAGUE_QUALITY_CRITERIA["LONG"]
-        tipo = "LONG (10-12 min)"
-    else:
-        crit = LEAGUE_QUALITY_CRITERIA["SHORT"]
-        tipo = "SHORT (padrão)"
-
-    real_values = {
-        "ht_over_05": ht05, "ht_over_15": ht15, "ht_over_25": ht25,
-        "btts_ht": btts_ht, "zero_zero_ht": zz_ht,
-        "ft_over_25": ft25, "ft_over_35": ft35, "ft_over_45": ft45,
-        "btts_ft": btts_ft, "zero_zero_ft": zz_ft,
-        "avg_ht_min": avg_ht, "avg_ft_min": avg_ft,
-    }
-    labels = {
-        "ht_over_05": "+0.5 HT", "ht_over_15": "+1.5 HT", "ht_over_25": "+2.5 HT",
-        "btts_ht": "BTTS HT", "zero_zero_ht": "0x0 HT",
-        "ft_over_25": "+2.5 FT", "ft_over_35": "+3.5 FT", "ft_over_45": "+4.5 FT",
-        "btts_ft": "BTTS FT", "zero_zero_ft": "0x0 FT",
-        "avg_ht_min": "Média HT", "avg_ft_min": "Média FT",
-    }
-
-    # Critérios OBRIGATÓRIOS — qualquer falha bloqueia imediatamente
-    mandatory_keys = {"zero_zero_ht", "zero_zero_ft", "ht_over_05", "ft_over_25", "btts_ft"}
-
-    # Critérios SECUNDÁRIOS FT — determinam aprovação (score >= 80%)
-    ft_secondary_weights = {
-        "ft_over_35": 3, "ft_over_45": 3, "avg_ft_min": 2,
-    }
-
-    # Critérios SECUNDÁRIOS HT — apenas informativo, NÃO bloqueia
-    # (HT tem variância natural em ligas longas — 6 min de 1º tempo)
-    ht_secondary_weights = {
-        "ht_over_15": 2, "ht_over_25": 2, "btts_ht": 2, "avg_ht_min": 1,
-    }
-
-    passed, failed = [], []
-    mandatory_ok = True
-
-    # Verificar obrigatórios
-    for key in mandatory_keys:
-        threshold = crit.get(key, 0)
-        real      = real_values[key]
-        is_zz     = key.startswith("zero_zero")
-        ok        = (real == 0) if is_zz else (real >= threshold)
-        label     = labels[key]
-        if ok:
-            passed.append(f"✅ {label}: {real:.0f}%")
-        else:
-            diff = real if is_zz else (threshold - real)
-            failed.append(f"❌ OBRIG. {label}: {real:.0f}% (faltam {diff:.0f}pp)")
-            mandatory_ok = False
-
-    # Verificar secundários FT (DETERMINANTES)
-    ft_total_w  = 0
-    ft_passed_w = 0
-    for key, w in ft_secondary_weights.items():
-        threshold = crit.get(key, 0)
-        real      = real_values[key]
-        ok        = real >= threshold
-        label     = labels[key]
-        ft_total_w += w
-        if ok:
-            ft_passed_w += w
-            passed.append(f"✅ {label}: {real:.0f}%")
-        else:
-            diff = threshold - real
-            failed.append(f"❌ {label}: {real:.0f}% (faltam {diff:.0f}pp)")
-
-    ft_sec_score = (ft_passed_w / ft_total_w * 100) if ft_total_w > 0 else 0
-
-    # Verificar secundários HT (INFORMATIVOS — não bloqueiam)
-    ht_total_w  = 0
-    ht_passed_w = 0
-    for key, w in ht_secondary_weights.items():
-        threshold = crit.get(key, 0)
-        real      = real_values[key]
-        ok        = real >= threshold
-        label     = labels[key]
-        ht_total_w += w
-        if ok:
-            ht_passed_w += w
-            passed.append(f"✅ {label}: {real:.0f}%")
-        else:
-            diff = threshold - real
-            failed.append(f"⚠️ HT {label}: {real:.0f}% (faltam {diff:.0f}pp)")
-
-    ht_sec_score = (ht_passed_w / ht_total_w * 100) if ht_total_w > 0 else 0
-
-    # Score geral: obrigatórios 50% + FT secundário 40% + HT secundário 10%
-    score = (100 if mandatory_ok else 0) * 0.5 + ft_sec_score * 0.4 + ht_sec_score * 0.1
-
-    # APROVAÇÃO: obrigatórios todos passam + FT secundário >= 80%
-    # HT secundário NÃO bloqueia (apenas informa qualidade de apostas HT)
-    aprovada = mandatory_ok and ft_sec_score >= SECONDARY_THRESHOLD
-
-    return aprovada, score, {
-        "tipo": tipo, "passed": passed, "failed": failed, "score": score,
-        "avg_ht": avg_ht, "avg_ft": avg_ft, "zz_ht": zz_ht, "zz_ft": zz_ft,
-    }
-
-
-
-def get_league_last5(league_key, all_matches):
-    """Retorna os últimos 8 jogos de uma liga específica do histórico global."""
-    filtered = [
-        m for m in all_matches
-        if m.get('league_name', '') == league_key
-        or map_league_name(m.get('league_name', '')) == league_key
-    ]
-    return filtered[:8]  # ✅ FIX #2: 8 jogos (era 5) — mais estabilidade estatística
-
-
-
-def extract_pure_nick(raw: str) -> str:
+def extract_nick(raw):
+    """Extrai o apelido curto de um nome bruto como 'Man City (fantazer)'."""
     if not raw or not isinstance(raw, str):
         return ""
-    name = raw.strip()
-    match = re.search(r'\(([^)]+)\)', name)
-    if match:
-        inside = match.group(1).strip()
-        if 2 <= len(inside) <= 16 and (inside.isupper() or '_' in inside or any(c.isdigit() for c in inside)):
+    m = re.search(r'\(([^)]+)\)', raw)
+    if m:
+        inside = m.group(1).strip()
+        if 2 <= len(inside) <= 16:
             return inside.upper()
-    cleaned = clean_player_name(name)
-    words = re.findall(r'\b[A-Z0-9_]+\b', cleaned.upper())
-    for word in reversed(words):
-        if 2 <= len(word) <= 15:
-            return word
+    # Remove números de time, mantém só o nick
+    cleaned = re.sub(r'\s*\(.*?\)', '', raw).strip()
+    words = cleaned.split()
+    # Preferir a última palavra (geralmente o nick)
+    for w in reversed(words):
+        if len(w) >= 2 and not w.isdigit():
+            return w.upper()
     return cleaned.upper()[:15]
 
 
-def get_player_ft_goals(player_nick: str, match: dict) -> int:
-    """
-    Retorna os gols TOTAIS (jogo completo) do jogador.
-
-    CONFIRMADO via multiplos casos reais:
-    score_ft = total do jogo completo (inclui o HT)
-    score_ht = gols so do 1o tempo
-
-    Exemplos:
-      Florie: ht=2, ft=2 -> marcou 2 no HT, 0 no 2T -> total=2
-      Olive:  ht=3, ft=4 -> marcou 3 no HT, 1 no 2T -> total=4
-      Bradley:ht=1, ft=4 -> marcou 1 no HT, 3 no 2T -> total=4
-
-    NUNCA somar ht + ft.
-    """
-    if not player_nick or not match:
-        return 0
-    p_nick = player_nick.upper().strip()
-    home_nick = extract_pure_nick(match.get("home_player") or match.get("home_team") or "")
-    away_nick = extract_pure_nick(match.get("away_player") or match.get("away_team") or "")
-    if p_nick == home_nick:
-        return int(match.get("home_score_ft", 0) or 0)
-    if p_nick == away_nick:
-        return int(match.get("away_score_ft", 0) or 0)
-    return 0
+def normalize_nick(raw):
+    """Versão que mantém capitalização bonita."""
+    nick = extract_nick(raw)
+    return nick.capitalize() if nick else raw.strip()
 
 
+def is_player_blocked(player_raw):
+    nick = extract_nick(player_raw)
+    if not nick:
+        return False, 0
+    exp = player_cooldown.get(nick)
+    if exp is None:
+        return False, 0
+    now = datetime.now(MANAUS_TZ)
+    if isinstance(exp, datetime) and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=MANAUS_TZ)
+    if now < exp:
+        mins = (exp - now).total_seconds() / 60
+        return True, mins
+    del player_cooldown[nick]
+    return False, 0
 
 
-def find_best_match_for_tip(tip, recent_matches):
-    tip_time = tip['sent_time']
-    if tip_time.tzinfo is None:
-        tip_time = tip_time.replace(tzinfo=MANAUS_TZ)
+def update_cooldown(player_raw, result):
+    nick = extract_nick(player_raw)
+    if not nick:
+        return
+    key = f"_reds_{nick}"
+    if result == 'green':
+        player_cooldown.pop(key, None)
+        return
+    reds = player_cooldown.get(key, 0)
+    if isinstance(reds, datetime):
+        reds = 0
+    reds += 1
+    player_cooldown[key] = reds
+    if reds >= PLAYER_RED_BLOCK:
+        exp = datetime.now(MANAUS_TZ) + timedelta(minutes=PLAYER_COOLDOWN_MIN)
+        player_cooldown[nick] = exp
+        player_cooldown[key] = 0
+        print(f"[COOLDOWN] {nick} bloqueado por {PLAYER_COOLDOWN_MIN}min após {PLAYER_RED_BLOCK} reds")
 
-    h_nick = extract_pure_nick(
-        tip.get('homeRaw') or tip.get('home_player') or
-        tip.get('homeTeamName') or tip.get('homePlayer') or ''
-    )
-    a_nick = extract_pure_nick(
-        tip.get('awayRaw') or tip.get('away_player') or
-        tip.get('awayTeamName') or tip.get('awayPlayer') or ''
-    )
-    tip_nicks = {h_nick, a_nick} - {''}
 
-    if not tip_nicks:
+def parse_dt(s):
+    """Converte string de data/hora para datetime com timezone."""
+    if not s:
+        return None
+    s = str(s)
+    if not s.endswith('Z') and not re.search(r'[+-]\d{2}:\d{2}$', s):
+        s += 'Z'
+    try:
+        dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+        return dt.astimezone(MANAUS_TZ)
+    except:
         return None
 
-    tip_start_time = None
-    if tip.get('startDateRaw'):
-        try:
-            dt_start = datetime.fromisoformat(tip['startDateRaw'].replace('Z', '+00:00'))
-            if dt_start.tzinfo is not None:
-                tip_start_time = dt_start.astimezone(MANAUS_TZ)
-            else:
-                tip_start_time = dt_start.replace(tzinfo=MANAUS_TZ)
-        except:
-            pass
-
-    if not tip_start_time:
-        sent_min = tip.get('sent_minute', 0)
-        tip_start_time = tip_time - timedelta(minutes=sent_min)
-
-    best = None
-    best_diff = float('inf')
-
-    for m in recent_matches:
-        m_h = extract_pure_nick(m.get('home_player') or m.get('home_team') or '')
-        m_a = extract_pure_nick(m.get('away_player') or m.get('away_team') or '')
-        m_nicks = {m_h, m_a} - {''}
-
-        if not (tip_nicks & m_nicks):
-            continue
-
-        start_diff = float('inf')
-
-        try:
-            dt_str = m.get('data_realizacao', '')
-            if not dt_str:
-                continue
-            if 'T' in str(dt_str) or 'Z' in str(dt_str):
-                dt = datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
-            else:
-                dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
-
-            if dt.tzinfo is not None:
-                m_time = dt.astimezone(MANAUS_TZ)
-            else:
-                import pytz
-                sp_tz = pytz.timezone('America/Sao_Paulo')
-                m_time = sp_tz.localize(dt).astimezone(MANAUS_TZ)
-
-            is_internal = str(m.get('id', '')).startswith('int_')
-
-            if is_internal:
-                delta_finish = (m_time - tip_time).total_seconds()
-                if delta_finish < 180:
-                    continue
-                if delta_finish > 2400:
-                    continue
-                start_diff = abs(delta_finish - 600)
-            else:
-                delta_start = (m_time - tip_start_time).total_seconds()
-                if delta_start < -240:
-                    continue
-                if delta_start > 2400:
-                    continue
-                start_diff = abs(delta_start)
-
-        except Exception as e:
-            continue
-
-        try:
-            sent_h, sent_a = map(int, tip.get('sent_scoreboard', '0-0').split('-'))
-            # home_score_ft pode ser apenas o 2T em algumas ligas.
-            # Para garantir, comparamos com o total acumulado (ht + ft).
-            # Se ht+ft >= placar enviado, o jogo é candidato válido.
-            m_ht_h = int(m.get('home_score_ht', 0) or 0)
-            m_ht_a = int(m.get('away_score_ht', 0) or 0)
-            final_h = m_ht_h + int(m.get('home_score_ft', 0) or 0)
-            final_a = m_ht_a + int(m.get('away_score_ft', 0) or 0)
-            if sent_h > final_h or sent_a > final_a:
-                continue
-        except:
-            pass
-
-        if start_diff < best_diff:
-            best_diff = start_diff
-            best = m
-
-    if best and best_diff <= 1800:
-        return best
-    return None
-
-
 # =============================================================================
-# FUNÇÕES DE REQUISIÇÃO
+# SUPERBET — MAPEAMENTO DINÂMICO DE TORNEIOS
 # =============================================================================
-
-# =============================================================================
-# ✅ SUPERBET TOURNAMENTS — MAPEAMENTO DINÂMICO VIA API (v4.1)
-#
-# Usa categoryId como âncora primária (estável) + nome do torneio
-# como sinal secundário para distinguir variantes de Battle.
-#
-# CategoryIds confirmados pela API /v2/pt-BR/sport/75/tournaments:
-#   954  → E-Sport Futebol   → H2H 8 MIN
-#   1294 → E-Sport Battle    → BATTLE 8/12 MIN ou VOLTA 6 MIN (pelo nome)
-#   1293 → Cyber Live Arena  → CLA 10 MIN
-#   1269 → GT Sports         → GT LEAGUE 12 MIN
-#   1588 → eAdriatic League  → ADRIATIC
-# =============================================================================
-
-SUPERBET_CATEGORY_MAP = {
+SB_CAT_MAP = {
     954:  "H2H 8 MIN",
     1293: "CLA 10 MIN",
     1269: "GT LEAGUE 12 MIN",
     1588: "ADRIATIC",
-    # 1294 = Battle — distinguido pelo nome do torneio
+    # 1294 = Battle → classificado pelo nome
 }
 
-H2H_OVERRIDE_PLAYERS = {"JAEGER", "EXECUTIONER"}
-EAL_OVERRIDE_PLAYERS = {"ERIC", "DEXTER", "IRON", "JUAN"}
 
-
-def _classify_battle_tournament(name: str) -> str:
-    """
-    Distingue variantes de Battle (categoryId=1294) pelo nome.
-
-    Exemplos da API:
-      "Battle - Volta Liga dos Campeões"  → VOLTA 6 MIN  (2x3 min)
-      "Battle - Volta Internacional"       → VOLTA 6 MIN
-      "Battle - Liga dos Campeões 2"       → BATTLE 12 MIN (2x6 min)
-      "Battle - Internacional 1"           → BATTLE 8 MIN  (2x4 min)
-      "Battle - Portugal Primera"          → BATTLE 8 MIN
-    """
+def _classify_battle(name):
     n = name.upper()
-    if "VOLTA" in n:
-        return "VOLTA 6 MIN"
+    if "VOLTA" in n:                                           return "VOLTA 6 MIN"
     if ("LIGA DOS CAMP" in n or "LIGA DE CAMP" in n) and ("2" in n or " II" in n):
         return "BATTLE 12 MIN"
     return "BATTLE 8 MIN"
 
 
-def _classify_by_name_fallback(name: str) -> str:
-    """Fallback por nome para categorias desconhecidas ou novas."""
+def _fallback_by_name(name):
     n = name.upper()
-    if "H2H" in n:                                        return "H2H 8 MIN"
-    if "CYBER LIVE" in n or " CLA" in n:                  return "CLA 10 MIN"
-    if "GT" in n and ("LIGA" in n or "LEAGUE" in n):      return "GT LEAGUE 12 MIN"
-    if "ADRIATIC" in n or "EAL " in n:                    return "ADRIATIC"
-    if "VALHALLA" in n:                                   return "VALHALLA CUP"
-    if "VALKYRIE" in n:                                   return "VALKYRIE CUP"
-    if "VOLTA" in n:                                      return "VOLTA 6 MIN"
-    if "BATTLE" in n and ("CAMP" in n or "2X6" in n):     return "BATTLE 12 MIN"
-    if "BATTLE" in n:                                     return "BATTLE 8 MIN"
-    return name  # retorna original para logging
+    if "H2H" in n:                                    return "H2H 8 MIN"
+    if "CYBER LIVE" in n or " CLA" in n:              return "CLA 10 MIN"
+    if "GT" in n and ("LIGA" in n or "LEAGUE" in n):  return "GT LEAGUE 12 MIN"
+    if "ADRIATIC" in n or "EAL " in n:                return "ADRIATIC"
+    if "VALHALLA" in n:                               return "VALHALLA CUP"
+    if "VALKYRIE" in n:                               return "VALKYRIE CUP"
+    if "VOLTA" in n:                                  return "VOLTA 6 MIN"
+    if "BATTLE" in n and ("CAMP" in n or "2X6" in n): return "BATTLE 12 MIN"
+    if "BATTLE" in n:                                 return "BATTLE 8 MIN"
+    return name
 
 
-def update_superbet_struct():
-    """
-    Atualiza o cache de torneios Superbet via API dinâmica.
-
-    Estratégia (ordem de prioridade):
-    1. categoryId — âncora primária (estável, raramente muda)
-    2. Nome do torneio — distingue variantes dentro da mesma categoria (Battle)
-    3. Fallback estático — garante funcionamento se a API falhar
-    """
-    global superbet_tournaments, superbet_last_struct_update
-    now = time.time()
-
-    if now - superbet_last_struct_update < 600:
+def update_sb_struct():
+    global sb_tournaments, sb_struct_ts
+    if time.time() - sb_struct_ts < 600:
         return
-
-    url = "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/sport/75/tournaments"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    hdrs = {
+        'User-Agent': 'Mozilla/5.0',
         'Origin': 'https://superbet.bet.br',
         'Referer': 'https://superbet.bet.br/'
     }
-
     try:
-        print("[INFO] Atualizando cache de torneios Superbet (Sport 75)...")
-        r = requests.get(url, headers=headers, timeout=15)
-
+        r = requests.get(SUPERBET_STRUCT, headers=hdrs, timeout=15)
         if r.status_code == 304:
-            superbet_last_struct_update = now
-            print("[✓] Superbet tournaments: sem alterações (304).")
-            return
-
+            sb_struct_ts = time.time(); return
         if r.status_code != 200:
             raise ValueError(f"HTTP {r.status_code}")
-
-        data = r.json()
-        categories = data.get('data', [])
         new_map = {}
-        unmapped = []
-
-        for cat in categories:
-            cat_id   = cat.get('categoryId')
-            cat_name = cat.get('localNames', {}).get('pt-BR', '?')
-
+        for cat in r.json().get('data', []):
+            cat_id = cat.get('categoryId')
             for comp in cat.get('competitions', []):
                 tid   = str(comp.get('tournamentId'))
                 tname = comp.get('localNames', {}).get('pt-BR', '')
                 if not tid or not tname:
                     continue
-
-                if cat_id in SUPERBET_CATEGORY_MAP:
-                    league = SUPERBET_CATEGORY_MAP[cat_id]
+                if cat_id in SB_CAT_MAP:
+                    league = SB_CAT_MAP[cat_id]
                 elif cat_id == 1294:
-                    league = _classify_battle_tournament(tname)
+                    league = _classify_battle(tname)
                 else:
-                    league = _classify_by_name_fallback(tname)
-                    if league == tname:
-                        unmapped.append(f"tid={tid} '{tname}' cat={cat_id}/{cat_name}")
-
-                new_map[tid] = {"name": league, "raw": tname, "cat_id": cat_id}
-
+                    league = _fallback_by_name(tname)
+                new_map[tid] = {"name": league, "raw": tname}
         if new_map:
-            superbet_tournaments.update(new_map)
-            superbet_last_struct_update = now
-            print(f"[✓] Superbet tournaments: {len(new_map)} torneios mapeados.")
-            for tid, v in sorted(new_map.items(), key=lambda x: x[1]['name']):
-                print(f"    tid={tid:>6} → {v['name']:<22} (raw: {v['raw']})")
-            if unmapped:
-                print(f"[WARN] Torneios sem mapeamento (nova categoria?): {unmapped}")
-        else:
-            print("[WARN] API retornou 0 torneios — mantendo cache anterior.")
-
+            sb_tournaments.update(new_map)
+            print(f"[SB] {len(new_map)} torneios mapeados")
+        sb_struct_ts = time.time()
     except Exception as e:
-        print(f"[WARN] update_superbet_struct falhou ({e}) — usando fallback estático.")
-
-        STATIC_FALLBACK = {
-            "80560": "H2H 8 MIN",
-            "71851": "BATTLE 12 MIN",
-            "49965": "BATTLE 8 MIN",
-            "81987": "BATTLE 8 MIN",
-            "81988": "BATTLE 8 MIN",
-            "72619": "VOLTA 6 MIN",
-            "72621": "VOLTA 6 MIN",
-            "94993": "CLA 10 MIN",
-            "62997": "GT LEAGUE 12 MIN",
-            "67383": "ADRIATIC",
+        print(f"[SB struct] falhou ({e}) — usando fallback estático")
+        STATIC = {
+            "80560": "H2H 8 MIN", "71851": "BATTLE 12 MIN",
+            "49965": "BATTLE 8 MIN", "81987": "BATTLE 8 MIN",
+            "72619": "VOLTA 6 MIN", "94993": "CLA 10 MIN",
+            "62997": "GT LEAGUE 12 MIN", "67383": "ADRIATIC",
         }
-        for tid, league in STATIC_FALLBACK.items():
-            if tid not in superbet_tournaments:
-                superbet_tournaments[tid] = {"name": league}
-        superbet_last_struct_update = now
+        for tid, lg in STATIC.items():
+            if tid not in sb_tournaments:
+                sb_tournaments[tid] = {"name": lg}
+        sb_struct_ts = time.time()
 
-
+# =============================================================================
+# FETCH — SUPERBET LIVE
+# =============================================================================
 def fetch_superbet_live():
-    """Busca eventos ao vivo da Superbet (esports futebol, sportId=75)."""
-    update_superbet_struct()
+    update_sb_struct()
     try:
-        past_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d') + "+06:00:00"
-        url = f"{_SUPERBET_BASE_URL}&startDate={past_date}"
-
-        headers = {
+        past = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d') + "+06:00:00"
+        url  = f"{SUPERBET_LIVE}&startDate={past}"
+        hdrs = {
             'Accept': 'application/json, text/plain, */*',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0',
             'Origin': 'https://superbet.bet.br',
             'Referer': 'https://superbet.bet.br/'
         }
-        r = requests.get(url, headers=headers, timeout=15)
+        r = requests.get(url, headers=hdrs, timeout=15)
         if r.status_code != 200:
             return []
-
-        data = r.json()
-        events = data.get('data', [])
-        normalized = []
-
-        for event in events:
-            if not isinstance(event, dict):
+        events    = r.json().get('data', [])
+        result    = []
+        for ev in events:
+            if not isinstance(ev, dict) or ev.get('sportId') != 75:
                 continue
             try:
-                if event.get('sportId') != 75:
+                match_name = ev.get('matchName', '')
+                if '\xb7' not in match_name and '\u00b7' not in match_name:
                     continue
-
-                event_id   = str(event.get('eventId'))
-                match_name = event.get('matchName', '')
-                if '·' not in match_name:
-                    continue
-
-                parts     = match_name.split('·')
-                home_raw  = parts[0].strip()
-                away_raw  = parts[1].strip()
-                home_nick = extract_pure_nick_canonical(home_raw)
-                away_nick = extract_pure_nick_canonical(away_raw)
-
-                t_id   = str(event.get('tournamentId'))
-                cached = superbet_tournaments.get(t_id)
-
+                parts    = match_name.split('\u00b7') if '\u00b7' in match_name else match_name.split('\xb7')
+                home_raw = parts[0].strip()
+                away_raw = parts[1].strip()
+                home_nik = normalize_nick(home_raw)
+                away_nik = normalize_nick(away_raw)
+                t_id     = str(ev.get('tournamentId'))
+                cached   = sb_tournaments.get(t_id)
                 if isinstance(cached, dict):
-                    league_raw = cached.get('name', f"Superbet League {t_id}")
+                    league_raw = cached.get('name', f"SB-{t_id}")
                 elif isinstance(cached, str):
                     league_raw = cached
                 else:
-                    league_raw = f"Superbet League {t_id}"
-
-                mapped_league = map_league_name(league_raw)
-
-                # Override H2H
-                if mapped_league in {"VALHALLA CUP", "VALKYRIE CUP"}:
-                    if home_nick in H2H_OVERRIDE_PLAYERS or away_nick in H2H_OVERRIDE_PLAYERS:
-                        mapped_league = "H2H 8 MIN"
-
-                # Override EAL
-                if mapped_league == "GT LEAGUE 12 MIN":
-                    if home_nick in EAL_OVERRIDE_PLAYERS or away_nick in EAL_OVERRIDE_PLAYERS:
-                        mapped_league = "ADRIATIC"
-
-                # Inferência dinâmica por histórico
-                if mapped_league in {"GT LEAGUE 12 MIN", "Superbet League", "UNKNOWN"}:
-                    ph = infer_primary_league_for_player(home_nick)
-                    pa = infer_primary_league_for_player(away_nick)
-                    if ph and pa and ph == pa and ph != mapped_league:
-                        mapped_league = ph
-
-                meta   = event.get('metadata', {})
+                    league_raw = f"SB-{t_id}"
+                mapped = map_league(league_raw)
+                meta   = ev.get('metadata', {})
                 hg     = int(meta.get('homeTeamScore', 0) or 0)
                 ag     = int(meta.get('awayTeamScore', 0) or 0)
-                minute = int(event.get('matchTime', 0) or 0)
+                minute = int(ev.get('matchTime', 0) or 0)
+                eid    = str(ev.get('eventId'))
 
-                def _slug(s: str) -> str:
+                def _slug(s):
                     import unicodedata as _ud
-                    norm = _ud.normalize('NFKD', s)
-                    norm = ''.join([c for c in norm if not _ud.combining(c)])
-                    norm = re.sub(r'[\(\)]', ' ', norm)
-                    norm = re.sub(r'[^a-zA-Z0-9]+', '-', norm).strip('-')
-                    return norm.lower()
+                    n = _ud.normalize('NFKD', s)
+                    n = ''.join(c for c in n if not _ud.combining(c))
+                    n = re.sub(r'[\(\)]', ' ', n)
+                    n = re.sub(r'[^a-zA-Z0-9]+', '-', n).strip('-')
+                    return n.lower()
 
-                superbet_link = f"https://superbet.bet.br/odds/e-sport-futebol/{_slug(home_raw)}-x-{_slug(away_raw)}-{event_id}/?t=offer-live-{t_id}&mdt=o"
+                sb_link = (f"https://superbet.bet.br/odds/e-sport-futebol/"
+                           f"{_slug(home_raw)}-x-{_slug(away_raw)}-{eid}"
+                           f"/?t=offer-live-{t_id}&mdt=o")
 
-                normalized.append({
-                    'id': f"sb-{event_id}",
+                result.append({
+                    'id': f"sb-{eid}",
                     'leagueName': league_raw,
-                    'mappedLeague': mapped_league,
-                    'homePlayer': home_nick.capitalize(),
-                    'awayPlayer': away_nick.capitalize(),
-                    'homeSource': "Superbet-Live",
-                    'awaySource': "Superbet-Live",
+                    'mappedLeague': mapped,
+                    'homePlayer': home_nik,
+                    'awayPlayer': away_nik,
                     'homeRaw': home_raw,
                     'awayRaw': away_raw,
-                    'homeTeamName': home_raw,
-                    'awayTeamName': away_raw,
                     'tournamentId': t_id,
-                    'superbetLink': superbet_link,
-                    'timer': {'minute': minute, 'second': 0, 'formatted': f"{minute:02d}:00"},
+                    'superbetLink': sb_link,
+                    'timer': {'minute': minute, 'second': 0,
+                              'formatted': f"{minute:02d}:00"},
                     'score': {'home': hg, 'away': ag},
                     'scoreboard': f"{hg}-{ag}",
                     'liveTimeRaw': str(minute),
-                    'startDateRaw': event.get('utcDate', ''),
-                    'source': 'superbet'
+                    'startDateRaw': ev.get('utcDate', ''),
+                    'source': 'superbet',
                 })
             except:
                 continue
-        return normalized
+        return result
     except Exception as e:
-        print(f"[ERROR] fetch_superbet_live: {e}")
+        print(f"[SB live] {e}")
         return []
 
-
-def fetch_superbet_event_markets(event_id):
-    """Busca mercados abertos de um evento Superbet."""
-    try:
-        pure_id = str(event_id).replace('sb-', '')
-        url = f"https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/{pure_id}"
-
-        headers = {
-            'Accept': 'application/json, text/plain, */*',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Origin': 'https://superbet.bet.br',
-            'Referer': 'https://superbet.bet.br/'
-        }
-
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        event_data_list = data.get('data', [])
-        if not event_data_list:
-            return []
-
-        event_data = event_data_list[0]
-        odds_list  = event_data.get('odds') or []
-        open_lines = []
-
-        for odd in odds_list:
-            if not isinstance(odd, dict):
-                continue
-            if odd.get('status') == 'active':
-                open_lines.append({
-                    'market_name': odd.get('marketName', ''),
-                    'odd_name':    odd.get('name', ''),
-                    'odd_sv':      odd.get('specialBetValue', ''),
-                    'price':       odd.get('price', 0)
-                })
-
-        return open_lines
-    except Exception as e:
-        print(f"[WARN] Erro ao buscar mercados Superbet para {event_id}: {e}")
-        return []
-
-
+# =============================================================================
+# FETCH — ALTENAR (EstrelaBet) LIVE
+# =============================================================================
 def fetch_altenar_live():
-    """Busca eventos ao vivo via Altenar (EstrelaBet) — apenas Valhalla/Valkyrie."""
     try:
-        print(f"[INFO] Buscando partidas ao vivo...")
+        r = requests.get(ALTENAR_LIVE, timeout=10)
+        r.raise_for_status()
+        data  = r.json()
+        comps = {c['id']: c for c in data.get('competitors', [])}
+        champ = {c['id']: c['name'] for c in data.get('champs', [])}
+        evts  = [e for e in data.get('events', []) if e.get('sportId') == 66]
+        result = []
 
-        response = requests.get(LIVE_API_URL, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        events = data.get('events', [])
-        competitors_list = data.get('competitors', [])
-        champs_list = data.get('champs', [])
-
-        competitors_map = {c['id']: c for c in competitors_list}
-        champs_map = {c['id']: c['name'] for c in champs_list}
-
-        football_events = [e for e in events if e.get('sportId') == 66]
-
-        def parse_live_time(live_time_str, start_date_str=None):
-            if live_time_str:
-                m = re.search(r'(\d{1,2}):(\d{2})', live_time_str)
-                if m:
-                    return int(m.group(1)), int(m.group(2))
-                lt = live_time_str.upper()
-                if any(x in lt for x in ['1ª PARTE', '1ST HALF', '1°', 'PRIMEIRO TEMPO']):
-                    return 2, 30
-                if any(x in lt for x in ['INTERVALO', 'HALFTIME', 'MEIO TEMPO']):
-                    return 4, 0
-                if any(x in lt for x in ['2ª PARTE', '2ND HALF', '2°', 'SEGUNDO TEMPO']):
-                    return 7, 0
-                if any(x in lt for x in ['FINAL', 'ENDED', 'FIM', 'TERMINADO']):
-                    return 9, 0
-
-            if start_date_str:
-                try:
-                    start_dt = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
-                    elapsed = (datetime.now(timezone.utc) - start_dt).total_seconds()
-                    if elapsed < 0:
-                        return 0, 0
-                    return int(elapsed // 60), int(elapsed % 60)
-                except:
-                    pass
-            return 0, 0
-
-        normalized_events = []
-
-        for event in football_events:
+        for ev in evts:
             try:
-                event_id = event.get('id')
-                champ_id = event.get('champId')
-                competitor_ids = event.get('competitorIds', [])
-                score_raw = event.get('score', [0, 0])
-                live_time = event.get('liveTime', '')
+                eid = ev.get('id')
+                cids = ev.get('competitorIds', [])
+                sc_raw = ev.get('score', [0, 0])
 
-                def parse_score_value(s):
-                    if s is None: return [0, 0]
+                def _score(s):
                     if isinstance(s, list):
-                        return [int(s[0]) if len(s) > 0 else 0, int(s[1]) if len(s) > 1 else 0]
+                        return [int(s[0] if s else 0), int(s[1] if len(s) > 1 else 0)]
                     if isinstance(s, dict):
                         return [int(s.get('home', 0)), int(s.get('away', 0))]
                     if isinstance(s, str):
-                        for sep in [':', '-', ' ']:
+                        for sep in [':', '-']:
                             if sep in s:
-                                parts = s.split(sep)
-                                try: return [int(parts[0].strip()), int(parts[1].strip())]
-                                except: pass
+                                try:
+                                    p = s.split(sep)
+                                    return [int(p[0].strip()), int(p[1].strip())]
+                                except:
+                                    pass
                     return [0, 0]
 
-                score = parse_score_value(score_raw)
-
-                home_comp = competitors_map.get(competitor_ids[0], {}) if len(competitor_ids) > 0 else {}
-                away_comp = competitors_map.get(competitor_ids[1], {}) if len(competitor_ids) > 1 else {}
-
-                home_competitor_name = home_comp.get('name', '')
-                away_competitor_name = away_comp.get('name', '')
-
-                if not home_competitor_name or not away_competitor_name:
+                sc = _score(sc_raw)
+                hc = comps.get(cids[0], {}) if cids else {}
+                ac = comps.get(cids[1], {}) if len(cids) > 1 else {}
+                hn = hc.get('name', '')
+                an = ac.get('name', '')
+                if not hn or not an:
                     continue
 
-                name_from_full_home = clean_player_name(home_competitor_name)
-                check_home_player = (home_comp.get('playerName') or home_comp.get('player_name') or
-                                     home_comp.get('player') or home_comp.get('nickName') or event.get('home_player'))
-                home_raw_text = home_competitor_name if '(' in home_competitor_name else (check_home_player or home_competitor_name)
-
-                if '(' in home_competitor_name:
-                    # "Man City (fantazer)" → extrai "FANTAZER" → normaliza capitalização
-                    home_player = extract_pure_nick(home_competitor_name).capitalize()
-                    home_source = "Full-Name-Parentheses"
-                else:
-                    home_player = clean_player_name(check_home_player or home_competitor_name)
-                    home_source = "API-Field" if check_home_player else "Full-Name-Cleaning"
-
-                name_from_full_away = clean_player_name(away_competitor_name)
-                check_away_player = (away_comp.get('playerName') or away_comp.get('player_name') or
-                                     away_comp.get('player') or away_comp.get('nickName') or event.get('away_player'))
-                away_raw_text = away_competitor_name if '(' in away_competitor_name else (check_away_player or away_competitor_name)
-
-                if '(' in away_competitor_name:
-                    away_player = extract_pure_nick(away_competitor_name).capitalize()
-                    away_source = "Full-Name-Parentheses"
-                else:
-                    away_player = clean_player_name(check_away_player or away_competitor_name)
-                    away_source = "API-Field" if check_away_player else "Full-Name-Cleaning"
-
-                home_team = (home_comp.get('teamName') or home_comp.get('team_name') or home_comp.get('team') or
-                             event.get('home_team') or (home_competitor_name.split('(')[0].strip() if '(' in home_competitor_name else home_competitor_name))
-                away_team = (away_comp.get('teamName') or away_comp.get('team_name') or away_comp.get('team') or
-                             event.get('away_team') or (away_competitor_name.split('(')[0].strip() if '(' in away_competitor_name else away_competitor_name))
-
-                league_name = champs_map.get(champ_id, 'Unknown League')
-
+                home_nick = normalize_nick(hn)
+                away_nick = normalize_nick(an)
+                league_name = champ.get(ev.get('champId'), 'Unknown')
                 if "ECOMP" in league_name.upper() or "VIRTUAL" in league_name.upper():
                     continue
 
-                mapped_league = map_league_name(league_name)
-                start_date = event.get('startDate', '')
-                minute, second = parse_live_time(live_time, start_date_str=start_date)
+                mapped = map_league(league_name)
 
-                normalized_event = {
-                    'id': str(event_id),
+                # Parse do tempo ao vivo
+                lt = ev.get('liveTime', '')
+                minute, second = 0, 0
+                if lt:
+                    m = re.search(r'(\d+):(\d+)', lt)
+                    if m:
+                        minute, second = int(m.group(1)), int(m.group(2))
+                    elif any(x in lt.upper() for x in ['1\u00aa PARTE', '1ST HALF']):
+                        minute = 2
+
+                result.append({
+                    'id': str(eid),
                     'leagueName': league_name,
-                    'mappedLeague': mapped_league,
-                    'homePlayer': home_player,
-                    'awayPlayer': away_player,
-                    'homeSource': home_source,
-                    'awaySource': away_source,
-                    'homeRaw': home_raw_text,
-                    'awayRaw': away_raw_text,
-                    'homeTeamName': home_team,
-                    'awayTeamName': away_team,
-                    'timer': {
-                        'minute': minute,
-                        'second': second,
-                        'formatted': f"{minute:02d}:{second:02d}"
-                    },
-                    'score': {
-                        'home': score[0] if len(score) > 0 else 0,
-                        'away': score[1] if len(score) > 1 else 0
-                    },
-                    'scoreboard': f"{score[0] if len(score) > 0 else 0}-{score[1] if len(score) > 1 else 0}",
-                    'liveTimeRaw': live_time,
-                    'startDateRaw': start_date,
-                }
-
-                normalized_events.append(normalized_event)
-
-            except Exception as e:
+                    'mappedLeague': mapped,
+                    'homePlayer': home_nick,
+                    'awayPlayer': away_nick,
+                    'homeRaw': hn,
+                    'awayRaw': an,
+                    'timer': {'minute': minute, 'second': second,
+                              'formatted': f"{minute:02d}:{second:02d}"},
+                    'score': {'home': sc[0], 'away': sc[1]},
+                    'scoreboard': f"{sc[0]}-{sc[1]}",
+                    'liveTimeRaw': lt,
+                    'startDateRaw': ev.get('startDate', ''),
+                    'source': 'altenar',
+                })
+            except:
                 continue
-
-        print(f"[INFO] {len(normalized_events)} partidas ao vivo normalizadas")
-        return normalized_events
-
+        return result
     except Exception as e:
-        print(f"[ERROR] Altenar Live API falhou: {e}")
+        print(f"[Altenar live] {e}")
         return []
 
 
 def fetch_live_matches():
-    """Combina eventos Superbet + Altenar (Valhalla/Valkyrie), deduplicados."""
-    print(f"[INFO] Buscando partidas ao vivo (Superbet + Altenar)...")
+    """Combina Superbet + Altenar, deduplicando por par de jogadores."""
+    sb   = fetch_superbet_live()
+    alt  = fetch_altenar_live()
+    seen = set()
+    out  = []
+    for ev in sb + alt:
+        key = f"{ev['homePlayer']}_{ev['awayPlayer']}".upper()
+        if key not in seen:
+            seen.add(key)
+            out.append(ev)
+    print(f"[live] {len(out)} eventos ({len(sb)} SB / {len(alt)} ALT)")
+    return out
 
-    sb_events  = fetch_superbet_live()
-    alt_events = fetch_altenar_live()
-
-    all_combined  = sb_events + alt_events
-    unique_events = []
-    seen_games    = set()
-
-    for ev in all_combined:
-        key = f"{ev.get('homePlayer', '')}_{ev.get('awayPlayer', '')}".upper()
-        if key not in seen_games:
-            unique_events.append(ev)
-            seen_games.add(key)
-
-    print(f"[INFO] {len(unique_events)} partidas unicas ({len(sb_events)} SB / {len(alt_events)} ALT)")
-    return unique_events
-
-
-def fetch_event_markets(event_id):
+# =============================================================================
+# FETCH — MERCADOS DE UM EVENTO
+# =============================================================================
+def fetch_markets_altenar(event_id):
     try:
-        url = EVENT_API_URL.format(event_id)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.estrelabet.bet.br/"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        markets = data.get('markets', [])
-        odds = data.get('odds', [])
-        odds_map = {odd['id']: odd for odd in odds}
-        open_lines = []
-
-        for market in markets:
-            market_name = market.get('name', '')
-            desktop_odds = market.get('desktopOddIds', [])
-            odd_ids_to_check = []
-            for group in desktop_odds:
-                if isinstance(group, list):
-                    odd_ids_to_check.extend(group)
+        url = ALTENAR_EVENT.format(event_id)
+        hdrs = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.estrelabet.bet.br/"}
+        r = requests.get(url, headers=hdrs, timeout=10)
+        r.raise_for_status()
+        data  = r.json()
+        mkts  = data.get('markets', [])
+        odds  = {o['id']: o for o in data.get('odds', [])}
+        lines = []
+        for mkt in mkts:
+            mkt_name = mkt.get('name', '')
+            ids = []
+            for grp in mkt.get('desktopOddIds', []):
+                if isinstance(grp, list):
+                    ids.extend(grp)
                 else:
-                    odd_ids_to_check.append(group)
-
-            for odd_id in odd_ids_to_check:
-                odd = odds_map.get(odd_id)
-                if odd and odd.get('oddStatus') == 0:
-                    open_lines.append({
-                        'market_name': market_name,
-                        'odd_name': odd.get('name', ''),
-                        'odd_sv': odd.get('sv', ''),
-                        'price': odd.get('price', 0)
+                    ids.append(grp)
+            for oid in ids:
+                o = odds.get(oid)
+                if o and o.get('oddStatus') == 0:
+                    lines.append({
+                        'market_name': mkt_name,
+                        'odd_name':    o.get('name', ''),
+                        'odd_sv':      o.get('sv', ''),
+                        'price':       float(o.get('price', 0)),
                     })
-
-        return open_lines
-
+        return lines
     except Exception as e:
-        print(f"[WARN] Erro ao buscar mercados para {event_id}: {e}")
+        print(f"[markets ALT] {event_id}: {e}")
         return []
 
 
-def fetch_recent_matches(num_pages=10, use_cache=True):
-    global global_history_cache
+def fetch_markets_superbet(event_id):
+    try:
+        pure_id = str(event_id).replace('sb-', '')
+        url  = SUPERBET_EVENT.format(pure_id)
+        hdrs = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0',
+                'Origin': 'https://superbet.bet.br', 'Referer': 'https://superbet.bet.br/'}
+        r = requests.get(url, headers=hdrs, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        evts = data.get('data', [])
+        if not evts:
+            return []
+        lines = []
+        for odd in (evts[0].get('odds') or []):
+            if not isinstance(odd, dict):
+                continue
+            if odd.get('status') == 'active':
+                lines.append({
+                    'market_name': odd.get('marketName', ''),
+                    'odd_name':    odd.get('name', ''),
+                    'odd_sv':      odd.get('specialBetValue', ''),
+                    'price':       float(odd.get('price', 0)),
+                })
+        return lines
+    except Exception as e:
+        print(f"[markets SB] {event_id}: {e}")
+        return []
 
-    if use_cache and len(global_history_cache['matches']) > 200:
-        cache_age = time.time() - global_history_cache['timestamp']
-        if cache_age < HISTORY_CACHE_TTL:
-            return global_history_cache['matches']
 
-    fetch_pages = min(num_pages, 25)
-    print(f"[INFO] Atualizando histórico ({fetch_pages} págs)...")
+def fetch_markets(event_id):
+    if str(event_id).startswith('sb-'):
+        return fetch_markets_superbet(event_id)
+    return fetch_markets_altenar(event_id)
 
+# =============================================================================
+# FETCH — HISTÓRICO (RWTIPS API)
+# =============================================================================
+def fetch_history(pages=20, use_cache=True):
+    global history_cache
+    if use_cache and history_cache['matches'] and (time.time() - history_cache['ts']) < HISTORY_TTL:
+        return history_cache['matches']
+
+    print(f"[history] buscando {pages} páginas...")
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
+    sess  = requests.Session()
+    retry = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    sess.mount("https://", HTTPAdapter(max_retries=retry))
 
-    int_session = requests.Session()
-    int_retry = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    int_session.mount("https://", HTTPAdapter(max_retries=int_retry))
-
-    def fetch_internal_page(page):
+    def _page(p):
         try:
-            params = {'page': page, 'limit': 40}
-            response = int_session.get(HISTORY_API_URL, params=params, timeout=15)
-            if response.status_code != 200:
-                return []
-            data = response.json()
-            return data.get('results', [])
-        except Exception as e:
-            if page <= 2:
-                print(f"[WARN] Internal API page {page}: {e}")
+            r = sess.get(HISTORY_URL, params={'page': p, 'limit': 40}, timeout=15)
+            return r.json().get('results', []) if r.status_code == 200 else []
+        except:
             return []
 
-    internal_matches = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        pages = range(1, fetch_pages + 1)
-        results = list(executor.map(fetch_internal_page, pages))
-        for r in results:
-            if r:
-                internal_matches.extend(r)
+    all_raw = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+        for res in ex.map(_page, range(1, pages + 1)):
+            all_raw.extend(res)
 
-    all_combined = []
+    def _fix_dt(s):
+        s = str(s or '')
+        if s and not s.endswith('Z') and not re.search(r'[+-]\d{2}:\d{2}$', s):
+            s += 'Z'
+        return s
 
-    for m in internal_matches:
-        league = m.get('league_mapped') or m.get('league_name', 'Unknown')
-        home_player = clean_player_name(m.get('home_nick') or m.get('home_player') or m.get('player_home') or
-                                        m.get('home_player_name') or m.get('home_player_raw') or m.get('home_competitor_name', ''))
-        away_player = clean_player_name(m.get('away_nick') or m.get('away_player') or m.get('player_away') or
-                                        m.get('away_player_name') or m.get('away_player_raw') or m.get('away_competitor_name', ''))
-        match_id = m.get('event_id') or m.get('id') or m.get('_id', 'unk')
+    matches = []
+    for m in all_raw:
+        league = map_league(m.get('league_mapped') or m.get('league_name', ''))
+        h_raw  = (m.get('home_nick') or m.get('home_player') or
+                  m.get('home_player_name') or m.get('home_competitor_name', ''))
+        a_raw  = (m.get('away_nick') or m.get('away_player') or
+                  m.get('away_player_name') or m.get('away_competitor_name', ''))
+        home_p = normalize_nick(h_raw) or h_raw.strip()
+        away_p = normalize_nick(a_raw) or a_raw.strip()
 
         if m.get('finished_at'):
-            fin_at = str(m.get('finished_at'))
-            data_realizacao = f"{fin_at}Z" if not fin_at.endswith('Z') and '+' not in fin_at else fin_at
+            data_r = _fix_dt(m['finished_at'])
+        elif m.get('match_date'):
+            data_r = f"{m['match_date']}T{m.get('match_time', '00:00:00')}Z"
         else:
-            data_realizacao = f"{m.get('match_date')}T{m.get('match_time')}" if m.get('match_date') else datetime.now().isoformat()
+            data_r = datetime.now(timezone.utc).isoformat()
 
-        all_combined.append({
-            'id': f"int_{match_id}",
-            'league_name': map_league_name(league),
-            'home_player': home_player,
-            'away_player': away_player,
-            'home_team': m.get('home_raw') or m.get('home_team', ''),
-            'away_team': m.get('away_raw') or m.get('away_team', ''),
-            'home_team_logo': m.get('home_team_logo', ''),
-            'away_team_logo': m.get('away_team_logo', ''),
-            'data_realizacao': data_realizacao,
-            'home_score_ht': m.get('home_score_ht', 0) or 0,
-            'away_score_ht': m.get('away_score_ht', 0) or 0,
-            'home_score_ft': m.get('home_score_ft', 0) or 0,
-            'away_score_ft': m.get('away_score_ft', 0) or 0
+        started = _fix_dt(m.get('started_at', ''))
+
+        matches.append({
+            'id': m.get('event_id') or m.get('id') or '',
+            'league_name': league,
+            'home_player': home_p,
+            'away_player': away_p,
+            'home_team':   m.get('home_raw') or m.get('home_team', ''),
+            'away_team':   m.get('away_raw') or m.get('away_team', ''),
+            'data_realizacao': data_r,
+            'started_at':      started,
+            'home_score_ht': int(m.get('home_score_ht') or 0),
+            'away_score_ht': int(m.get('away_score_ht') or 0),
+            'home_score_ft': int(m.get('home_score_ft') or 0),  # TOTAL do jogo
+            'away_score_ft': int(m.get('away_score_ft') or 0),  # TOTAL do jogo
         })
 
-    all_combined.sort(key=lambda x: x['data_realizacao'], reverse=True)
+    matches.sort(key=lambda x: x['data_realizacao'], reverse=True)
+    history_cache = {'matches': matches, 'ts': time.time()}
+    print(f"[history] {len(matches)} partidas carregadas")
+    # Pré-computar stats de todos os players e ligas vistos
+    _rebuild_stats_cache(matches)
+    return matches
 
-    global_history_cache['matches'] = all_combined
-    global_history_cache['timestamp'] = time.time()
 
-    print(f"[INFO] Histórico atualizado: {len(all_combined)} partidas.")
-    return all_combined
+def _rebuild_stats_cache(matches):
+    """
+    Pré-computa e armazena as estatísticas de TODOS os players e ligas
+    encontrados no histórico. Chamado automaticamente após fetch_history.
+
+    Custo: único — percorre a lista uma vez por player único.
+    Benefício: main_loop faz lookup O(1) em vez de varredura O(n) por ciclo.
+    """
+    global stats_cache
+
+    # Coletar todos os nicks únicos
+    nicks = set()
+    for m in matches:
+        h = extract_nick(m.get('home_player', ''))
+        a = extract_nick(m.get('away_player', ''))
+        if h: nicks.add(h)
+        if a: nicks.add(a)
+
+    # Coletar todas as ligas únicas
+    leagues = set(m.get('league_name', '') for m in matches if m.get('league_name'))
+
+    new_players = {}
+    new_leagues = {}
+
+    # Computar stats por player
+    for nick in nicks:
+        st = player_stats(nick, matches, last_n=5)
+        if st:
+            new_players[nick] = st
+
+    # Computar stats por liga
+    for lg in leagues:
+        st = league_stats(lg, matches, last_n=5)
+        if st and not st.get('estimated'):
+            new_leagues[lg] = st
+
+    stats_cache = {
+        'players': new_players,
+        'leagues': new_leagues,
+        'ts':      time.time(),
+    }
+    print(f"[stats_cache] {len(new_players)} players | {len(new_leagues)} ligas")
 
 
-def fetch_player_individual_stats(player_name, use_cache=True):
-    name_key = player_name.upper().strip()
-
-    if use_cache and name_key in player_stats_cache:
-        cached = player_stats_cache[name_key]
-        if time.time() - cached['timestamp'] < CACHE_TTL:
-            return cached['stats']
-
-    all_matches = fetch_recent_matches(num_pages=20, use_cache=True)
-
-    if not all_matches:
+def get_player_stats_cached(player_name):
+    """Retorna stats do cache. Se expirado, reconstrói antes de responder."""
+    nick = extract_nick(player_name)
+    if not nick:
         return None
+    # Cache expirado? Forçar rebuild
+    if time.time() - stats_cache['ts'] > STATS_TTL:
+        matches = history_cache.get('matches', [])
+        if matches:
+            _rebuild_stats_cache(matches)
+    return stats_cache['players'].get(nick)
 
-    player_matches = []
-    for match in all_matches:
-        home_player = match.get('home_player', '')
-        away_player = match.get('away_player', '')
-        if (home_player.upper().strip() == name_key or away_player.upper().strip() == name_key):
-            player_matches.append(match)
 
-    # ✅ CORREÇÃO #4: Aumentar janela para 10 jogos mínimos para análise confiável
-    player_matches = player_matches[:20]
-
-    final_data = {
-        'matches': player_matches,
-        'total_count': len(player_matches)
+def get_league_stats_cached(league_name):
+    """Retorna stats da liga do cache. Se expirado, reconstrói antes."""
+    if time.time() - stats_cache['ts'] > STATS_TTL:
+        matches = history_cache.get('matches', [])
+        if matches:
+            _rebuild_stats_cache(matches)
+    st = stats_cache['leagues'].get(league_name)
+    if st:
+        return st
+    # Liga sem dados suficientes — retorna estimativa baseada no perfil
+    prof = get_profile(league_name)
+    crit = get_crit(league_name)
+    return {
+        'avg_ht':   crit['ht_gate_league'],
+        'avg_ft':   crit['ft_gate_league'],
+        'games':    0,
+        'estimated': True,
     }
 
-    player_stats_cache[name_key] = {
-        'stats': final_data,
-        'timestamp': time.time()
-    }
-
-    return final_data
-
-
 # =============================================================================
-# ANÁLISE DE ESTATÍSTICAS
+# ESTATÍSTICAS — PLAYER E LIGA (últimos 5 jogos)
 # =============================================================================
+def player_stats(player_name, all_matches, last_n=5):
+    """
+    Calcula estatísticas de um jogador nos últimos N jogos
+    (independente do adversário).
 
-def analyze_player_history(matches, player_name, window=10):
+    Retorna médias de gols MARCADOS e SOFRIDOS para HT e FT,
+    necessárias para critérios de BTTS e linhas individuais.
+
+    home_score_ft = gols TOTAIS do jogo inteiro (inclui HT)
+    home_score_ht = gols só do 1T
     """
-    Analisa histórico do jogador.
-    Usa janela de 10 jogos para métricas gerais
-    e janela de 5 jogos para forma recente (mais sensível).
-    """
-    if not matches:
+    nick = extract_nick(player_name)
+    games = []
+    for m in all_matches:
+        h = extract_nick(m.get('home_player', ''))
+        a = extract_nick(m.get('away_player', ''))
+        if nick in (h, a):
+            games.append(m)
+        if len(games) >= last_n:
+            break
+
+    n = len(games)
+    if n < 3:
         return None
 
-    actual_window = min(len(matches), window)
-    if actual_window < 5:
-        return None
+    ht_marc = []   # gols marcados pelo player no HT
+    ht_sof  = []   # gols sofridos pelo player no HT (= gols do adversário no HT)
+    ft_marc = []   # gols marcados pelo player no jogo inteiro
+    ft_sof  = []   # gols sofridos pelo player no jogo inteiro
 
-    study_set    = matches[:actual_window]
-    recent_5     = matches[:5]   # Janela curta para forma recente
+    for m in games:
+        is_home = extract_nick(m.get('home_player', '')) == nick
+        ht_h = int(m.get('home_score_ht', 0) or 0)
+        ht_a = int(m.get('away_score_ht', 0) or 0)
+        ft_h = int(m.get('home_score_ft', 0) or 0)
+        ft_a = int(m.get('away_score_ft', 0) or 0)
 
-    def calc_set(match_set, pname):
-        n = len(match_set)
-        d = {
-            'total_scored_ft': 0, 'total_conceded_ft': 0,
-            'total_scored_ht': 0, 'total_conceded_ht': 0,
-            'wins': 0, 'draws': 0, 'losses': 0,
-            'goals_list_ft': [], 'goals_list_ht': [],
-            'ht_scored_05': 0, 'ht_scored_15': 0,
-            'ft_scored_05': 0, 'ft_scored_15': 0,
-            'ft_scored_25': 0, 'ft_scored_35': 0, 'ft_scored_45': 0,
-            'ht_over_05': 0, 'ht_over_15': 0, 'ht_over_25': 0,
-            'ft_over_05': 0, 'ft_over_15': 0, 'ft_over_25': 0,
-            'ft_over_35': 0, 'ft_over_45': 0,
-            'btts_count': 0, 'ht_btts_count': 0,
-        }
-        for m in match_set:
-            is_home = m.get('home_player', '').upper() == pname.upper()
-            ht_h = m.get('home_score_ht', 0) or 0
-            ht_a = m.get('away_score_ht', 0) or 0
-            ft_h = m.get('home_score_ft', 0) or 0
-            ft_a = m.get('away_score_ft', 0) or 0
-
-            pg  = ft_h if is_home else ft_a   # gols marcados FT
-            pc  = ft_a if is_home else ft_h   # gols sofridos FT
-            pgh = ht_h if is_home else ht_a   # gols marcados HT
-            pch = ht_a if is_home else ht_h   # gols sofridos HT
-
-            d['goals_list_ft'].append(pg)
-            d['goals_list_ht'].append(pgh)
-            d['total_scored_ft']   += pg
-            d['total_conceded_ft'] += pc
-            d['total_scored_ht']   += pgh
-            d['total_conceded_ht'] += pch
-
-            if pg > pc: d['wins']   += 1
-            elif pg == pc: d['draws'] += 1
-            else: d['losses'] += 1
-
-            if pg > 0: d['ft_scored_05'] += 1
-            if pg > 1: d['ft_scored_15'] += 1
-            if pg > 2: d['ft_scored_25'] += 1
-            if pg > 3: d['ft_scored_35'] += 1
-            if pg > 4: d['ft_scored_45'] += 1
-            if pgh > 0: d['ht_scored_05'] += 1
-            if pgh > 1: d['ht_scored_15'] += 1
-
-            ht_t = ht_h + ht_a
-            ft_t = ft_h + ft_a
-            if ht_t > 0: d['ht_over_05'] += 1
-            if ht_t > 1: d['ht_over_15'] += 1
-            if ht_t > 2: d['ht_over_25'] += 1
-            if ft_t > 0: d['ft_over_05'] += 1
-            if ft_t > 1: d['ft_over_15'] += 1
-            if ft_t > 2: d['ft_over_25'] += 1
-            if ft_t > 3: d['ft_over_35'] += 1
-            if ft_t > 4: d['ft_over_45'] += 1
-            if ft_h > 0 and ft_a > 0: d['btts_count']    += 1
-            if ht_h > 0 and ht_a > 0: d['ht_btts_count'] += 1
-        return d, n
-
-    d10, n10 = calc_set(study_set, player_name)
-    d5,  n5  = calc_set(recent_5,  player_name)
-
-    try:
-        stdev_ft = statistics.stdev(d10['goals_list_ft']) if len(d10['goals_list_ft']) >= 2 else 0
-    except:
-        stdev_ft = 0
-
-    # Forma recente: sequência dos últimos 5 (W=2, D=1, L=0)
-    forma_pts = 0
-    for m in recent_5:
-        is_home = m.get('home_player', '').upper() == player_name.upper()
-        pg = (m.get('home_score_ft', 0) or 0) if is_home else (m.get('away_score_ft', 0) or 0)
-        pc = (m.get('away_score_ft', 0) or 0) if is_home else (m.get('home_score_ft', 0) or 0)
-        if pg > pc:   forma_pts += 2
-        elif pg == pc: forma_pts += 1
-    forma_pct = (forma_pts / 10) * 100  # 0-100%
+        if is_home:
+            ht_marc.append(ht_h); ht_sof.append(ht_a)
+            ft_marc.append(ft_h); ft_sof.append(ft_a)
+        else:
+            ht_marc.append(ht_a); ht_sof.append(ht_h)
+            ft_marc.append(ft_a); ft_sof.append(ft_h)
 
     return {
-        # Médias gerais (10j)
-        'avg_goals_scored_ft':   d10['total_scored_ft']   / n10,
-        'avg_goals_conceded_ft': d10['total_conceded_ft'] / n10,
-        'avg_goals_scored_ht':   d10['total_scored_ht']   / n10,
-        'avg_goals_conceded_ht': d10['total_conceded_ht'] / n10,
-        'win_pct':  (d10['wins']   / n10) * 100,
-        'draw_pct': (d10['draws']  / n10) * 100,
-        'loss_pct': (d10['losses'] / n10) * 100,
-        # Médias recentes (5j) — para o novo confidence
-        'avg_scored_ft_5j':   d5['total_scored_ft']   / n5,
-        'avg_conceded_ft_5j': d5['total_conceded_ft'] / n5,
-        'avg_scored_ht_5j':   d5['total_scored_ht']   / n5,
-        'avg_conceded_ht_5j': d5['total_conceded_ht'] / n5,
-        'win_pct_5j': (d5['wins'] / n5) * 100,
-        # Percentuais (10j)
-        'ht_over_05_pct':   (d10['ht_over_05'] / n10) * 100,
-        'ht_over_15_pct':   (d10['ht_over_15'] / n10) * 100,
-        'ht_over_25_pct':   (d10['ht_over_25'] / n10) * 100,
-        'ht_scored_05_pct': (d10['ht_scored_05'] / n10) * 100,
-        'ht_scored_15_pct': (d10['ht_scored_15'] / n10) * 100,
-        'ft_over_05_pct':   (d10['ft_over_05'] / n10) * 100,
-        'ft_over_15_pct':   (d10['ft_over_15'] / n10) * 100,
-        'ft_over_25_pct':   (d10['ft_over_25'] / n10) * 100,
-        'ft_over_35_pct':   (d10['ft_over_35'] / n10) * 100,
-        'ft_over_45_pct':   (d10['ft_over_45'] / n10) * 100,
-        'ft_scored_05_pct': (d10['ft_scored_05'] / n10) * 100,
-        'ft_scored_15_pct': (d10['ft_scored_15'] / n10) * 100,
-        'ft_scored_25_pct': (d10['ft_scored_25'] / n10) * 100,
-        'ft_scored_35_pct': (d10['ft_scored_35'] / n10) * 100,
-        'ft_scored_45_pct': (d10['ft_scored_45'] / n10) * 100,
-        # Counts usados pelo filtro de sample mínimo
-        'ft_scored_15_count': d10['ft_scored_15'],
-        'ft_scored_25_count': d10['ft_scored_25'],
-        'ft_scored_35_count': d10['ft_scored_35'],
-        'ft_scored_45_count': d10['ft_scored_45'],
-        'btts_pct':    (d10['btts_count']    / n10) * 100,
-        'ht_btts_pct': (d10['ht_btts_count'] / n10) * 100,
-        'consistency_ft_3_plus_pct': (d10['ft_over_25'] / n10) * 100,
-        'consistency_ht_1_plus_pct': (d10['ht_over_05'] / n10) * 100,
-        # Stdev e listas
-        'goals_stdev': stdev_ft,
-        'goals_list':    d10['goals_list_ft'],
-        'goals_list_ht': d10['goals_list_ht'],
-        'games_analyzed': n10,
-        # Forma recente (0-100%)
-        'forma_recente_pct': forma_pct,
+        # Médias de gols marcados
+        'avg_ht':     sum(ht_marc) / n,
+        'avg_ft':     sum(ft_marc) / n,
+        # Médias de gols sofridos (necessário para BTTS)
+        'avg_ht_sof': sum(ht_sof)  / n,
+        'avg_ft_sof': sum(ft_sof)  / n,
+        # Listas brutas para debug
+        'ht_list': ht_marc,
+        'ft_list': ft_marc,
+        'games':   n,
     }
 
 
-def get_h2h_stats(player1, player2):
-    """
-    Retorna estatísticas dos confrontos diretos entre player1 e player2.
-    Usa os 5 últimos H2H disponíveis.
-    Retorna None se menos de 3 confrontos (não penaliza por falta de dados).
-    """
-    all_matches = global_history_cache.get('matches', [])
-    if not all_matches:
-        return None
+def league_stats(league_name, all_matches, last_n=5):
+    """Média de gols HT e FT nos últimos N jogos da liga."""
+    games = [m for m in all_matches if m.get('league_name') == league_name][:last_n]
+    n = len(games)
+    if n < 3:
+        return {'avg_ht': 3.5, 'avg_ft': 6.0, 'games': 0, 'estimated': True}
 
-    p1 = player1.upper()
-    p2 = player2.upper()
-    h2h_list = [
-        m for m in all_matches
-        if (m.get('home_player', '').upper() == p1 and m.get('away_player', '').upper() == p2)
-        or (m.get('home_player', '').upper() == p2 and m.get('away_player', '').upper() == p1)
-    ]
-
-    if len(h2h_list) < 3:
-        return None   # Dados insuficientes — critério H2H não será aplicado
-
-    h2h_list = h2h_list[:5]
-    stats = analyze_player_history(h2h_list, player1, window=5)
-    if stats:
-        stats['count'] = len(h2h_list)
-    return stats
-
-
-def detect_regime_change(matches):
-    """
-    Detecta se o jogador está em queda (COOLING) ou em alta (HEATING)
-    comparando os últimos 3 jogos com os 4-10 anteriores.
-    """
-    if len(matches) < 6:
-        return {'regime_change': False}
-
-    last_3     = matches[:3]
-    previous   = matches[3:10] if len(matches) >= 10 else matches[3:]
-
-    def avg_scored(window):
-        if not window: return 0
-        return sum(m.get('home_score_ft', 0) or 0 for m in window) / len(window)
-
-    avg_r = avg_scored(last_3)
-    avg_p = avg_scored(previous)
-
-    if avg_p > 0:
-        ratio = avg_r / avg_p
-        if ratio < 0.45 and avg_r < 1.2:
-            return {'regime_change': True, 'direction': 'COOLING', 'action': 'AVOID',
-                    'reason': f'Esfriou: {avg_r:.1f} vs {avg_p:.1f}'}
-        if ratio > 1.8 and avg_r > 2.0:
-            return {'regime_change': True, 'direction': 'HEATING', 'action': 'BOOST',
-                    'reason': f'Em alta: {avg_r:.1f} vs {avg_p:.1f}'}
-
-    return {'regime_change': False}
-
-
-def analyze_player_with_regime_check(matches, player_name):
-    """
-    Análise completa do jogador: histórico + regime + confidence.
-    """
-    if not matches:
-        return None
-
-    stats = analyze_player_history(matches, player_name, window=10)
-    if not stats:
-        return None
-
-    regime = detect_regime_change(matches)
-
-    # Bloquear imediatamente se em queda
-    if regime['regime_change'] and regime['action'] == 'AVOID':
-        print(f"[REGIME] {player_name} em queda. Bloqueando.")
-        stats['confidence'] = 0
-        return stats
-
-    stats['regime_change']    = regime['regime_change']
-    stats['regime_direction'] = regime.get('direction', 'STABLE')
-    stats['regime_action']    = regime.get('action', '')
-
-    return stats
-
-
-def calculate_confidence_score(home_stats, away_stats, h2h_stats=None):
-    """
-    Confidence v4 — recalibrado para refletir realidade do esoccer.
-
-    PROBLEMA ANTERIOR: Rose 3.4g/j + H2H 80% + forma 70% = 58% (errado).
-    Jogadores dominantes precisam chegar a 75-90% naturalmente.
-
-    NOVA ESCALA (100 pts):
-      F1 — FT marcado avg_5j    → até 35 pts  (dominante — é o que apostamos)
-      F2 — H2H vantagem         → até 25 pts  (confronto direto é forte preditor)
-      F3 — Forma recente 5j     → até 20 pts  (tendência atual > média histórica)
-      F4 — FT sofrido adversário→ até 10 pts  (defesa do oponente)
-      F5 — Win rate 5j          → até  5 pts  (resultado geral)
-      F6 — HT marcado avg_5j    → até  5 pts  (ritmo desde o início)
-    Total: 100 pts
-
-    Exemplos calibrados:
-      Rose: FT=3.4, H2H=80%, forma=70%, win=60%, HT=1.4 → ~78%  ✅
-      Jogador mediano: FT=2.0, H2H=50%, forma=50%, win=50% → ~45% ❌
-      Top jogador: FT=4.5, H2H=90%, forma=90%, win=80% → ~95%  ✅
-    """
-
-    def score_player(stats, opp_stats=None, label=""):
-        """
-        F1 FT marc:  35 pts — principal preditor de gols
-        F2 Forma 5j: 20 pts — tendência atual
-        F3 FT sofr:  10 pts — defesa do adversário (passado como opp_stats)
-        F4 Win rate:  5 pts — resultado geral
-        F5 HT marc:   5 pts — ritmo inicial
-        H2H: aplicado externamente (+25/+12/0)
-        """
-        s = 0
-        bd = []
-
-        ft_marc = stats.get('avg_scored_ft_5j', stats.get('avg_goals_scored_ft', 0))
-        ht_marc = stats.get('avg_scored_ht_5j', stats.get('avg_goals_scored_ht', 0))
-        win_pct = stats.get('win_pct_5j', stats.get('win_pct', 0))
-        forma   = stats.get('forma_recente_pct', 50)
-
-        # F1 — FT MARCADO (até 35 pts) — fator dominante
-        # Escala calibrada para ligas de esoccer (avg típico 2-5 gols/j)
-        if ft_marc >= 4.5:   pts = 35
-        elif ft_marc >= 3.5: pts = 28
-        elif ft_marc >= 2.8: pts = 20
-        elif ft_marc >= 2.0: pts = 12
-        elif ft_marc >= 1.5: pts = 6
-        else:                pts = 0
-        s += pts
-        bd.append(f"FT marc {ft_marc:.1f}→+{pts}")
-
-        # F2 — FORMA RECENTE 5j (até 20 pts) — tendência atual
-        # forma_recente_pct: 0-100% baseado em W/D/L recentes
-        if forma >= 80:   pts = 20
-        elif forma >= 65: pts = 14
-        elif forma >= 50: pts = 8
-        elif forma >= 35: pts = 3
-        else:             pts = 0
-        s += pts
-        bd.append(f"Forma {forma:.0f}%→+{pts}")
-
-        # F3 — FT SOFRIDO DO ADVERSÁRIO (até 10 pts)
-        # Mais gols sofridos pelo adversário = mais fácil marcar
-        if opp_stats is not None:
-            opp_sofr = opp_stats.get('avg_conceded_ft_5j', opp_stats.get('avg_goals_conceded_ft', 2.5))
-        else:
-            opp_sofr = 2.5  # neutro
-        if opp_sofr >= 4.0:   pts = 10
-        elif opp_sofr >= 3.0: pts = 7
-        elif opp_sofr >= 2.0: pts = 4
-        elif opp_sofr >= 1.2: pts = 1
-        else:                 pts = 0
-        s += pts
-        bd.append(f"Opp sofre {opp_sofr:.1f}→+{pts}")
-
-        # F4 — WIN RATE 5j (até 5 pts)
-        if win_pct >= 70:   pts = 5
-        elif win_pct >= 55: pts = 3
-        elif win_pct >= 40: pts = 1
-        else:               pts = 0
-        s += pts
-        bd.append(f"Win {win_pct:.0f}%→+{pts}")
-
-        # F5 — HT MARCADO (até 5 pts) — ritmo inicial
-        if ht_marc >= 2.5:   pts = 5
-        elif ht_marc >= 1.5: pts = 3
-        elif ht_marc >= 0.8: pts = 1
-        else:                pts = 0
-        s += pts
-        bd.append(f"HT marc {ht_marc:.1f}→+{pts}")
-
-        return min(75, s), bd  # teto 75 antes do H2H (que adiciona até 25)
-
-    sc_home, bd_home = score_player(home_stats, opp_stats=away_stats, label="home")
-    sc_away, bd_away = score_player(away_stats, opp_stats=home_stats, label="away")
-
-    # H2H — escala suave de 5 níveis (sem degraus bruscos)
-    # Eder 60% H2H antes recebia +15, agora recebe +20 (faixa 58-64%)
-    if h2h_stats is not None:
-        h2h_win = h2h_stats.get('win_pct', 50)
-        if h2h_win >= 65:
-            # Domínio claro no confronto direto
-            sc_home = min(100, sc_home + 25)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+25")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+0")
-        elif h2h_win >= 58:
-            # Ligeira vantagem — degrau suavizado (era 55%→+15)
-            sc_home = min(100, sc_home + 20)
-            sc_away = min(100, sc_away + 3)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+20")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+3")
-        elif h2h_win >= 52:
-            # Paridade com leve favor home
-            sc_home = min(100, sc_home + 15)
-            sc_away = min(100, sc_away + 8)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+15")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+8")
-        elif h2h_win >= 46:
-            # Paridade equilibrada
-            sc_home = min(100, sc_home + 12)
-            sc_away = min(100, sc_away + 12)
-            bd_home.append(f"H2H paridade→+12")
-            bd_away.append(f"H2H paridade→+12")
-        elif h2h_win >= 42:
-            # Leve desvantagem home
-            sc_home = min(100, sc_home + 8)
-            sc_away = min(100, sc_away + 15)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+8")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+15")
-        elif h2h_win >= 35:
-            # Desvantagem clara home
-            sc_home = min(100, sc_home + 3)
-            sc_away = min(100, sc_away + 20)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+3")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+20")
-        else:
-            # Domínio do away
-            sc_away = min(100, sc_away + 25)
-            bd_home.append(f"H2H {h2h_win:.0f}%→+0")
-            bd_away.append(f"H2H {100-h2h_win:.0f}%→+25")
-    else:
-        # Sem H2H: +12 neutro para ambos
-        sc_home = min(100, sc_home + 12)
-        sc_away = min(100, sc_away + 12)
-
-    avg_conf = (sc_home + sc_away) / 2
+    ht_totals = [int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)
+                 for m in games]
+    ft_totals = [int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
+                 for m in games]
+    btts_ht   = [1 if int(m.get('home_score_ht', 0) or 0) > 0
+                      and int(m.get('away_score_ht', 0) or 0) > 0 else 0 for m in games]
+    btts_ft   = [1 if int(m.get('home_score_ft', 0) or 0) > 0
+                      and int(m.get('away_score_ft', 0) or 0) > 0 else 0 for m in games]
 
     return {
-        'home_confidence': sc_home,
-        'away_confidence': sc_away,
-        'avg_confidence':  avg_conf,
-        'breakdown_home':  bd_home,
-        'breakdown_away':  bd_away,
+        'avg_ht':      sum(ht_totals) / n,
+        'avg_ft':      sum(ft_totals) / n,
+        'btts_ht_pct': sum(btts_ht) / n * 100,
+        'btts_ft_pct': sum(btts_ft) / n * 100,
+        'games':       n,
+        'estimated':   False,
     }
 
+# =============================================================================
+# BUSCA DE ODD NO MERCADO
+# =============================================================================
+def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
+    """
+    Retorna a melhor odd para a estratégia pedida.
+
+    category: 'ht_total' | 'ft_total' | 'ht_btts' | 'ft_btts' | 'individual'
+    value: float linha (0.5, 1.5, ...) ou None para BTTS
+    player_raw: nome bruto do jogador para bets individuais
+    """
+    best = None
+    for ln in open_lines:
+        mkt   = ln.get('market_name', '').lower()
+        name  = ln.get('odd_name', '').lower()
+        price = float(ln.get('price', 0))
+
+        if price < min_odd:
+            continue
+        if 'menos' in name or 'under' in name:
+            continue
+
+        sv_val = None
+        sv_raw = str(ln.get('odd_sv', '')).replace('+', '').strip()
+        try:
+            sv_val = float(sv_raw.split('|')[-1].strip())
+        except:
+            pass
+
+        # HT: mercado de 1º tempo — NÃO inclui 'tempo' sozinho ('Tempo Normal' é FT)
+        is_ht_mkt = any(x in mkt for x in
+                        ['1º', '1ª', '1st', 'primeiro', 'half', 'período', '1 per'])
+        # FIX: mercados individuais ('Rose - Total de Gols') têm jogador antes do ' - '
+        _mkt_prefix = ln.get('market_name', '').split(' - ')[0].lower()
+        _is_player_mkt = (' - ' in ln.get('market_name', '') and
+                          any(x in mkt for x in ['total', 'gol', 'score']) and
+                          not any(x in _mkt_prefix for x in
+                                  ['1º', '1ª', 'total', 'gol', 'ambas', 'ambos']))
+        is_total_mkt = (any(x in mkt for x in ['total', 'gol', 'score', 'num'])
+                        and not _is_player_mkt)
+        is_over = any(x in name for x in ['mais', 'over', 'acima', '+'])
+        is_btts = any(x in mkt for x in ['ambas', 'btts', 'ambos'])
+
+        if category == 'ht_total':
+            if is_ht_mkt and is_total_mkt and is_over and sv_val is not None:
+                if abs(sv_val - value) < 0.1:
+                    if best is None or price > best:
+                        best = price
+
+        elif category == 'ft_total':
+            if not is_ht_mkt and is_total_mkt and is_over and sv_val is not None:
+                if abs(sv_val - value) < 0.1:
+                    if best is None or price > best:
+                        best = price
+
+        elif category == 'ht_btts':
+            if is_ht_mkt and is_btts:
+                if 'sim' in name or 'yes' in name or 'ambas' in name or 'both' in name:
+                    if best is None or price > best:
+                        best = price
+
+        elif category == 'ft_btts':
+            if not is_ht_mkt and is_btts:
+                if 'sim' in name or 'yes' in name or 'ambas' in name or 'both' in name:
+                    if best is None or price > best:
+                        best = price
+
+        elif category == 'individual' and player_raw:
+            # FIX: usar só o nick limpo — 'Man City (fantazer)' → busca 'fantazer'
+            p_nick_lo = extract_nick(player_raw).lower()
+            in_mkt  = p_nick_lo in mkt
+            in_name = p_nick_lo in name
+            if (in_mkt or in_name) and is_over and sv_val is not None:
+                if abs(sv_val - value) < 0.1:
+                    if best is None or price > best:
+                        best = price
+
+    return best
 
 # =============================================================================
-# ✅ CORREÇÃO #6: LÓGICA DE ESTRATÉGIAS COMPLETAMENTE REESCRITA
-#
-# Problemas do código original que geravam reds:
-# 1. Apostava em gols INDIVIDUAIS do jogador mas usava thresholds do jogo TOTAL
-# 2. Não verificava se a média de gols individuais suportava o threshold
-# 3. Não considerava o perfil de pontuação da liga
-# 4. Enviava múltiplas apostas no mesmo jogo (HT + FT + Individual)
-# 5. Não tinha floor mínimo de gols por jogo para ligas específicas
+# AVALIAÇÃO DAS ESTRATÉGIAS
 # =============================================================================
-
-def evaluate_open_lines(event, home_stats, away_stats, all_league_stats, open_lines,
-                        avg_confidence,
-                        gate_individual=True, gate_total=True,
-                        home_confidence=0, away_confidence=0):
+def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     """
-    Avaliação com 6 filtros para atingir 75-85% de assertividade:
-    1. Gate duplo individual vs total
-    2. Projeção de ritmo ao vivo (tempo restante vs gols necessários)
-    3. Sem fallback artificial de 75% — sem dados históricos = sem aposta
-    4. Odd mínima 1.70
-    5. needed reduzido para 1.5 em jogos tardios (>60% do tempo)
-    6. Gate de confiança correlacionado com nível da aposta
+    Avalia estratégias HT (durante o 1ºT) e FT (durante o 2ºT).
+
+    Detecção de período:
+      is_ht = minute < ht_dur       → estamos no 1ºT
+      is_ft = minute >= ht_dur      → estamos no 2ºT
+
+    Regras de placar por aposta:
+      HT +0.5  : 0x0
+      HT +1.5  : 0x0 | 1x0 | 0x1            (total_ht <= 1)
+      HT +2.5  : 1x0 | 0x1 | 1x1            (1 <= total_ht <= 2)
+      HT BTTS  : total_ht <= 1 e NÃO ambos marcaram
+      FT +1.5  : total_ft == 0
+      FT +2.5  : total_ft < 2  (0 ou 1)
+      FT +3.5  : total_ft < 3  (0, 1 ou 2)
+      FT +4.5  : total_ft <= 3 (0, 1, 2 ou 3)
+      FT BTTS  : total_ft <= 1 e NÃO ambos marcaram
+
+    Gate geral HT: liga_avg_ht >= gate_league E p1_avg_ht >= gate_p E p2_avg_ht >= gate_p
+    Gate geral FT: liga_avg_ft >= gate_league E p1_avg_ft >= gate_p E p2_avg_ft >= gate_p
+
+    Resultado: max 1 tip HT + max 1 tip FT (melhor score de cada grupo).
     """
-    candidates = []
+    candidates = {'HT': [], 'FT': []}
 
-    timer   = event.get("timer", {})
-    minute  = timer.get("minute", 0)
-    second  = timer.get("second", 0)
+    league_key = event.get('mappedLeague', '')
+    crit        = get_crit(league_key)
+    profile     = get_profile(league_key)
+    ht_dur      = profile['ht_dur']    # minutos do 1ºT
+    duration    = profile['duration']  # duração total do jogo
+    min_odd     = crit['min_odd']
 
-    league_key    = event.get("mappedLeague", "")
-    home_raw      = event.get("homeRaw", "").strip()
-    away_raw      = event.get("awayRaw", "").strip()
-    home_player   = event.get("homePlayer", "P1")
-    away_player   = event.get("awayPlayer", "P2")
+    timer    = event.get('timer', {})
+    minute   = timer.get('minute', 0)
+    second   = timer.get('second', 0)
+    score    = event.get('score', {})
+    hg       = score.get('home', 0)    # gols home acumulados até agora
+    ag       = score.get('away', 0)    # gols away acumulados até agora
+    total_ft = hg + ag                 # total de gols no jogo até agora
 
-    league_profile  = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
-    min_player_avg  = league_profile["min_player_avg"]
-    duration_min    = league_profile.get("duration_min", 8)
+    # Durante o 1ºT: hg/ag são os gols do HT
+    total_ht = total_ft
 
-    h2h = get_h2h_stats(home_player, away_player)
+    home_raw = event.get('homeRaw', event.get('homePlayer', ''))
+    away_raw = event.get('awayRaw', event.get('awayPlayer', ''))
 
-    def get_weighted_val(h_val, a_val, h2h_val):
-        base = (h_val + a_val) / 2
-        if h2h is not None and h2h_val > 0:
-            return base * 0.6 + h2h_val * 0.4
-        return base
+    elapsed_sec  = minute * 60 + second
+    ht_max_sec   = ht_dur * 60 * 0.90   # janela HT = até 90% do 1ºT
+    is_ht        = elapsed_sec < ht_dur * 60   # ainda no 1ºT
+    is_ft        = elapsed_sec >= ht_dur * 60  # já no 2ºT
 
-    MAX_HT_TIME    = int(duration_min * 60 * 0.55)
-    score          = event.get("score", {})
-    hg             = score.get("home", 0)
-    ag             = score.get("away", 0)
-    total_now      = hg + ag
-    pct_elapsed    = minute / max(1, duration_min)
-    mins_restantes = max(0.5, duration_min - minute - (second / 60))
+    # Stats dos players
+    p1_ht_marc = p1_st.get('avg_ht', 0)
+    p1_ht_sof  = p1_st.get('avg_ht_sof', 0)
+    p1_ft_marc = p1_st.get('avg_ft', 0)
+    p1_ft_sof  = p1_st.get('avg_ft_sof', 0)
 
-    combined_ft_avg      = home_stats["avg_goals_scored_ft"] + away_stats["avg_goals_scored_ft"]
-    taxa_historica_jogo  = combined_ft_avg / duration_min  # gols/min esperados para o jogo
+    p2_ht_marc = p2_st.get('avg_ht', 0)
+    p2_ht_sof  = p2_st.get('avg_ht_sof', 0)
+    p2_ft_marc = p2_st.get('avg_ft', 0)
+    p2_ft_sof  = p2_st.get('avg_ft_sof', 0)
 
-    def ritmo_viavel(gols_faltando, margem=1.15):
-        if gols_faltando <= 0:
-            return True
-        taxa_necessaria = gols_faltando / mins_restantes
-        ok = taxa_necessaria <= taxa_historica_jogo * margem
-        if not ok:
-            print(f"[BLOCKED RITMO] precisa {taxa_necessaria:.2f}g/min, histórico {taxa_historica_jogo:.2f}g/min (margem {margem}x)")
-        return ok
+    # Stats da liga
+    lg_avg_ht = lg_st.get('avg_ht', 0)
+    lg_avg_ft = lg_st.get('avg_ft', 0)
 
-    def parse_line(sv_str):
-        try: return float(sv_str.split("|")[-1])
-        except: return None
+    def skip(reason):
+        print(f"    [SKIP] {reason}")
 
-    def find_over_line(market_name_query):
-        best_line = None
-        q_lower = market_name_query.lower()
-        for line in open_lines:
-            m_lower = line["market_name"].lower()
-            if q_lower in m_lower:
-                if "tempo" not in q_lower and "tempo" in m_lower: continue
-                if "mais de" in line["odd_name"].lower() or line["price"] > 0:
-                    if "menos" in line["odd_name"].lower(): continue
-                    if line["price"] < 1.70: continue
-                    sv_val = parse_line(line["odd_sv"])
-                    if sv_val is not None:
-                        if best_line is None or sv_val < best_line["value"]:
-                            best_line = {"value": sv_val, "odd_name": line["odd_name"], "price": line["price"]}
-        return best_line
+    # ── Gate geral HT ──────────────────────────────────────────────
+    ht_gate = (
+        lg_avg_ht  >= crit['ht_gate_league'] and
+        p1_ht_marc >= crit['ht_gate_p'] and
+        p2_ht_marc >= crit['ht_gate_p']
+    )
 
-    # =========================================================================
-    # HT — Apostas de primeiro tempo
-    # Critérios do JOGADOR: ht_scored_05_pct/ht_scored_15_pct/ht_btts_pct
-    # =========================================================================
-    if gate_total and (minute * 60 + second) <= MAX_HT_TIME and total_now == 0:
-        ht_line = find_over_line("1º tempo - total") or find_over_line("1ª tempo - Total de gols")
-        if ht_line:
-            val = ht_line["value"]
-            combined_ht_avg = home_stats["avg_goals_scored_ht"] + away_stats["avg_goals_scored_ht"]
-            gols_faltando_ht = max(0, val + 0.5 - total_now)
-            ritmo_ok = ritmo_viavel(gols_faltando_ht)
-            avg_gate_ok = combined_ht_avg >= (val + 0.5)
+    # ── Gate geral FT ──────────────────────────────────────────────
+    ft_gate = (
+        lg_avg_ft  >= crit['ft_gate_league'] and
+        p1_ft_marc >= crit['ft_gate_p'] and
+        p2_ft_marc >= crit['ft_gate_p']
+    )
 
-            # w_pct baseado em % histórica do JOGO (ambos os jogadores)
-            h2h_ht_val = h2h.get(f"ht_over_{str(val).replace('.','')}_pct", 0) if h2h else 0
-            w_pct = get_weighted_val(
-                home_stats.get(f"ht_over_{str(val).replace('.','')}_pct", 0),
-                away_stats.get(f"ht_over_{str(val).replace('.','')}_pct", 0),
-                h2h_ht_val
-            )
-            # BTTS HT médio dos jogadores
-            btts_ht_avg = (home_stats.get("ht_btts_pct", 0) + away_stats.get("ht_btts_pct", 0)) / 2
+    # ══════════════════════════════════════════════════════════════
+    # APOSTAS HT — só no 1ºT (is_ht) e só se gate HT passou
+    # ══════════════════════════════════════════════════════════════
+    if is_ht and elapsed_sec <= ht_max_sec:
+        if not ht_gate:
+            skip(f"Gate HT: liga={lg_avg_ht:.1f}(min {crit['ht_gate_league']}) "
+                 f"p1={p1_ht_marc:.1f} p2={p2_ht_marc:.1f}(min {crit['ht_gate_p']})")
+        else:
+            # ── +0.5 HT | Placar: 0x0 ──────────────────────────────
+            c = crit['ht_05']
+            if hg == 0 and ag == 0:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ +0.5 GOL HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
 
-            if val == 0.5 and w_pct >= 100 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
-                candidates.append({"name": "⚽ +0.5 GOL HT",  "odd": ht_line["price"], "score": w_pct * (ht_line["price"] - 1), "confidence_pct": w_pct})
-            elif val == 1.5 and w_pct >= 90 and btts_ht_avg >= 88 and avg_gate_ok and ritmo_ok:
-                candidates.append({"name": "⚽ +1.5 GOLS HT", "odd": ht_line["price"], "score": w_pct * (ht_line["price"] - 1), "confidence_pct": w_pct})
-            elif w_pct > 0:
-                print(f"[BLOCKED HT] +{val}: w_pct={w_pct:.0f}% btts_ht={btts_ht_avg:.0f}% avg_gate={'✅' if avg_gate_ok else '❌'} ritmo={'✅' if ritmo_ok else '❌'}")
+            # ── +1.5 HT | Placar: 0x0 | 1x0 | 0x1 ────────────────
+            c = crit['ht_15']
+            if total_ht <= 1:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ +1.5 GOLS HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+1.5 HT: placar {hg}x{ag} total={total_ht} (precisa <=1)")
 
-    # =========================================================================
-    # FT TOTAL — Apostas de total do jogo
-    # Critérios: ft_over_X5_pct (média dos dois), ritmo, confiança >= 70%
-    # =========================================================================
-    total_ft_line = find_over_line("Total de Gols") if gate_total else None
-    if total_ft_line:
-        val    = total_ft_line["value"]
-        needed = val - total_now
-        needed_limit = 1.5 if pct_elapsed > 0.60 else 2.0
-        avg_gate_ok  = combined_ft_avg >= (val * 0.85)
-        ritmo_ok     = ritmo_viavel(needed)
+            # ── +2.5 HT | Placar: 1x0 | 0x1 | 1x1 ────────────────
+            c = crit['ht_25']
+            if 1 <= total_ht <= 2:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ht_total', 2.5, min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ +2.5 GOLS HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+2.5 HT: placar {hg}x{ag} total={total_ht} (precisa 1-2)")
 
-        if needed <= needed_limit and avg_gate_ok and ritmo_ok:
-            key_str = str(val).replace(".", "")
-            h2h_val = h2h.get(f"ft_over_{key_str}_pct", 0) if h2h else 0
-            w_pct = get_weighted_val(
-                home_stats.get(f"ft_over_{key_str}_pct", 0),
-                away_stats.get(f"ft_over_{key_str}_pct", 0),
-                h2h_val
-            )
-            # Thresholds históricos por linha (SHORT/LONG já filtrados na liga)
-            threshold_map = {1.5: 92, 2.5: 88, 3.5: 85, 4.5: 83, 5.5: 81}
-            min_pct = threshold_map.get(val, 85)
-            # Confiança mínima sobe com nível da aposta (todos >= 70%)
-            conf_gate_map = {1.5: 70, 2.5: 70, 3.5: 72, 4.5: 75, 5.5: 78}
-            min_conf = conf_gate_map.get(val, 70)
+            # ── BTTS HT | Placar: total <= 1, NÃO ambos marcaram ──
+            c = crit['ht_btts']
+            if total_ht <= 1 and not (hg > 0 and ag > 0):
+                if (p1_ht_marc >= c['p1_marc'] and p1_ht_sof >= c['p1_sof'] and
+                        p2_ht_marc >= c['p2_marc'] and p2_ht_sof >= c['p2_sof']):
+                    odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ BTTS HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
+                        })
+            else:
+                if total_ht > 1:
+                    skip(f"BTTS HT: total={total_ht} (precisa <=1)")
+                elif hg > 0 and ag > 0:
+                    skip(f"BTTS HT: placar {hg}x{ag} — ambos já marcaram")
 
-            if w_pct >= min_pct and avg_confidence >= min_conf:
-                candidates.append({
-                    "name": f"⚽ +{val} GOLS FT (TOTAL)",
-                    "odd": total_ft_line["price"],
-                    "score": w_pct * (total_ft_line["price"] - 1),
-                    "confidence_pct": w_pct
-                })
-            elif w_pct > 0:
-                print(f"[BLOCKED FT] +{val}: w_pct={w_pct:.0f}% (min={min_pct}%) conf={avg_confidence:.0f}% (min={min_conf}%)")
+    # ══════════════════════════════════════════════════════════════
+    # APOSTAS FT — só no 2ºT (is_ft) e só se gate FT passou
+    # ══════════════════════════════════════════════════════════════
+    if is_ft:
+        if not ft_gate:
+            skip(f"Gate FT: liga={lg_avg_ft:.1f}(min {crit['ft_gate_league']}) "
+                 f"p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']})")
+        else:
+            # ── +1.5 FT | Placar: 0 gols ────────────────────────────
+            c = crit['ft_15']
+            if total_ft == 0:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name': '⚽ +1.5 GOLS FT (TOTAL)',
+                            'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+1.5 FT: placar {hg}x{ag} total={total_ft} (precisa 0 gols)")
 
-    # =========================================================================
-    # INDIVIDUAL — Gols de 1 jogador
-    # NOVO: avalia MARCADOS do jogador + SOFRIDOS do adversário
-    # =========================================================================
-    def evaluate_individual_player(player_raw, player_stats, opponent_stats, player_goals_now, player_conf):
-        # Gate de confiança global 70%
-        if player_conf < 70:
-            return None
-        avg_individual = player_stats["avg_goals_scored_ft"]
-        if avg_individual < min_player_avg:
-            print(f"[BLOCKED IND] {player_raw}: média {avg_individual:.1f} < mínimo {min_player_avg}")
-            return None
-        ind_line = find_over_line(f"{player_raw} total")
-        if not ind_line:
-            return None
-        v         = ind_line["value"]
+            # ── +2.5 FT | Placar: < 2 gols ─────────────────────────
+            c = crit['ft_25']
+            if total_ft < 2:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name': '⚽ +2.5 GOLS FT (TOTAL)',
+                            'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+2.5 FT: placar {hg}x{ag} total={total_ft} (precisa <2)")
 
-        # ── LINHAS +4.5 e +5.5 — exigem threshold histórico mais alto ─────
-        # Alta variância em jogos curtos → precisamos de dados reais.
-        # Bloqueamos APENAS se o jogador nunca atingiu essa linha (sample=0).
-        # Se tem histórico (mesmo que pequeno), usa o % real com threshold elevado.
-        LINHAS_ALTA_VARIANCIA = {4.5, 5.5}
-        if v in LINHAS_ALTA_VARIANCIA:
-            key_check = str(v).replace(".", "")
-            sample_size = player_stats.get(f"ft_scored_{key_check}_count", 0)
-            if sample_size == 0:
-                print(f"[BLOCKED IND LINHA] {player_raw}: +{v} bloqueado (sem histórico para essa linha)")
-                return None
-            # Com histórico disponível, threshold mais alto para compensar variância
-            # Será aplicado pelo min_pct_ind abaixo (já está em 70% para +4.5)
-        needed_v  = v - player_goals_now
-        limit_v   = 1.5 if pct_elapsed > 0.60 else 2.0
-        if needed_v > limit_v:
-            return None
-        # Ritmo individual
-        taxa_ind = avg_individual / duration_min
-        if needed_v > 0:
-            taxa_need = needed_v / mins_restantes
-            if taxa_need > taxa_ind * 1.20:
-                print(f"[BLOCKED IND RITMO] {player_raw}: {taxa_need:.2f}g/min > histórico {taxa_ind:.2f}g/min")
-                return None
-        key_str    = str(v).replace(".", "")
-        player_pct = player_stats.get(f"ft_scored_{key_str}_pct", 0)
-        # Sem dados históricos = sem aposta
-        if player_pct == 0:
-            print(f"[BLOCKED IND PCT] {player_raw}: sem dados para +{v} FT")
-            return None
-        # Gate de confiança correlacionado com linha
-        conf_ind_map = {1.5: 70, 2.5: 72, 3.5: 75, 4.5: 78}
-        if player_conf < conf_ind_map.get(v, 72):
-            print(f"[BLOCKED IND CONF] {player_raw}: conf={player_conf:.0f}% < {conf_ind_map.get(v,72)}% para +{v}")
-            return None
-        # Threshold histórico mínimo por linha
-        min_pct_ind = {1.5: 85, 2.5: 80, 3.5: 75, 4.5: 70}
-        if player_pct < min_pct_ind.get(v, 75):
-            return None
+            # ── +3.5 FT | Placar: < 3 gols ─────────────────────────
+            c = crit['ft_35']
+            if total_ft < 3:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name': '⚽ +3.5 GOLS FT (TOTAL)',
+                            'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+3.5 FT: placar {hg}x{ag} total={total_ft} (precisa <3)")
 
-        # ── ANÁLISE DE GOLS SOFRIDOS DO ADVERSÁRIO ──────────────────────────
-        # Se o adversário concede muitos gols, favorece nossa aposta.
-        # Se concede poucos, penaliza.
-        # Gols sofridos do adversário = gols_concedidos por jogo (avg_goals_conceded_ft)
-        opp_conceded_avg = opponent_stats.get("avg_goals_conceded_ft", 0)
-        opp_conceded_5j  = opponent_stats.get("avg_conceded_ft_5j", opp_conceded_avg)
+            # ── +4.5 FT | Placar: <= 3 gols ────────────────────────
+            c = crit['ft_45']
+            if total_ft <= 3:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name': '⚽ +4.5 GOLS FT (TOTAL)',
+                            'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+4.5 FT: placar {hg}x{ag} total={total_ft} (precisa <=3)")
 
-        # Threshold de gols concedidos: adversário precisa conceder >= min_player_avg
-        # (se ele é muito fechado, dificilmente nosso jogador vai atingir o threshold)
-        if opp_conceded_5j < min_player_avg * 0.8:
-            print(f"[BLOCKED IND OPP] {player_raw}: adversário concede apenas {opp_conceded_5j:.1f}g/j (mín. {min_player_avg*0.8:.1f})")
-            return None
+            # ── BTTS FT | Placar: <= 1 gol, NÃO ambos marcaram ─────
+            c = crit['ft_btts']
+            if total_ft <= 1 and not (hg > 0 and ag > 0):
+                if (p1_ft_marc >= c['p1_marc'] and p1_ft_sof >= c['p1_sof'] and
+                        p2_ft_marc >= c['p2_marc'] and p2_ft_sof >= c['p2_sof']):
+                    odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name': '⚽ BTTS FT (TOTAL)',
+                            'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
+                        })
+            else:
+                if total_ft > 1:
+                    skip(f"BTTS FT: total={total_ft} (precisa <=1)")
+                elif hg > 0 and ag > 0:
+                    skip(f"BTTS FT: placar {hg}x{ag} — ambos já marcaram")
 
-        # Boost no score se o adversário é muito vazado
-        opp_boost = 1.0
-        if opp_conceded_5j >= avg_individual * 1.2:
-            opp_boost = 1.10  # +10% no score
-        elif opp_conceded_5j < avg_individual * 0.8:
-            opp_boost = 0.90  # -10% no score (adversário fecha bem)
-
-        score_val = player_pct * (ind_line["price"] - 1) * opp_boost
-        print(f"[IND OK] {player_raw} +{v}: marcados={player_pct:.0f}% opp_concede={opp_conceded_5j:.1f}g boost={opp_boost}")
-        return {
-            "name": f"⚽ {player_raw} +{v} GOLS FT",
-            "odd": ind_line["price"],
-            "score": score_val,
-            "confidence_pct": player_pct
-        }
-
-    if gate_individual:
-        home_cand = evaluate_individual_player(home_raw, home_stats, away_stats, hg, home_confidence)
-        if home_cand: candidates.append(home_cand)
-        away_cand = evaluate_individual_player(away_raw, away_stats, home_stats, ag, away_confidence)
-        if away_cand: candidates.append(away_cand)
-
-    if not candidates:
-        return []
-
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    best = candidates[0]
-    print(f"[SELEÇÃO] {best['name']} (score={best['score']:.1f}, conf={best['confidence_pct']:.0f}%)")
-    if len(candidates) > 1:
-        print(f"[SELEÇÃO] Descartados: {[c['name'] for c in candidates[1:]]}")
-    return [{"name": best["name"], "odd": best["odd"]}]
-
+    # ── Seleção: melhor HT + melhor FT ─────────────────────────────
+    chosen = []
+    for cat in ('HT', 'FT'):
+        if candidates[cat]:
+            candidates[cat].sort(key=lambda x: x['score'], reverse=True)
+            chosen.append(candidates[cat][0])
+            if len(candidates[cat]) > 1:
+                print(f"    [{cat} descartados] {[c['name'] for c in candidates[cat][1:]]}")
+    return chosen
 
 
 # =============================================================================
 # FORMATAÇÃO DE MENSAGENS
 # =============================================================================
-
-def make_player_bar(avg_goals, max_goals=6):
-    """Gera barra visual de média de gols. Ex: ████████░░ 3.8g/j"""
-    filled = min(10, round((avg_goals / max_goals) * 10))
-    bar = "█" * filled + "░" * (10 - filled)
-    return f"{bar} {avg_goals:.1f}g/j"
+def _bar(val, max_val=6.0):
+    filled = min(10, round(val / max_val * 10))
+    return "█" * filled + "░" * (10 - filled)
 
 
-def make_confidence_semaphore(confidence):
-    """Semáforo de confiança: verde/amarelo/vermelho."""
-    if confidence >= 85:
-        return "🟢"
-    elif confidence >= 75:
-        return "🟡"
+def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
+    home   = event.get('homePlayer', '?')
+    away   = event.get('awayPlayer', '?')
+    timer  = event.get('timer', {}).get('formatted', '00:00')
+    score  = event.get('scoreboard', '0-0')
+    league = event.get('mappedLeague') or event.get('leagueName', '?')
+
+    p1_ft  = p1_st.get('avg_ft', 0) if p1_st else 0
+    p2_ft  = p2_st.get('avg_ft', 0) if p2_st else 0
+    p1_ht  = p1_st.get('avg_ht', 0) if p1_st else 0
+    p2_ht  = p2_st.get('avg_ht', 0) if p2_st else 0
+    lg_ht  = lg_st.get('avg_ht', 0) if lg_st else 0
+    lg_ft  = lg_st.get('avg_ft', 0) if lg_st else 0
+
+    # Link ao vivo
+    eid = event.get('id', '')
+    sb_link = event.get('superbetLink', '')
+    if sb_link:
+        link = f'🎲 <a href="{sb_link}">VER AO VIVO (Superbet)</a>'
+    elif eid:
+        clean = str(eid).replace('sb-', '')
+        url   = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={clean}&sportId=66"
+        link  = f'🎲 <a href="{url}">VER AO VIVO (EstrelaBet)</a>'
     else:
-        return "🔴"
+        link  = ''
 
-
-def format_tip_message(event, strategy, obs_odd, home_stats_summary, away_stats_summary, liga_det=None, avg_confidence=None):
-    """
-    ✅ FORMATO OTIMIZADO — Decisão em 2 segundos, sem scroll.
-
-    Hierarquia:
-      1. Liga + Aposta + Odd  (topo — o que importa)
-      2. Semáforo + Placar + Tempo
-      3. Barras visuais dos jogadores
-      4. Rodapé: liga validada + BTTS + link
-    """
-    event_id   = event.get('id', '')
-    home_player = event.get('homePlayer', '?')
-    away_player = event.get('awayPlayer', '?')
-
-    timer      = event.get('timer', {})
-    time_str   = timer.get('formatted', '00:00')
-    scoreboard = event.get('scoreboard', '0-0')
-
-    # Limpar nome da liga
-    league_raw = event.get('leagueName', '')
-    mapped     = event.get('mappedLeague', league_raw)
-    league_display = mapped if mapped and mapped != 'Unknown' else league_raw
-
-    # Confidence e semáforo — usa valor passado diretamente ou fallback nos stats
-    if avg_confidence is not None:
-        avg_conf = avg_confidence
-    else:
-        home_conf = home_stats_summary.get('confidence', 0)
-        away_conf = away_stats_summary.get('confidence', 0)
-        avg_conf  = (home_conf + away_conf) / 2
-    semaphore = make_confidence_semaphore(avg_conf)
-
-    # Barras visuais dos jogadores
-    home_avg  = home_stats_summary.get('avg_goals_scored_ft', 0)
-    away_avg  = away_stats_summary.get('avg_goals_scored_ft', 0)
-    max_g     = max(home_avg, away_avg, 4.0)
-    home_bar  = make_player_bar(home_avg, max_g)
-    away_bar  = make_player_bar(away_avg, max_g)
-
-    # Padding para alinhar barras
-    h_len = len(home_player)
-    a_len = len(away_player)
-    pad   = max(h_len, a_len)
-    home_padded = home_player.ljust(pad)
-    away_padded = away_player.ljust(pad)
-
-    # Informações da liga (do filtro de qualidade)
-    if liga_det and liga_det.get('score', 0) >= 100:
-        liga_status = "Liga ✅"
-    elif liga_det:
-        pct = liga_det.get('score', 0)
-        liga_status = f"Liga {pct:.0f}%"
-    else:
-        liga_status = "Liga ✅"
-
-    # BTTS médio
-    btts = (home_stats_summary.get('btts_pct', 0) + away_stats_summary.get('btts_pct', 0)) / 2
-
-    # HT relevante
-    ht_pct = (home_stats_summary.get('ht_over_15_pct', 0) + away_stats_summary.get('ht_over_15_pct', 0)) / 2
-
-    # Link do jogo
-    link_str = ""
-    if event_id:
-        url = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={event_id}&sportId=66"
-        link_str = f'🎲 <a href="{url}">VER JOGO AO VIVO</a>'
-
-    # ── MONTAR MENSAGEM ──────────────────────────────────────
-    msg  = f"{semaphore} <b>{league_display} — {strategy}</b>\n"
-    msg += f"<b>@ {obs_odd}</b>  |  Conf: {avg_conf:.0f}%\n"
-    msg += f"⏱ {time_str}  📊 {scoreboard}\n"
+    pad  = max(len(home), len(away))
+    msg  = f"🎯 <b>{league} — {strategy}</b>\n"
+    msg += f"<b>@ {odd}</b>\n"
+    msg += f"⏱ {timer}  |  📊 {score}\n"
     msg += "─────────────────────\n"
-    msg += f"<b>{home_padded}</b>  {home_bar}\n"
-    msg += f"<b>{away_padded}</b>  {away_bar}\n"
+    msg += f"<b>{home.ljust(pad)}</b>  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft)}\n"
+    msg += f"<b>{away.ljust(pad)}</b>  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft)}\n"
     msg += "─────────────────────\n"
-    msg += f"{liga_status}  |  BTTS {btts:.0f}%  |  HT+1.5 {ht_pct:.0f}%"
-    if link_str:
-        msg += f"\n{link_str}"
-
+    msg += f"Liga: HT {lg_ht:.1f}g/j  |  FT {lg_ft:.1f}g/j"
+    if link:
+        msg += f"\n{link}"
     return msg
 
 
-def format_result_message(tip, ht_home, ht_away, ft_home, ft_away, result):
-    """
-    ✅ RESULTADO OTIMIZADO — Mostra quem marcou o quê + confidence original.
-    """
-    strategy    = tip.get('strategy', '')
-    league      = tip.get('league', '')
-    home_p      = tip.get('home_player', '?')
-    away_p      = tip.get('away_player', '?')
-    sent_odd    = tip.get('sent_odd', '')
-    tipped_nick = tip.get('tipped_player_nick', '')
-    conf        = tip.get('avg_confidence', None)
-
-    ft_total = ft_home + ft_away
-
-    if result == 'green':
-        emoji  = "✅"
-        status = "GREEN"
-    else:
-        emoji  = "❌"
-        status = "RED"
-
-    odd_str  = f" @ {sent_odd}" if sent_odd else ""
-    conf_str = f"  |  Conf: {conf:.0f}%" if conf is not None else ""
-
+def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
+    emoji  = "✅" if result == 'green' else "❌"
+    status = "GREEN" if result == 'green' else "RED"
+    strat  = tip.get('strategy', '')
+    league = tip.get('league', '')
+    home   = tip.get('home_player', '?')
+    away   = tip.get('away_player', '?')
+    odd    = tip.get('sent_odd', '')
+    ft_tot = ft_h + ft_a
+    odd_str = f" @ {odd}" if odd else ""
     msg  = f"{emoji} <b>{status}</b> — {league}\n"
-    msg += f"<b>{strategy}</b>{odd_str}{conf_str}\n"
+    msg += f"<b>{strat}</b>{odd_str}\n"
     msg += "─────────────────────\n"
-    msg += f"HT {ht_home}-{ht_away}  →  FT <b>{ft_home}-{ft_away}</b>  ({ft_total} gols)\n"
-
-    # Mostrar gols individuais se for aposta individual
-    if tipped_nick:
-        from_home = tipped_nick.upper() == (home_p or '').upper()
-        from_away = tipped_nick.upper() == (away_p or '').upper()
-        if from_home:
-            msg += f"<b>{home_p}</b>: {ft_home} gols  |  {away_p}: {ft_away} gols"
-        elif from_away:
-            msg += f"{home_p}: {ft_home} gols  |  <b>{away_p}</b>: {ft_away} gols"
+    msg += f"HT {ht_h}-{ht_a}  →  FT <b>{ft_h}-{ft_a}</b>  ({ft_tot} gols)\n"
+    # Para apostas HT, mostrar só placar HT
+    if 'HT' in strat and 'FT' not in strat:
+        msg += f"1ºT: {home} {ht_h} gols  |  {away} {ht_a} gols"
+    # Para apostas individuais, destacar o player apostado
+    elif '(TOTAL)' not in strat and 'BTTS' not in strat:
+        home_nick = extract_nick(home)
+        away_nick = extract_nick(away)
+        strat_up  = strat.upper()
+        if home_nick and home_nick in strat_up:
+            msg += f"<b>{home}: {ft_h} gols</b>  |  {away}: {ft_a} gols"
+        elif away_nick and away_nick in strat_up:
+            msg += f"{home}: {ft_h} gols  |  <b>{away}: {ft_a} gols</b>"
         else:
-            msg += f"{home_p}: {ft_home}  |  {away_p}: {ft_away}"
+            msg += f"{home}: {ft_h} gols  |  {away}: {ft_a} gols"
     else:
-        msg += f"{home_p}: {ft_home} gols  |  {away_p}: {ft_away} gols"
-
+        msg += f"{home}: {ft_h} gols  |  {away}: {ft_a} gols"
     return msg
 
-
-
-def format_league_stats_text(stats):
+# =============================================================================
+# MATCH DE RESULTADO
+# =============================================================================
+def find_result_match(tip, recent):
     """
-    Formato sem colunas: 1 linha por liga com barra de progresso.
-    Funciona perfeitamente no mobile sem depender de alinhamento.
+    Encontra a partida finalizada correspondente a uma tip.
+    Usa nome dos jogadores + janela temporal.
     """
-    LIGAS_MONITORADAS = {
-        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
-        "GT LEAGUE 12 MIN", "CLA 10 MIN", "H2H 8 MIN",
-        "VOLTA 6 MIN", "INT 8 MIN",
-    }
-    ORDER = [
-        "BATTLE 8 MIN", "VALHALLA CUP", "VALKYRIE CUP",
-        "GT LEAGUE 12 MIN", "CLA 10 MIN",
-        "H2H 8 MIN", "VOLTA 6 MIN", "INT 8 MIN",
-    ]
+    h_nick = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
+    a_nick = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
+    if not h_nick or not a_nick:
+        return None
 
-    def badge(avg):
-        n = round(avg / 10)
-        bar = "█" * n + "░" * (10 - n)
-        color = "🟢" if avg >= 78 else ("🟡" if avg >= 48 else "🔴")
-        return color, bar
+    tip_time = tip['sent_time']
+    if isinstance(tip_time, str):
+        tip_time = datetime.fromisoformat(tip_time)
+    if tip_time.tzinfo is None:
+        tip_time = tip_time.replace(tzinfo=MANAUS_TZ)
 
-    if not stats:
-        return "📊 <b>ANÁLISE DE LIGAS</b>\n\nSem dados disponíveis."
+    best, best_diff = None, float('inf')
 
-    filtered = {k: v for k, v in stats.items() if k in LIGAS_MONITORADAS}
-    if not filtered:
-        return "📊 <b>ANÁLISE DE LIGAS</b>\n\nAguardando dados das ligas monitoradas."
+    for m in recent:
+        m_h = extract_nick(m.get('home_player', '') or m.get('home_team', ''))
+        m_a = extract_nick(m.get('away_player', '') or m.get('away_team', ''))
 
-    scores = {}
-    for league, s in filtered.items():
-        scores[league] = (
-            s['ht']['o05'] + s['ht']['o15'] + s['ht']['btts'] +
-            s['ft']['o15'] + s['ft']['o25'] + s['ft']['btts']
-        ) / 6
-
-    best  = max(scores, key=scores.get)
-    worst = min(scores, key=scores.get)
-
-    now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
-    out = [f"📊 <b>LIGAS — últimos 5j</b>  <i>{now_str}</i>", ""]
-
-    for league in ORDER:
-        if league not in filtered:
+        # Aceita match parcial (nick contido)
+        h_ok = h_nick == m_h or h_nick in m_h or m_h in h_nick
+        a_ok = a_nick == m_a or a_nick in m_a or m_a in a_nick
+        if not (h_ok and a_ok):
             continue
-        avg          = scores[league]
-        color, bar   = badge(avg)
-        tag          = " 🏆" if league == best else (" ⚠️" if league == worst else "")
-        out.append(f"{color} <b>{league}</b>{tag}")
-        out.append(f"     {bar} {avg:.0f}%")
 
-    out.append("")
-    out.append(f"🏆 <b>{best}</b>  ⚠️ <b>{worst}</b>")
-    return "\n".join(out)
+        # Verificar se tem placar final
+        ft_h = m.get('home_score_ft')
+        ft_a = m.get('away_score_ft')
+        if ft_h is None or ft_a is None:
+            continue
 
+        # Janela temporal: entre -15 min e +90 min após envio da tip
+        dt_str = m.get('started_at') or m.get('data_realizacao', '')
+        try:
+            if 'T' in str(dt_str) or 'Z' in str(dt_str):
+                dt = datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
+            else:
+                dt = datetime.strptime(str(dt_str), '%d/%m/%Y %H:%M:%S')
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.astimezone(MANAUS_TZ)
+            delta = (dt - tip_time).total_seconds()
+            if -15 * 60 <= delta <= 90 * 60:
+                diff = abs(delta)
+                if diff < best_diff:
+                    best_diff = diff
+                    best = m
+        except:
+            continue
 
-async def update_league_stats(bot, recent_matches, force=False):
-    global last_league_summary, last_league_message_id, league_stats, last_league_update_time
-
-    try:
-        from collections import defaultdict
-        recent_matches = sorted(recent_matches, key=lambda x: x.get('data_realizacao', ''), reverse=True)
-
-        league_games = defaultdict(list)
-        for match in recent_matches:
-            league = match.get('league_name', '')
-            if not league or league == 'Unknown':
-                continue
-            ht_home = match.get('home_score_ht', 0) or 0
-            ht_away = match.get('away_score_ht', 0) or 0
-            ft_home = match.get('home_score_ft', 0) or 0
-            ft_away = match.get('away_score_ft', 0) or 0
-            league_games[league].append({
-                'ht_goals': ht_home + ht_away,
-                'ft_goals': ft_home + ft_away,
-                'ht_btts': 1 if ht_home > 0 and ht_away > 0 else 0,
-                'ft_btts': 1 if ft_home > 0 and ft_away > 0 else 0
-            })
-
-        stats = {}
-        for league, games in league_games.items():
-            if len(games) < 5:
-                continue
-            last_n = games[:5]
-            total  = len(last_n)
-            def calc(cond): return int(sum(1 for g in last_n if cond(g)) / total * 100)
-            stats[league] = {
-                'ht': {
-                    'o05':  calc(lambda g: g['ht_goals'] > 0),
-                    'o15':  calc(lambda g: g['ht_goals'] > 1),
-                    'btts': calc(lambda g: g['ht_btts']),
-                },
-                'ft': {
-                    'o15':  calc(lambda g: g['ft_goals'] > 1),
-                    'o25':  calc(lambda g: g['ft_goals'] > 2),
-                    'btts': calc(lambda g: g['ft_btts']),
-                },
-                'count': total
-            }
-
-        if not stats:
-            return
-
-        current_time = time.time()
-
-        # ✅ FIX #3: Removido o guard "if league_stats == stats: return"
-        # Motivo: impedia reenvio mesmo após reinício do bot, pois os dados
-        # eram iguais ao estado salvo. Agora o cooldown de 10min é suficiente.
-        # O guard de "dados iguais" só bloqueava sem benefício real.
-
-        # Cooldown de 10 min entre envios (evita spam) — exceto se force=True
-        if not force and last_league_update_time > 0 and current_time - last_league_update_time < 600:
-            league_stats = stats  # Atualiza o cache mesmo sem enviar
-            return
-
-        league_stats            = stats
-        last_league_update_time = current_time
-
-        # ✅ Texto rico substitui imagem PNG
-        league_text = format_league_stats_text(stats)
-
-        if last_league_message_id:
-            try:
-                await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_message_id)
-            except:
-                pass
-
-        msg = await bot.send_message(
-            chat_id=CHAT_ID,
-            text=league_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-
-        last_league_message_id = msg.message_id
-        save_state()
-        print("[✓] Resumo das ligas atualizado (texto)")
-
-    except Exception as e:
-        print(f"[ERROR] update_league_stats: {e}")
-
+    return best
 
 # =============================================================================
-# ENVIO DE MENSAGENS
+# ENVIO DE TIP
 # =============================================================================
+async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
+    """Envia uma tip e registra no estado global."""
+    global sent_tips, sent_keys
 
-async def send_tip(bot, event, strategy, obs_odd, home_stats, away_stats, avg_confidence=0):
-    global sent_tips, sent_match_ids
+    strategy = tip_info['name']
+    odd      = tip_info['odd']
+    category = tip_info.get('category', 'FT')  # 'HT' ou 'FT'
     event_id = event.get('id')
-    period = 'HT' if 'HT' in strategy.upper() else 'FT'
-    event_base_key = f"{event_id}_ANY"
-    if event_base_key in sent_match_ids:
-        print(f"[SKIP] Evento {event_id} já teve tip enviada.")
+    key      = f"{event_id}_{category}"
+
+    if key in sent_keys:
+        print(f"[SKIP] {key} já enviado")
         return
 
+    # Verificar cooldown dos jogadores
+    for raw in [event.get('homeRaw', ''), event.get('awayRaw', '')]:
+        blocked, mins = is_player_blocked(raw)
+        if blocked:
+            print(f"[COOLDOWN] {extract_nick(raw)} bloqueado ({mins:.0f}min restantes)")
+            return
+
+    home  = event.get('homePlayer', '')
+    away  = event.get('awayPlayer', '')
     timer = event.get('timer', {})
-    sent_minute = timer.get('minute', 0)
 
-    home_player = event.get('homePlayer', '')
-    away_player = event.get('awayPlayer', '')
-    for player in [home_player, away_player]:
-        if player:
-            on_cooldown, remaining = is_player_on_cooldown(player)
-            if on_cooldown:
-                print(f"[COOLDOWN] {player} em cooldown por {remaining:.0f} min.")
-                return
-
-    liga_det = event.get('_liga_det')
     for attempt in range(3):
         try:
-            msg = format_tip_message(event, strategy, obs_odd, home_stats, away_stats, liga_det, avg_confidence=avg_confidence)
-            message_obj = await bot.send_message(
-                chat_id=CHAT_ID, text=msg, parse_mode="HTML", disable_web_page_preview=True
+            msg = format_tip(event, strategy, odd, p1_st, p2_st, lg_st)
+            obj = await bot.send_message(
+                chat_id=CHAT_ID, text=msg,
+                parse_mode="HTML", disable_web_page_preview=True
             )
-            sent_match_ids.add(event_base_key)
-            sent_match_ids.add(f"{event_id}_{period}")
-
-            tipped_player = event.get('homePlayer')
-            tipped_nick = extract_pure_nick(tipped_player) if tipped_player else ""
-            strategy_lower = strategy.lower()
-            for p in [event.get('homePlayer'), event.get('awayPlayer')]:
-                if p and p.lower() in strategy_lower:
-                    tipped_player = p
-                    tipped_nick = extract_pure_nick(p)
-                    break
-
+            sent_keys.add(key)
             sent_tips.append({
-                'event_id': event_id,
-                'strategy': strategy,
-                'sent_time': datetime.now(MANAUS_TZ),
-                'status': 'pending',
-                'message_id': message_obj.message_id,
-                'message_text': msg,
-                'home_player': home_player,
-                'away_player': away_player,
-                'league': event.get('mappedLeague'),
-                'tip_period': period,
-                'sent_minute': sent_minute,
-                'homeTeamName': event.get('homeTeamName', ''),
-                'awayTeamName': event.get('awayTeamName', ''),
-                'liveTimeRaw': event.get('liveTimeRaw', ''),
+                'event_id':     event_id,
+                'strategy':     strategy,
+                'category':     category,
+                'sent_time':    datetime.now(MANAUS_TZ),
+                'status':       'pending',
+                'message_id':   obj.message_id,
+                'home_player':  home,
+                'away_player':  away,
+                'homeRaw':      event.get('homeRaw', ''),
+                'awayRaw':      event.get('awayRaw', ''),
+                'league':       event.get('mappedLeague', ''),
+                'sent_minute':  timer.get('minute', 0),
+                'sent_odd':     odd,
+                'scoreboard':   event.get('scoreboard', '0-0'),
                 'startDateRaw': event.get('startDateRaw', ''),
-                'sent_scoreboard': event.get('scoreboard', '0-0'),
-                'tipped_player_nick': tipped_nick,
-                'tipped_player_raw': tipped_player,
-                'sent_odd': obs_odd,
-                'avg_confidence': avg_confidence,
-                'liga_det': liga_det or {},
+                'liveTimeRaw':  event.get('liveTimeRaw', ''),
             })
             save_state()
-            print(f"[✓] Tip enviada: {event_id} - {strategy} @ min {sent_minute}")
+            print(f"[✓] TIP: {strategy} @ {odd} — {home} vs {away}")
             break
         except Exception as e:
-            print(f"[ERROR] send_tip tentativa {attempt+1}: {e}")
+            print(f"[send_tip] tentativa {attempt + 1}: {e}")
             if attempt < 2:
                 await asyncio.sleep(2)
-
 
 # =============================================================================
 # VERIFICAÇÃO DE RESULTADOS
 # =============================================================================
-
 async def check_results(bot):
-    global last_summary, last_league_message_id, daily_stats, last_daily_message_date
-    try:
-        recent = fetch_recent_matches(num_pages=30, use_cache=False)
-        today_date = datetime.now(MANAUS_TZ)
-        today = today_date.date()
-        today_str = today_date.strftime('%Y-%m-%d')
+    global sent_tips, daily_stats, last_summary, last_daily_date
 
-        sent_tips[:] = [t for t in sent_tips if t['sent_time'].date() >= today - timedelta(days=5)]
+    try:
+        # Usar o cache já atualizado pelo history_refresher em background
+        recent = history_cache.get('matches', [])
+        if not recent:
+            recent = fetch_history(pages=20, use_cache=True)
+        today  = datetime.now(MANAUS_TZ)
+        today_str = today.strftime('%Y-%m-%d')
+
+        # Manter apenas últimos 5 dias de tips
+        cutoff = (today - timedelta(days=5)).date()
+        sent_tips[:] = [
+            t for t in sent_tips
+            if (t['sent_time'].date() >= cutoff
+                if isinstance(t['sent_time'], datetime) else True)
+        ]
 
         for tip in sent_tips:
-            if tip['status'] != 'pending':
+            if tip.get('status') != 'pending':
                 continue
 
             elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
-            league_upper = tip.get('league', '').upper()
-            if any(x in league_upper for x in ["VALKYRIE", "CLA", "H2H", "BATTLE"]):
-                min_wait = 150 if tip.get('tip_period') == 'HT' else 400
+
+            # Aguardar tempo mínimo baseado no tipo e na duração da liga
+            cat      = tip.get('category', 'FT')
+            lg_key   = tip.get('league', '')
+            prof     = get_profile(lg_key)
+            duration = prof.get('duration', 8)   # minutos totais do jogo
+            ht_dur   = prof.get('ht_dur', 4)
+            # HT: aguardar o fim do HT + 1 min de margem para a API atualizar
+            # FT: aguardar o fim do jogo inteiro + 1 min
+            if cat == 'HT':
+                min_wait = (ht_dur + 1) * 60
             else:
-                min_wait = 240 if tip.get('tip_period') == 'HT' else 480
+                min_wait = (duration + 2) * 60
 
             if elapsed < min_wait:
                 continue
 
-            matched = find_best_match_for_tip(tip, recent)
+            matched = find_result_match(tip, recent)
             if not matched:
-                print(f"[PENDENTE] {tip.get('home_player')} vs {tip.get('away_player')} - sem match")
+                if elapsed > 3600:
+                    tip['status'] = 'expired'
+                    print(f"[EXPIRADO] {tip.get('home_player')} vs {tip.get('away_player')} — {elapsed/60:.0f}min sem match")
                 continue
 
-            strategy = tip['strategy']
-            tipped_nick = tip.get('tipped_player_nick', '')
+            strat  = tip['strategy']
+            ht_h   = int(matched.get('home_score_ht', 0) or 0)
+            ht_a   = int(matched.get('away_score_ht', 0) or 0)
+            ft_h   = int(matched.get('home_score_ft', 0) or 0)
+            ft_a   = int(matched.get('away_score_ft', 0) or 0)
+            ht_tot = ht_h + ht_a
+            ft_tot = ft_h + ft_a
 
-            ht_home = int(matched.get('home_score_ht', 0) or 0)
-            ht_away = int(matched.get('away_score_ht', 0) or 0)
-            # home_score_ft pode ser só o 2T em algumas ligas → somar com ht para garantir total
-            ft_home_total = int(matched.get('home_score_ft', 0) or 0)
-            ft_away_total = int(matched.get('away_score_ft', 0) or 0)
-            ht_total = ht_home + ht_away
-            ft_total = ft_home_total + ft_away_total
-
+            # home_score_ft = TOTAL do jogo (já inclui HT)
             result = None
-            if '+0.5 GOL HT' in strategy:
-                result = 'green' if ht_total >= 1 else 'red'
-            elif '+1.5 GOLS HT' in strategy:
-                result = 'green' if ht_total >= 2 else 'red'
-            elif '+2.5 GOLS HT' in strategy:
-                result = 'green' if ht_total >= 3 else 'red'
-            elif 'BTTS HT' in strategy:
-                result = 'green' if (ht_home > 0 and ht_away > 0) else 'red'
-            # Apostas INDIVIDUAIS (nome do jogador na strategy) — usa gols do jogador
-            elif '(TOTAL)' not in strategy and tipped_nick and '+1.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched)
-                result = 'green' if gols >= 2 else 'red'
-            elif '(TOTAL)' not in strategy and tipped_nick and '+2.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched)
-                result = 'green' if gols >= 3 else 'red'
-            elif '(TOTAL)' not in strategy and tipped_nick and '+3.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched)
-                result = 'green' if gols >= 4 else 'red'
-            elif '(TOTAL)' not in strategy and tipped_nick and '+4.5 GOLS FT' in strategy:
-                gols = get_player_ft_goals(tipped_nick, matched)
-                result = 'green' if gols >= 5 else 'red'
-            # Apostas TOTAIS do jogo — sempre usa ft_total (soma dos dois jogadores)
-            elif '+1.5 GOLS FT' in strategy:
-                result = 'green' if ft_total >= 2 else 'red'
-            elif '+2.5 GOLS FT' in strategy:
-                result = 'green' if ft_total >= 3 else 'red'
-            elif '+3.5 GOLS FT' in strategy:
-                result = 'green' if ft_total >= 4 else 'red'
-            elif '+4.5 GOLS FT' in strategy:
-                result = 'green' if ft_total >= 5 else 'red'
-            elif '+5.5 GOLS FT' in strategy:
-                result = 'green' if ft_total >= 6 else 'red'
-            elif 'BTTS FT' in strategy:
-                result = 'green' if (ft_home_total > 0 and ft_away_total > 0) else 'red'
+
+            # ── HT ──────────────────────────────────────────────────────
+            if   '+0.5 GOL HT'  in strat: result = 'green' if ht_tot >= 1 else 'red'
+            elif '+1.5 GOLS HT' in strat: result = 'green' if ht_tot >= 2 else 'red'
+            elif '+2.5 GOLS HT' in strat: result = 'green' if ht_tot >= 3 else 'red'
+            elif 'BTTS HT'      in strat: result = 'green' if ht_h > 0 and ht_a > 0 else 'red'
+            # ── FT TOTAL — checar (TOTAL) ANTES dos individuais ─────────
+            elif '+1.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 2 else 'red'
+            elif '+2.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 3 else 'red'
+            elif '+3.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 4 else 'red'
+            elif '+4.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 5 else 'red'
+            elif 'BTTS FT (TOTAL)'      in strat: result = 'green' if ft_h > 0 and ft_a > 0 else 'red'
+            # ── FT INDIVIDUAL — nick do player está no nome da estratégia
+            elif '+1.5 GOLS FT' in strat or '+2.5 GOLS FT' in strat or '+3.5 GOLS FT' in strat:
+                home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
+                away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
+                m_h      = extract_nick(matched.get('home_player', ''))
+                strat_up = strat.upper()
+                if home_n and home_n in strat_up:
+                    gols = ft_h if home_n == m_h else ft_a
+                elif away_n and away_n in strat_up:
+                    gols = ft_a if home_n == m_h else ft_h
+                else:
+                    gols = ft_h if home_n == m_h else ft_a
+                if   '+1.5 GOLS FT' in strat: result = 'green' if gols >= 2 else 'red'
+                elif '+2.5 GOLS FT' in strat: result = 'green' if gols >= 3 else 'red'
+                elif '+3.5 GOLS FT' in strat: result = 'green' if gols >= 4 else 'red'
 
             if result:
                 tip['status'] = result
-                result_msg = format_result_message(
-                    tip, ht_home, ht_away, ft_home_total, ft_away_total, result
-                )
                 try:
+                    result_msg = format_result(tip, ht_h, ht_a, ft_h, ft_a, result)
                     await bot.edit_message_text(
-                        chat_id=CHAT_ID, message_id=tip['message_id'],
-                        text=result_msg, parse_mode="HTML"
+                        chat_id=CHAT_ID,
+                        message_id=tip['message_id'],
+                        text=result_msg,
+                        parse_mode="HTML"
                     )
                 except Exception as e:
-                    print(f"[WARN] Não editou mensagem: {e}")
+                    print(f"[edit_result] {e}")
 
-                print(f"[✓] {result.upper()} - {strategy}")
-                save_tip_result(tip, ht_home, ht_away, ft_home_total, ft_away_total)
+                save_result(tip, ht_h, ht_a, ft_h, ft_a)
+                print(f"[{result.upper()}] {strat} | HT {ht_h}-{ht_a} FT {ft_h}-{ft_a}")
 
-                tip_league = tip.get('league', '')
-                if tip_league:
-                    mudou_liga, novo_status, msg_liga = league_manager.record_result(tip_league, result == 'green')
-                    if mudou_liga and msg_liga:
+                # Atualizar LeagueManager
+                lg = tip.get('league', '')
+                if lg:
+                    changed, lm_msg = league_manager.record(lg, result == 'green')
+                    if changed and lm_msg:
                         try:
-                            await bot.send_message(chat_id=CHAT_ID, text=msg_liga, parse_mode="HTML")
-                        except Exception as e:
-                            print(f"[WARN] Não enviou notif de liga: {e}")
+                            await bot.send_message(chat_id=CHAT_ID, text=lm_msg, parse_mode="HTML")
+                        except:
+                            pass
 
-                tipped_p = tip.get('tipped_player_nick', '')
-                if tipped_p:
-                    update_player_red_streak(tipped_p, result)
+                # Cooldown do jogador
+                for raw_key in ['homeRaw', 'awayRaw', 'home_player', 'away_player']:
+                    update_cooldown(tip.get(raw_key, ''), result)
 
-                d_key = tip['sent_time'].astimezone(MANAUS_TZ).strftime('%Y-%m-%d')
-                if d_key not in daily_stats:
-                    daily_stats[d_key] = {'green': 0, 'red': 0}
-                daily_stats[d_key][result] += 1
+                # Daily stats
+                dk = tip['sent_time'].strftime('%Y-%m-%d')
+                daily_stats.setdefault(dk, {'green': 0, 'red': 0})
+                daily_stats[dk][result] += 1
 
+        # Limpar resolvidas
         sent_tips[:] = [t for t in sent_tips if t.get('status') == 'pending']
 
-        today_greens = daily_stats.get(today_str, {}).get('green', 0)
-        today_reds   = daily_stats.get(today_str, {}).get('red', 0)
-        total_resolved = today_greens + today_reds
-        if total_resolved > 0:
-            perc = (today_greens / total_resolved) * 100
-            summary = (
-                f"<b>👑 RW TIPS - FIFA 🎮</b>\n"
-                f"✅ Green [{today_greens}]\n"
-                f"❌ Red [{today_reds}]\n"
-                f"📊 {perc:.1f}%"
-            )
+        # Resumo diário
+        g = daily_stats.get(today_str, {}).get('green', 0)
+        r = daily_stats.get(today_str, {}).get('red', 0)
+        if g + r > 0:
+            pct     = g / (g + r) * 100
+            summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
             if summary != last_summary:
-                await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
-                last_summary = summary
+                try:
+                    await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
+                    last_summary = summary
+                except:
+                    pass
 
-        if last_daily_message_date and last_daily_message_date != today_str:
-            sorted_dates = sorted(daily_stats.keys())
-            if sorted_dates:
-                msg = "🚨 <b>Resumo Geral:</b>\n\n"
-                for date_str in sorted_dates[-7:]:
-                    ds = daily_stats[date_str]
-                    g, r = ds['green'], ds['red']
-                    t = g + r
-                    if t == 0:
-                        continue
-                    pct = (g / t) * 100
-                    fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m')
-                    msg += f"📅 {fmt_date} --> ✅ [{g}] | ❌ [{r}] | 📊 [{pct:.1f}%]\n"
-                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
-
-        if last_daily_message_date != today_str:
-            last_daily_message_date = today_str
+        # Virada de dia
+        global last_daily_date
+        if last_daily_date and last_daily_date != today_str:
             try:
-                await bot.send_message(
-                    chat_id=CHAT_ID, text=league_manager.get_status_report(), parse_mode="HTML"
-                )
+                dates = sorted(daily_stats)[-7:]
+                msg = "🚨 <b>Resumo Geral:</b>\n\n"
+                for d in dates:
+                    ds = daily_stats[d]
+                    t  = ds['green'] + ds['red']
+                    if t == 0: continue
+                    p  = ds['green'] / t * 100
+                    fd = datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m')
+                    msg += f"📅 {fd} → ✅ {ds['green']} | ❌ {ds['red']} | {p:.0f}%\n"
+                await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
+                await bot.send_message(chat_id=CHAT_ID, text=league_manager.status(), parse_mode="HTML")
             except Exception as e:
-                print(f"[WARN] Erro ao enviar status das ligas: {e}")
-            save_state()
+                print(f"[virada de dia] {e}")
 
-        await update_league_stats(bot, recent)
+        if last_daily_date != today_str:
+            last_daily_date = today_str
+            last_summary = None   # resetar para o resumo do novo dia
+
+        save_state()
 
     except Exception as e:
-        print(f"[ERROR check_results] {e}")
+        print(f"[check_results] {e}")
+
+# =============================================================================
+# ATUALIZAÇÃO DE HISTÓRICO EM BACKGROUND
+# =============================================================================
+_last_history_refresh = 0
+HISTORY_REFRESH_SEC   = 120   # atualizar histórico + stats a cada 2 min
+
+async def history_refresher():
+    """
+    Atualiza o histórico e pré-computa stats em background a cada 2 min.
+    Roda em paralelo com o main_loop — nunca bloqueia o loop de odds.
+    """
+    global _last_history_refresh
+    print("[REFRESH] Iniciando atualizador de histórico...")
+    await asyncio.sleep(5)   # aguarda o carregamento inicial terminar
+    while True:
+        try:
+            now = time.time()
+            if now - _last_history_refresh >= HISTORY_REFRESH_SEC:
+                loop = asyncio.get_event_loop()
+                # Rodar em thread para não bloquear o event loop
+                await loop.run_in_executor(
+                    None,
+                    lambda: fetch_history(pages=20, use_cache=False)
+                )
+                _last_history_refresh = time.time()
+                age = datetime.now(MANAUS_TZ).strftime('%H:%M:%S')
+                print(f"[REFRESH] Histórico atualizado às {age} "
+                      f"({len(history_cache.get('matches', []))} partidas, "
+                      f"{len(stats_cache.get('players', {}))} players)")
+        except Exception as e:
+            print(f"[history_refresher] {e}")
+        await asyncio.sleep(10)   # verifica se precisa atualizar a cada 10s
 
 
 # =============================================================================
 # LOOP PRINCIPAL
 # =============================================================================
-
 async def main_loop(bot):
-    print("[INFO] Iniciando loop principal...")
+    """
+    Ciclo rápido a cada 10s:
+      1. fetch_live_matches()         — ~600ms (2 requests paralelos)
+      2. filtros rápidos (liga, keys) — O(1)
+      3. fetch_markets em paralelo    — ~300ms × N eventos (ThreadPool)
+      4. lookup stats do cache        — O(1) por player/liga
+      5. evaluate_strategies          — puro cálculo, sem I/O
+      6. send_tip se aprovado
 
+    Histórico e stats são atualizados em background pelo history_refresher.
+    """
+    print("[LOOP] Iniciando...")
     while True:
+        t_start = time.time()
         try:
-            print(f"\n[CICLO] {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
+            now_str = datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"\n[CICLO] {now_str}")
 
-            live_events = fetch_live_matches()
+            # ── 1. Eventos ao vivo ─────────────────────────────────
+            loop = asyncio.get_event_loop()
+            live = await loop.run_in_executor(None, fetch_live_matches)
 
-            if not live_events:
-                print("[INFO] Nenhuma partida ao vivo")
+            if not live:
+                print("[CICLO] Sem eventos ao vivo")
                 await asyncio.sleep(10)
                 continue
 
-            for event in live_events:
-                event_id = event.get('id')
-                league_name = event.get('leagueName', '')
-                mapped_league = event.get('mappedLeague', '')
-                home_player = event.get('homePlayer', '')
-                away_player = event.get('awayPlayer', '')
+            # ── 2. Filtrar eventos que ainda precisam de tip ───────
+            pending = []
+            for event in live:
+                eid    = event.get('id')
+                mapped = event.get('mappedLeague', '')
 
-                print(f"\n[EVENTO] {event_id}: {home_player} vs {away_player} - {mapped_league}")
-
-                # ✅ CORREÇÃO #7: Verificar se já enviou QUALQUER tip para este evento
-                event_base_key = f"{event_id}_ANY"
-                if event_base_key in sent_match_ids:
+                if not mapped or mapped == 'Unknown':
                     continue
 
-                # ✅ Registrar liga automaticamente (aparece no relatório mesmo sem tips)
-                if mapped_league and mapped_league != 'Unknown':
-                    league_manager.register_league(mapped_league)
-
-                # ✅ CORREÇÃO #1: Verificar se a liga está aprovada
-                approved, reason = is_league_approved(mapped_league)
-                if not approved:
-                    print(f"[SKIP] {reason}")
+                ht_done = f"{eid}_HT" in sent_keys
+                ft_done = f"{eid}_FT" in sent_keys
+                if ht_done and ft_done:
                     continue
 
-                # Buscar mercados abertos — Superbet usa endpoint próprio
-                if str(event_id).startswith('sb-'):
-                    open_lines = fetch_superbet_event_markets(event_id)
-                else:
-                    open_lines = fetch_event_markets(event_id)
-                if not open_lines:
-                    print(f"[INFO] Evento {event_id}: Sem mercados abertos.")
+                league_manager.register(mapped)
+                active, reason = league_manager.is_active(mapped)
+                if not active:
+                    print(f"  [SKIP liga] {mapped}: {reason}")
                     continue
 
-                # ✅ FILTRO DE QUALIDADE DA LIGA — Verificar cenário favorável
-                league_last5 = get_league_last5(mapped_league, global_history_cache.get('matches', []))
-                liga_ok, liga_score, liga_det = check_league_quality(mapped_league, league_last5)
-                if not liga_ok:
-                    falhas = ' | '.join(liga_det.get('failed', [])[:3])
-                    print(f"[LIGA FRIA] {mapped_league} ({liga_score:.0f}%): {falhas}")
-                    continue
-                print(f"[LIGA OK] {mapped_league} — score {liga_score:.0f}% ({liga_det['tipo']})")
+                pending.append(event)
 
-                home_data = fetch_player_individual_stats(home_player)
-                away_data = fetch_player_individual_stats(away_player)
+            if not pending:
+                print(f"[CICLO] {len(live)} eventos, todos já processados")
+                await asyncio.sleep(10)
+                continue
 
-                if not home_data or not away_data:
-                    print(f"[WARN] Sem dados para {home_player} ou {away_player}")
-                    continue
+            print(f"[CICLO] {len(live)} ao vivo → {len(pending)} pendentes")
 
-                home_matches = home_data.get('matches', [])
-                away_matches = away_data.get('matches', [])
+            # ── 3. Buscar mercados em paralelo ─────────────────────
+            # Todos os eventos pendentes buscam odds ao mesmo tempo
+            def _fetch_mkt(ev):
+                return ev, fetch_markets(ev.get('id'))
 
-                print(f"[INFO] {home_player} ({len(home_matches)} jogos) vs {away_player} ({len(away_matches)} jogos)")
+            markets_map = {}   # {event_id: [lines]}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                futs = {ex.submit(_fetch_mkt, ev): ev for ev in pending}
+                for fut in concurrent.futures.as_completed(futs):
+                    try:
+                        ev, lines = fut.result()
+                        if lines:
+                            markets_map[ev.get('id')] = lines
+                    except Exception as e:
+                        print(f"  [fetch_mkt] {e}")
 
-                # ✅ CORREÇÃO #4: Exigir mínimo de 5 jogos (era 4)
-                if len(home_matches) < 5 or len(away_matches) < 5:
-                    print(f"[WARN] Dados insuficientes (mínimo: 5)")
-                    continue
+            print(f"[CICLO] Mercados: {len(markets_map)}/{len(pending)} com linhas abertas")
 
-                home_stats = analyze_player_with_regime_check(home_matches, home_player)
-                away_stats = analyze_player_with_regime_check(away_matches, away_player)
+            # ── 4. Avaliar cada evento ─────────────────────────────
+            for event in pending:
+                eid    = event.get('id')
+                mapped = event.get('mappedLeague', '')
+                home_p = event.get('homePlayer', '')
+                away_p = event.get('awayPlayer', '')
 
-                if not home_stats or not away_stats:
-                    print(f"[WARN] Falha na análise (possível regime change)")
-                    continue
-
-                # Confidence calculado com H2H integrado
-                h2h = get_h2h_stats(home_player, away_player)
-                conf_result     = calculate_confidence_score(home_stats, away_stats, h2h)
-                home_confidence = conf_result['home_confidence']
-                away_confidence = conf_result['away_confidence']
-                avg_confidence  = conf_result['avg_confidence']
-                max_confidence  = max(home_confidence, away_confidence)
-
-                # ── GATE DINÂMICO ──────────────────────────────────────────
-                # Threshold base 65%. Ajustado pelo contexto ao vivo:
-                #
-                #  Placar 0-0 inicio (< 30% tempo) → * 0.90 (mais difícil)
-                #  Jogo aberto (>= 2 gols marcados)→ * 1.00 (neutro)
-                #  Jogo em ritmo alto tardio        → * 1.10 (mais fácil)
-                #
-                # GATE 1 — INDIVIDUAIS: passa se max_conf >= threshold
-                # GATE 2 — TOTAIS:      passa se avg_conf >= threshold
-                # ──────────────────────────────────────────────────────
-
-                _timer_gate  = event.get('timer', {})
-                _minute_gate = _timer_gate.get('minute', 0)
-                _score_gate  = event.get('score', {})
-                _total_live  = _score_gate.get('home', 0) + _score_gate.get('away', 0)
-                _league_prof = LEAGUE_PROFILES.get(mapped_league, LEAGUE_PROFILES['DEFAULT'])
-                _dur_gate    = _league_prof.get('duration_min', 8)
-                _pct_elapsed = _minute_gate / max(1, _dur_gate)
-
-                BASE_GATE = 65
-                if _total_live == 0 and _pct_elapsed < 0.30:
-                    # 0-0 no início — jogo ainda não mostrou ritmo
-                    _gate_mult = 0.90
-                    _gate_ctx  = f"0-0 início ({_minute_gate}min) → *0.90"
-                elif _total_live >= 3 and _pct_elapsed >= 0.50:
-                    # Jogo em ritmo alto já na metade+ → confiança extra
-                    _gate_mult = 1.10
-                    _gate_ctx  = f"{_total_live} gols tardios ({_minute_gate}min) → *1.10"
-                else:
-                    _gate_mult = 1.00
-                    _gate_ctx  = f"{_total_live} gols, {_minute_gate}min → neutro"
-
-                dyn_threshold = BASE_GATE * _gate_mult
-                gate_individual = max_confidence >= dyn_threshold
-                gate_total      = avg_confidence  >= dyn_threshold
-                print(f"[GATE] base={BASE_GATE}% × {_gate_mult} = {dyn_threshold:.0f}% | {_gate_ctx}")
-
-                if not gate_individual and not gate_total:
-                    bd_h = " | ".join(conf_result['breakdown_home'])
-                    bd_a = " | ".join(conf_result['breakdown_away'])
-                    print(f"[BLOCKED] max={max_confidence:.0f}% avg={avg_confidence:.0f}% — nenhum gate passou")
-                    print(f"  {home_player}: {home_confidence:.0f}% — {bd_h}")
-                    print(f"  {away_player}: {away_confidence:.0f}% — {bd_a}")
+                lines = markets_map.get(eid)
+                if not lines:
                     continue
 
-                # Gate: pelo menos 1 jogador com média mínima para a liga
-                league_profile = LEAGUE_PROFILES.get(mapped_league, LEAGUE_PROFILES["DEFAULT"])
-                min_avg = league_profile['min_player_avg']
-                if home_stats['avg_goals_scored_ft'] < min_avg and away_stats['avg_goals_scored_ft'] < min_avg:
-                    print(f"[BLOCKED] Ambos com média FT abaixo do mínimo da liga ({min_avg})")
+                # Lookup O(1) no cache pré-computado
+                p1_s = get_player_stats_cached(home_p)
+                p2_s = get_player_stats_cached(away_p)
+                if not p1_s or not p2_s:
+                    print(f"  [SKIP] sem stats: {home_p}={p1_s is not None} {away_p}={p2_s is not None}")
                     continue
 
-                h2h_info = f"H2H: {h2h['count']}j" if h2h else "H2H: sem dados"
-                gate_str = f"gate={'IND+TOT' if gate_individual and gate_total else ('IND' if gate_individual else 'TOT')}"
-                print(f"[STATS] {home_player}: FT={home_stats['avg_scored_ft_5j']:.1f} HT={home_stats['avg_scored_ht_5j']:.1f} conf={home_confidence:.0f}%")
-                print(f"[STATS] {away_player}: FT={away_stats['avg_scored_ft_5j']:.1f} HT={away_stats['avg_scored_ht_5j']:.1f} conf={away_confidence:.0f}% | {h2h_info} | {gate_str}")
+                lg_s = get_league_stats_cached(mapped)
 
-                all_league_stats = league_stats if mapped_league in league_stats else {}
+                sc = event.get('score', {})
+                print(f"  [EV] {home_p} vs {away_p} | {mapped} | "
+                      f"{sc.get('home',0)}-{sc.get('away',0)} "
+                      f"| min {event.get('timer',{}).get('minute',0)}")
+                print(f"    p1: HT={p1_s['avg_ht']:.1f}marc {p1_s['avg_ht_sof']:.1f}sof "
+                      f"FT={p1_s['avg_ft']:.1f}marc {p1_s['avg_ft_sof']:.1f}sof ({p1_s['games']}j)")
+                print(f"    p2: HT={p2_s['avg_ht']:.1f}marc {p2_s['avg_ht_sof']:.1f}sof "
+                      f"FT={p2_s['avg_ft']:.1f}marc {p2_s['avg_ft_sof']:.1f}sof ({p2_s['games']}j)")
+                print(f"    liga: HT={lg_s['avg_ht']:.1f} FT={lg_s['avg_ft']:.1f} "
+                      f"({lg_s['games']}j{' EST' if lg_s.get('estimated') else ''})")
 
-                strategies = evaluate_open_lines(
-                    event, home_stats, away_stats, all_league_stats, open_lines,
-                    avg_confidence,
-                    gate_individual=gate_individual,
-                    gate_total=gate_total,
-                    home_confidence=home_confidence,
-                    away_confidence=away_confidence,
-                )
+                tips = evaluate_strategies(event, p1_s, p2_s, lg_s, lines)
 
-                for strat_obj in strategies:
-                    strategy_name = strat_obj['name']
-                    obs_odd = strat_obj['odd']
+                ht_done = f"{eid}_HT" in sent_keys
+                ft_done = f"{eid}_FT" in sent_keys
+                for tip_info in tips:
+                    cat = tip_info.get('category', 'FT')
+                    if cat == 'HT' and ht_done:
+                        continue
+                    if cat == 'FT' and ft_done:
+                        continue
+                    await send_tip(bot, event, tip_info, p1_s, p2_s, lg_s)
+                    await asyncio.sleep(0.5)
 
-                    # Para apostas INDIVIDUAIS, exibir confiança DO JOGADOR apostado
-                    # Para apostas TOTAIS, manter a média dos dois
-                    is_individual = '(TOTAL)' not in strategy_name and 'HT' not in strategy_name
-                    if is_individual:
-                        home_raw_up = event.get('homeRaw', '').upper()
-                        away_raw_up = event.get('awayRaw', '').upper()
-                        strat_up    = strategy_name.upper()
-                        if home_raw_up and home_raw_up in strat_up:
-                            display_confidence = home_confidence
-                        elif away_raw_up and away_raw_up in strat_up:
-                            display_confidence = away_confidence
-                        else:
-                            display_confidence = max(home_confidence, away_confidence)
-                    else:
-                        display_confidence = avg_confidence
-
-                    print(f"[✓] OPORTUNIDADE: {strategy_name} (Odd: {obs_odd}) | Conf: {display_confidence:.0f}%")
-                    event['_liga_det'] = liga_det
-                    await send_tip(bot, event, strategy_name, obs_odd, home_stats, away_stats, avg_confidence=display_confidence)
-                    await asyncio.sleep(1)
-
-            print("[INFO] Ciclo concluído. Aguardando 10s...")
+            elapsed = time.time() - t_start
+            print(f"[CICLO] Concluído em {elapsed:.1f}s — aguardando 10s...")
             save_state()
             await asyncio.sleep(10)
 
         except Exception as e:
-            print(f"[ERROR] main_loop: {e}")
+            print(f"[main_loop] {e}")
             await asyncio.sleep(10)
 
 
 async def results_checker(bot):
-    print("[INFO] Iniciando verificador de resultados...")
-    await asyncio.sleep(30)
-
+    print("[CHECKER] Iniciando verificador de resultados...")
+    await asyncio.sleep(60)  # aguarda 1 min antes do primeiro check
     while True:
         try:
             await check_results(bot)
-            await asyncio.sleep(120)
         except Exception as e:
-            print(f"[ERROR] results_checker: {e}")
-            await asyncio.sleep(120)
-
+            print(f"[results_checker] {e}")
+        await asyncio.sleep(120)  # verifica a cada 2 minutos
 
 # =============================================================================
 # INICIALIZAÇÃO
 # =============================================================================
-
 async def main():
-    print("=" * 70)
-    print("🤖 RW TIPS - BOT FIFA v4.1 (SUPERBET DINÂMICO)")
-    print("=" * 70)
+    print("=" * 65)
+    print("🤖 RW TIPS — BOT FIFA v5.0 (CRITÉRIOS DIRETOS)")
+    print("=" * 65)
     print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
-    print("=" * 70)
-    print("\n📋 CORREÇÕES ATIVAS:")
-    print("  ✅ #1 - Whitelist de ligas aprovadas (bloqueio dinâmico)")
-    print("  ✅ #2 - Perfis por liga (thresholds calibrados por média histórica)")
-    print("  ✅ #3 - Stop-loss por jogador (cooldown após 3 reds consecutivos)")
-    print("  ✅ #4 - Janela de 10 jogos, mínimo 5 jogos")
-    print("  ✅ #5 - Confidence v4 recalibrado (escala 100pts, H2H suave 7 níveis)")
-    print("  ✅ #6 - Apostas individuais usam % individual")
-    print("  ✅ #7 - Máximo 1 tip por evento")
-    print("  ✅ #8 - Gate dinâmico baseado no placar ao vivo")
-    print("  ✅ #9 - Linhas alta variância bloqueadas se sample_size==0")
-    print("  ✅ v4.1 - Superbet: mapeamento DINÂMICO por categoryId (âncora estável)")
-    print("=" * 70)
-    print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
-    print("=" * 70)
-    print("\n📋 CORREÇÕES ATIVAS:")
-    print("  ✅ #1 - Whitelist de ligas aprovadas (bloqueio de La Liga, INT, Volta PL)")
-    print("  ✅ #2 - Perfis por liga (thresholds calibrados por média histórica)")
-    print("  ✅ #3 - Stop-loss por jogador (cooldown após 3 reds consecutivos)")
-    print("  ✅ #4 - Janela de 10 jogos (era 5) e mínimo 5 jogos (era 4)")
-    print("  ✅ #5 - Confidence mínimo 80% (era 75%) com penalização por variância")
-    print("  ✅ #6 - Apostas individuais usam % individual (não total do jogo)")
-    print("  ✅ #7 - Máximo 1 tip por evento (seleção do melhor candidato)")
-    print("=" * 70)
+    print()
+    print("Critérios HT (8 min):")
+    print("  Gate: liga_avg_ht >= 3.2 | p1_ht >= 2.1 | p2_ht >= 2.1")
+    print("  +0.5: p1>=1.5 e p2>=1.5")
+    print("  +1.5: p1>=2.1 e p2>=2.1 | BTTS HT: btts>=60%")
+    print("  +2.5: p1>=2.6 e p2>=2.6")
+    print("Critérios FT:")
+    print("  +2.5: combined>=5.0 | +3.5: >=6.5 | +4.5: >=8.0")
+    print("  IND +1.5: avg>=2.2 pct>=70% | +2.5: avg>=3.2 pct>=60%")
+    print("=" * 65)
 
-    request = HTTPXRequest(
-        connection_pool_size=8,
-        connect_timeout=30.0,
-        read_timeout=30.0,
-        write_timeout=30.0,
-        pool_timeout=30.0
+    bot = Bot(
+        token=BOT_TOKEN,
+        request=HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0,
+        )
     )
 
-    bot = Bot(token=BOT_TOKEN, request=request)
-
-    max_retries = 5
-    for attempt in range(max_retries):
+    # Conectar
+    for attempt in range(5):
         try:
-            print(f"[INFO] Conectando ao Telegram (tentativa {attempt + 1}/{max_retries})...")
             me = await bot.get_me()
             print(f"[✓] Bot conectado: @{me.username}")
             break
         except Exception as e:
-            print(f"[ERROR] Tentativa {attempt + 1} falhou: {e}")
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                print(f"[INFO] Aguardando {wait_time}s...")
-                await asyncio.sleep(wait_time)
+            print(f"[CONN] tentativa {attempt+1}: {e}")
+            if attempt < 4:
+                await asyncio.sleep((attempt + 1) * 5)
             else:
-                print("[ERROR] Não foi possível conectar ao Telegram")
+                print("[CONN] Não foi possível conectar")
                 return
 
+    # Carregar estado
     load_state()
 
-    print("[INFO] Pré-carregando dados...")
-    recent = fetch_recent_matches(num_pages=15)
-    # ✅ FIX #3: force=True garante envio do resumo sempre ao iniciar
-    await update_league_stats(bot, recent, force=True)
+    # Pre-carregar histórico
+    print("[INFO] Pré-carregando histórico...")
+    hist = fetch_history(pages=15)
 
-    # ✅ Enviar status das ligas imediatamente na inicialização
+    # Enviar status inicial
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
-            text=league_manager.get_status_report(),
+            text=f"🤖 <b>BOT v5.0 ONLINE</b>\n{league_manager.status()}",
             parse_mode="HTML"
         )
-        print("[✓] Status inicial das ligas enviado")
     except Exception as e:
-        print(f"[WARN] Não enviou status inicial: {e}")
+        print(f"[INFO] Não enviou status inicial: {e}")
 
+    # Iniciar loops
     await asyncio.gather(
         main_loop(bot),
-        results_checker(bot)
+        results_checker(bot),
+        history_refresher(),
     )
 
 
@@ -3079,4 +2026,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[INFO] Bot encerrado pelo usuário")
     except Exception as e:
-        print(f"[ERRO FATAL] {e}")
+        print(f"[FATAL] {e}")
