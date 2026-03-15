@@ -208,19 +208,29 @@ HIST_MAP = {
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
-    # Nomes alternativos Superbet / histórico
+    # Nomes reais confirmados pelos logs do histórico
+    # GT LEAGUE
+    "GT LEAGUES":                               "GT LEAGUE 12 MIN",
+    "GT League 12m":                            "GT LEAGUE 12 MIN",
+    "GT Leagues 12m":                           "GT LEAGUE 12 MIN",
+    "GT Leagues":                               "GT LEAGUE 12 MIN",
+    # VOLTA
+    "VOLTA - 6 MIN":                            "VOLTA 6 MIN",
+    "Volta 6m":                                 "VOLTA 6 MIN",
+    "Volta - 6 MIN":                            "VOLTA 6 MIN",
+    # BATTLE 12
     "Battle 12m":                               "BATTLE 12 MIN",
     "Champions League B 2×6":             "BATTLE 12 MIN",
     "Battle - Liga dos Campeões 2":             "BATTLE 12 MIN",
     "Battle - Liga de Campeões 2":              "BATTLE 12 MIN",
-    "GT League 12m":                            "GT LEAGUE 12 MIN",
-    "GT Leagues 12m":                           "GT LEAGUE 12 MIN",
+    "BATTLE 12":                                "BATTLE 12 MIN",
+    # ADRIATIC
     "eAdriatic League":                         "ADRIATIC",
     "E-Adriatic":                               "ADRIATIC",
     "Adriatic":                                 "ADRIATIC",
+    # H2H
     "H2H GG League - 8 mins play":             "H2H 8 MIN",
     "H2H 8m":                                   "H2H 8 MIN",
-    "Volta 6m":                                 "VOLTA 6 MIN",
 }
 
 def map_league(name):
@@ -1616,7 +1626,13 @@ def find_result_match(tip, recent):
                 dt = dt.replace(tzinfo=timezone.utc)
             dt = dt.astimezone(MANAUS_TZ)
             delta = (dt - tip_time).total_seconds()
-            if -15 * 60 <= delta <= 90 * 60:
+            # Janela: -45min a +90min
+            # Negativa larga porque tips FT são enviadas no 2ºT —
+            # o jogo já tem ht_dur minutos quando a tip sai.
+            # Exemplo: ADRIATIC (10 min) — tip enviada no min 6 (2ºT),
+            # logo started_at está 6 min antes da tip → delta = -360s.
+            # Com -15min a janela não cobria, com -45min cobre todas as ligas.
+            if -45 * 60 <= delta <= 90 * 60:
                 diff = abs(delta)
                 if diff < best_diff:
                     best_diff = diff
@@ -1737,6 +1753,10 @@ async def check_results(bot):
                 if elapsed > 3600:
                     tip['status'] = 'expired'
                     print(f"[EXPIRADO] {tip.get('home_player')} vs {tip.get('away_player')} — {elapsed/60:.0f}min sem match")
+                else:
+                    print(f"[AGUARDANDO] {tip.get('home_player')} vs {tip.get('away_player')} "
+                          f"| {tip.get('league')} | {elapsed/60:.0f}min desde envio "
+                          f"(min_wait={min_wait//60}min)")
                 continue
 
             strat  = tip['strategy']
@@ -2056,14 +2076,21 @@ async def main():
     print("=" * 65)
     print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
     print()
-    print("Critérios HT (8 min):")
-    print("  Gate: liga_avg_ht >= 3.2 | p1_ht >= 2.1 | p2_ht >= 2.1")
-    print("  +0.5: p1>=1.5 e p2>=1.5")
-    print("  +1.5: p1>=2.1 e p2>=2.1 | BTTS HT: btts>=60%")
-    print("  +2.5: p1>=2.6 e p2>=2.6")
-    print("Critérios FT:")
-    print("  +2.5: combined>=5.0 | +3.5: >=6.5 | +4.5: >=8.0")
-    print("  IND +1.5: avg>=2.2 pct>=70% | +2.5: avg>=3.2 pct>=60%")
+    c8  = CRIT_8MIN
+    c12 = CRIT_12MIN
+    print("Critérios 6/8 min (Battle, H2H, Valkyrie, Volta):")
+    print(f"  Gate HT: liga>={c8['ht_gate_league']} | player>={c8['ht_gate_p']}")
+    print(f"  Gate FT: liga>={c8['ft_gate_league']} | player>={c8['ft_gate_p']}")
+    print(f"  HT +0.5: p1>={c8['ht_05']['p1_marc']} p2>={c8['ht_05']['p2_marc']} | placar 0x0")
+    print(f"  HT +1.5: p1>={c8['ht_15']['p1_marc']} p2>={c8['ht_15']['p2_marc']}")
+    print(f"  HT +2.5: p1>={c8['ht_25']['p1_marc']} p2>={c8['ht_25']['p2_marc']}")
+    print(f"  FT +1.5: p1>={c8['ft_15']['p1_marc']} p2>={c8['ft_15']['p2_marc']} | FT +2.5: >={c8['ft_25']['p1_marc']}")
+    print(f"  FT +3.5: p1>={c8['ft_35']['p1_marc']} | FT +4.5: >={c8['ft_45']['p1_marc']}")
+    print("Critérios 10/12 min (GT, Valhalla, Battle 12, CLA, Adriatic):")
+    print(f"  Gate HT: liga>={c12['ht_gate_league']} | player>={c12['ht_gate_p']}")
+    print(f"  Gate FT: liga>={c12['ft_gate_league']} | player>={c12['ft_gate_p']}")
+    print(f"  HT +0.5: p1>={c12['ht_05']['p1_marc']} | HT +1.5: >={c12['ht_15']['p1_marc']} | HT +2.5: >={c12['ht_25']['p1_marc']}")
+    print(f"  FT +1.5: >={c12['ft_15']['p1_marc']} | FT +2.5: >={c12['ft_25']['p1_marc']} | FT +3.5: >={c12['ft_35']['p1_marc']} | FT +4.5: >={c12['ft_45']['p1_marc']}")
     print("=" * 65)
 
     bot = Bot(
