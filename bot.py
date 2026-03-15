@@ -208,6 +208,19 @@ HIST_MAP = {
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
+    # Nomes alternativos Superbet / histórico
+    "Battle 12m":                               "BATTLE 12 MIN",
+    "Champions League B 2×6":             "BATTLE 12 MIN",
+    "Battle - Liga dos Campeões 2":             "BATTLE 12 MIN",
+    "Battle - Liga de Campeões 2":              "BATTLE 12 MIN",
+    "GT League 12m":                            "GT LEAGUE 12 MIN",
+    "GT Leagues 12m":                           "GT LEAGUE 12 MIN",
+    "eAdriatic League":                         "ADRIATIC",
+    "E-Adriatic":                               "ADRIATIC",
+    "Adriatic":                                 "ADRIATIC",
+    "H2H GG League - 8 mins play":             "H2H 8 MIN",
+    "H2H 8m":                                   "H2H 8 MIN",
+    "Volta 6m":                                 "VOLTA 6 MIN",
 }
 
 def map_league(name):
@@ -636,8 +649,38 @@ def fetch_superbet_live():
                 meta   = ev.get('metadata', {})
                 hg     = int(meta.get('homeTeamScore', 0) or 0)
                 ag     = int(meta.get('awayTeamScore', 0) or 0)
-                minute = int(ev.get('matchTime', 0) or 0)
                 eid    = str(ev.get('eventId'))
+
+                # Tentar múltiplos campos — matchTime pode ser 0 mesmo com jogo em andamento
+                minute = 0
+                for _f in ['matchTime', 'currentTime', 'liveTime', 'matchClock',
+                           'matchMinute', 'elapsed', 'minute']:
+                    _v = ev.get(_f) or meta.get(_f)
+                    if _v and int(_v) > 0:
+                        minute = int(_v)
+                        break
+
+                # Fallback via utcDate — calcular elapsed desde o início do jogo
+                if minute == 0:
+                    _utc = ev.get('utcDate', '')
+                    if _utc:
+                        try:
+                            _start = datetime.fromisoformat(_utc.replace('Z', '+00:00'))
+                            _elapsed = (datetime.now(timezone.utc) - _start).total_seconds()
+                            if 0 < _elapsed < 900:   # até 15 min (jogo mais longo = 12 min + margem)
+                                minute = max(0, int(_elapsed / 60))
+                        except:
+                            pass
+
+                # Fallback final: placar alto → provavelmente 2ºT
+                if minute == 0 and (hg + ag) >= 4:
+                    # Jogo com 4+ gols dificilmente está no início
+                    # Usar duração do HT + 1 como estimativa conservadora
+                    _t_id_tmp = str(ev.get('tournamentId', ''))
+                    _cached_tmp = sb_tournaments.get(_t_id_tmp, {})
+                    _lg_tmp = _cached_tmp.get('name', '') if isinstance(_cached_tmp, dict) else ''
+                    _prof_tmp = get_profile(map_league(_lg_tmp))
+                    minute = _prof_tmp.get('ht_dur', 4) + 1
 
                 def _slug(s):
                     import unicodedata as _ud
@@ -1057,8 +1100,28 @@ def player_stats(player_name, all_matches, last_n=5):
 
 
 def league_stats(league_name, all_matches, last_n=5):
-    """Média de gols HT e FT nos últimos N jogos da liga."""
-    games = [m for m in all_matches if m.get('league_name') == league_name][:last_n]
+    """
+    Média de gols HT e FT nos últimos N jogos da liga.
+    Busca tanto pelo nome mapeado quanto pelos nomes originais do histórico.
+    """
+    # Busca direta pelo nome mapeado
+    games = [m for m in all_matches if m.get('league_name') == league_name]
+    # Se não encontrou, tentar pelos nomes alternativos do histórico
+    if len(games) < last_n:
+        for raw, mapped in HIST_MAP.items():
+            if mapped == league_name:
+                extras = [m for m in all_matches if m.get('league_name') == raw]
+                games.extend(extras)
+        # Deduplica preservando ordem
+        seen = set()
+        uniq = []
+        for g in games:
+            gid = g.get('id', id(g))
+            if gid not in seen:
+                seen.add(gid)
+                uniq.append(g)
+        games = uniq
+    games = games[:last_n]
     n = len(games)
     if n < 3:
         return {'avg_ht': 3.5, 'avg_ft': 6.0, 'games': 0, 'estimated': True}
@@ -1797,7 +1860,7 @@ async def history_refresher():
                 # Rodar em thread para não bloquear o event loop
                 await loop.run_in_executor(
                     None,
-                    lambda: fetch_history(pages=20, use_cache=False)
+                    lambda: fetch_history(pages=30, use_cache=False)
                 )
                 _last_history_refresh = time.time()
                 age = datetime.now(MANAUS_TZ).strftime('%H:%M:%S')
@@ -1902,15 +1965,29 @@ async def main_loop(bot):
                 p1_s = get_player_stats_cached(home_p)
                 p2_s = get_player_stats_cached(away_p)
                 if not p1_s or not p2_s:
-                    print(f"  [SKIP] sem stats: {home_p}={p1_s is not None} {away_p}={p2_s is not None}")
+                    # Diagnosticar: quantas partidas tem no histórico para cada player
+                    hist_now = history_cache.get('matches', [])
+                    def _count_games(nick):
+                        n = extract_nick(nick)
+                        return sum(1 for m in hist_now
+                                   if extract_nick(m.get('home_player','')) == n
+                                   or extract_nick(m.get('away_player','')) == n)
+                    c1 = _count_games(home_p)
+                    c2 = _count_games(away_p)
+                    p1_label = f"{home_p}({'sem dados' if c1==0 else f'{c1}j<3'})"
+                    p2_label = f"{away_p}({'sem dados' if c2==0 else f'{c2}j<3'})"
+                    print(f"  [SKIP stats] {p1_label} | {p2_label}")
                     continue
 
                 lg_s = get_league_stats_cached(mapped)
 
                 sc = event.get('score', {})
+                timer_now = event.get('timer', {})
+                sc        = event.get('score', {})
                 print(f"  [EV] {home_p} vs {away_p} | {mapped} | "
                       f"{sc.get('home',0)}-{sc.get('away',0)} "
-                      f"| min {event.get('timer',{}).get('minute',0)}")
+                      f"| min {timer_now.get('minute',0)} "
+                      f"({'HT' if timer_now.get('minute',0) < get_profile(mapped).get('ht_dur',4) else '2T'})")
                 print(f"    p1: HT={p1_s['avg_ht']:.1f}marc {p1_s['avg_ht_sof']:.1f}sof "
                       f"FT={p1_s['avg_ft']:.1f}marc {p1_s['avg_ft_sof']:.1f}sof ({p1_s['games']}j)")
                 print(f"    p2: HT={p2_s['avg_ht']:.1f}marc {p2_s['avg_ht_sof']:.1f}sof "
@@ -2001,6 +2078,11 @@ async def main():
     # Pre-carregar histórico
     print("[INFO] Pré-carregando histórico...")
     hist = fetch_history(pages=15)
+
+    # Registrar todas as ligas conhecidas antecipadamente
+    for lg in LEAGUE_PROFILES:
+        if lg != "DEFAULT":
+            league_manager.register(lg)
 
     # Enviar status inicial
     try:
