@@ -18,7 +18,7 @@ CRITÉRIOS (ligas 8 min):
   +3.5 IND: player_avg_ft >= 4.2  E  pct_scored_4+ >= 50%
 """
 
-import os, time, re, json, asyncio, logging, concurrent.futures
+import os, time, re, json, asyncio, logging, concurrent.futures, copy
 import requests
 from datetime import datetime, timezone, timedelta
 from collections import deque
@@ -162,9 +162,24 @@ LEAGUE_PROFILES = {
 def get_crit(league_key):
     prof = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
     crit_key = prof["crit"]
-    if crit_key == "12MIN": return CRIT_12MIN
-    if crit_key == "6MIN":  return CRIT_6MIN
-    return CRIT_8MIN
+    base_crit = CRIT_12MIN if crit_key == "12MIN" else (CRIT_6MIN if crit_key == "6MIN" else CRIT_8MIN)
+    
+    # Cópia profunda para não alterar o original
+    crit = copy.deepcopy(base_crit)
+    
+    # Ajuste dinâmico baseado na performance da liga
+    perf = league_manager.get_performance(league_key)
+    if perf and perf['total'] >= LEAGUE_MIN_TIPS:
+        pct = perf['pct']
+        # Se a liga está em 'warning' (perto de bloquear), aumenta exigência em 10%
+        if pct < LEAGUE_UNLOCK:
+            factor = 1.10
+            crit['ht_gate_league'] *= factor
+            crit['ft_gate_league'] *= factor
+            crit['ht_gate_p']      *= factor
+            crit['ft_gate_p']      *= factor
+            
+    return crit
 
 def get_profile(league_key):
     return LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
@@ -301,6 +316,15 @@ class LeagueManager:
             return d['active'], f"coletando dados ({n}/{LEAGUE_MIN_TIPS})"
         pct = sum(d['window']) / n * 100
         return d['active'], f"{pct:.0f}% | {n} tips"
+
+    def get_performance(self, league):
+        """Retorna porcentagem de acerto e total de tips da liga."""
+        if league not in self.leagues:
+            return None
+        d = self.leagues[league]
+        n = len(d['window'])
+        if n == 0: return {'pct': 100, 'total': 0}
+        return {'pct': sum(d['window']) / n * 100, 'total': d['total']}
 
     def record(self, league, green):
         d = self._ensure(league)
@@ -1008,7 +1032,7 @@ def _rebuild_stats_cache(matches):
 
     # Computar stats por player
     for nick in nicks:
-        st = player_stats(nick, matches, last_n=5)
+        st = player_stats(nick, matches, last_n=5, trend_n=6)
         if st:
             new_players[nick] = st
 
@@ -1066,18 +1090,12 @@ def get_league_stats_cached(league_name):
     }
 
 # =============================================================================
-# ESTATÍSTICAS — PLAYER E LIGA (últimos 5 jogos)
+# ESTATÍSTICAS — PLAYER E LIGA
 # =============================================================================
-def player_stats(player_name, all_matches, last_n=5):
+def player_stats(player_name, all_matches, last_n=5, trend_n=6):
     """
-    Calcula estatísticas de um jogador nos últimos N jogos
-    (independente do adversário).
-
-    Retorna médias de gols MARCADOS e SOFRIDOS para HT e FT,
-    necessárias para critérios de BTTS e linhas individuais.
-
-    home_score_ft = gols TOTAIS do jogo inteiro (inclui HT)
-    home_score_ht = gols só do 1T
+    Calcula estatísticas de um jogador nos últimos N jogos.
+    Também calcula 'trend' (últimos 3 vs últimos 6) para detectar hot/cold streaks.
     """
     nick = extract_nick(player_name)
     games = []
@@ -1086,43 +1104,83 @@ def player_stats(player_name, all_matches, last_n=5):
         a = extract_nick(m.get('away_player', ''))
         if nick in (h, a):
             games.append(m)
-        if len(games) >= last_n:
+        if len(games) >= trend_n:
             break
 
     n = len(games)
     if n < 3:
         return None
 
-    ht_marc = []   # gols marcados pelo player no HT
-    ht_sof  = []   # gols sofridos pelo player no HT (= gols do adversário no HT)
-    ft_marc = []   # gols marcados pelo player no jogo inteiro
-    ft_sof  = []   # gols sofridos pelo player no jogo inteiro
+    def _calc(subset):
+        if not subset: return 0, 0, 0, 0, 0, 0
+        ht_m, ht_s, ft_m, ft_s, btts_ht, btts_ft = [], [], [], [], [], []
+        for m in subset:
+            is_home = extract_nick(m.get('home_player', '')) == nick
+            m_ht = m.get('home_score_ht', 0) if is_home else m.get('away_score_ht', 0)
+            s_ht = m.get('away_score_ht', 0) if is_home else m.get('home_score_ht', 0)
+            m_ft = m.get('home_score_ft', 0) if is_home else m.get('away_score_ft', 0)
+            s_ft = m.get('away_score_ft', 0) if is_home else m.get('home_score_ft', 0)
+            
+            ht_m.append(m_ht)
+            ht_s.append(s_ht)
+            ft_m.append(m_ft)
+            ft_s.append(s_ft)
+            btts_ht.append(1 if m_ht > 0 and s_ht > 0 else 0)
+            btts_ft.append(1 if m_ft > 0 and s_ft > 0 else 0)
+            
+        cnt = len(subset)
+        return (sum(ht_m)/cnt, sum(ht_s)/cnt, sum(ft_m)/cnt, sum(ft_s)/cnt, 
+                sum(btts_ht)/cnt*100, sum(btts_ft)/cnt*100)
 
-    for m in games:
-        is_home = extract_nick(m.get('home_player', '')) == nick
-        ht_h = int(m.get('home_score_ht', 0) or 0)
-        ht_a = int(m.get('away_score_ht', 0) or 0)
-        ft_h = int(m.get('home_score_ft', 0) or 0)
-        ft_a = int(m.get('away_score_ft', 0) or 0)
-
-        if is_home:
-            ht_marc.append(ht_h); ht_sof.append(ht_a)
-            ft_marc.append(ft_h); ft_sof.append(ft_a)
-        else:
-            ht_marc.append(ht_a); ht_sof.append(ht_h)
-            ft_marc.append(ft_a); ft_sof.append(ft_h)
+    # Stats principais (last_n)
+    main_subset = games[:last_n]
+    ht_m, ht_s, ft_m, ft_s, b_ht, b_ft = _calc(main_subset)
+    
+    # Stats dos últimos 3 jogos (específico para novas estratégias)
+    l3_ht_m, l3_ht_s, l3_ft_m, l3_ft_s, _, _ = _calc(games[:3])
+    
+    # Stats de tendência (last 3 vs last 6)
+    lt_ht_m, _, lt_ft_m, _, _, _ = _calc(games[:trend_n])
+    
+    trend = 1.0
+    if lt_ft_m > 0:
+        trend = l3_ft_m / lt_ft_m
 
     return {
-        # Médias de gols marcados
-        'avg_ht':     sum(ht_marc) / n,
-        'avg_ft':     sum(ft_marc) / n,
-        # Médias de gols sofridos (necessário para BTTS)
-        'avg_ht_sof': sum(ht_sof)  / n,
-        'avg_ft_sof': sum(ft_sof)  / n,
-        # Listas brutas para debug
-        'ht_list': ht_marc,
-        'ft_list': ft_marc,
-        'games':   n,
+        'avg_ht': ht_m, 'avg_ht_sof': ht_s,
+        'avg_ft': ft_m, 'avg_ft_sof': ft_s,
+        'btts_ht': b_ht, 'btts_ft': b_ft,
+        'trend': trend, 'games': n,
+        'last3': {
+            'avg_ht': l3_ht_m, 'avg_ht_sof': l3_ht_s,
+            'avg_ft': l3_ft_m, 'avg_ft_sof': l3_ft_s,
+        }
+    }
+
+def get_h2h_stats(p1_nick, p2_nick, all_matches, last_n=5):
+    """Retorna estatísticas de confrontos diretos entre dois jogadores."""
+    p1 = extract_nick(p1_nick)
+    p2 = extract_nick(p2_nick)
+    games = []
+    for m in all_matches:
+        h = extract_nick(m.get('home_player', ''))
+        a = extract_nick(m.get('away_player', ''))
+        if (p1 == h and p2 == a) or (p1 == a and p2 == h):
+            games.append(m)
+        if len(games) >= last_n:
+            break
+            
+    if not games:
+        return None
+        
+    n = len(games)
+    tot_ht = sum(m.get('home_score_ht', 0) + m.get('away_score_ht', 0) for m in games)
+    tot_ft = sum(m.get('home_score_ft', 0) + m.get('away_score_ft', 0) for m in games)
+    
+    return {
+        'avg_ht': tot_ht / n,
+        'avg_ft': tot_ft / n,
+        'games': n
     }
 
 
@@ -1256,162 +1314,95 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
 def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     """
     Avalia estratégias HT (durante o 1ºT) e FT (durante o 2ºT).
-
-    Detecção de período:
-      is_ht = minute < ht_dur       → estamos no 1ºT
-      is_ft = minute >= ht_dur      → estamos no 2ºT
-
-    Regras de placar por aposta:
-      HT +0.5  : 0x0
-      HT +1.5  : 0x0 | 1x0 | 0x1            (total_ht <= 1)
-      HT +2.5  : 1x0 | 0x1 | 1x1            (1 <= total_ht <= 2)
-      HT BTTS  : total_ht <= 1 e NÃO ambos marcaram
-      FT +1.5  : total_ft == 0
-      FT +2.5  : total_ft < 2  (0 ou 1)
-      FT +3.5  : total_ft < 3  (0, 1 ou 2)
-      FT +4.5  : total_ft <= 3 (0, 1, 2 ou 3)
-      FT BTTS  : total_ft <= 1 e NÃO ambos marcaram
-
-    Gate geral HT: liga_avg_ht >= gate_league E p1_avg_ht >= gate_p E p2_avg_ht >= gate_p
-    Gate geral FT: liga_avg_ft >= gate_league E p1_avg_ft >= gate_p E p2_avg_ft >= gate_p
-
-    Resultado: max 1 tip HT + max 1 tip FT (melhor score de cada grupo).
+    Inclui fatores de H2H e Trend (hot/cold streak) para aumentar assertividade.
     """
     candidates = {'HT': [], 'FT': []}
 
     league_key = event.get('mappedLeague', '')
     crit        = get_crit(league_key)
     profile     = get_profile(league_key)
-    ht_dur      = profile['ht_dur']    # minutos do 1ºT
-    duration    = profile['duration']  # duração total do jogo
+    ht_dur      = profile['ht_dur']
     min_odd     = crit['min_odd']
 
     timer    = event.get('timer', {})
     minute   = timer.get('minute', 0)
     second   = timer.get('second', 0)
     score    = event.get('score', {})
-    hg       = score.get('home', 0)    # gols home acumulados até agora
-    ag       = score.get('away', 0)    # gols away acumulados até agora
-    total_ft = hg + ag                 # total de gols no jogo até agora
-
-    # Durante o 1ºT: hg/ag são os gols do HT
+    hg, ag   = score.get('home', 0), score.get('away', 0)
+    total_ft = hg + ag
     total_ht = total_ft
 
-    home_raw = event.get('homeRaw', event.get('homePlayer', ''))
-    away_raw = event.get('awayRaw', event.get('awayPlayer', ''))
-
     elapsed_sec  = minute * 60 + second
-    ht_max_sec   = ht_dur * 60 * 0.90   # janela HT = até 90% do 1ºT
-    is_ht        = elapsed_sec < ht_dur * 60   # ainda no 1ºT
-    is_ft        = elapsed_sec >= ht_dur * 60  # já no 2ºT
+    ht_max_sec   = ht_dur * 60 * 0.90
+    is_ht        = elapsed_sec < ht_dur * 60
+    is_ft        = elapsed_sec >= ht_dur * 60
 
     # Stats dos players
-    p1_ht_marc = p1_st.get('avg_ht', 0)
-    p1_ht_sof  = p1_st.get('avg_ht_sof', 0)
-    p1_ft_marc = p1_st.get('avg_ft', 0)
-    p1_ft_sof  = p1_st.get('avg_ft_sof', 0)
-
-    p2_ht_marc = p2_st.get('avg_ht', 0)
-    p2_ht_sof  = p2_st.get('avg_ht_sof', 0)
-    p2_ft_marc = p2_st.get('avg_ft', 0)
-    p2_ft_sof  = p2_st.get('avg_ft_sof', 0)
+    p1_ht_marc, p2_ht_marc = p1_st['avg_ht'], p2_st['avg_ht']
+    p1_ft_marc, p2_ft_marc = p1_st['avg_ft'], p2_st['avg_ft']
+    
+    # Trend (hot/cold streak)
+    trend1, trend2 = p1_st.get('trend', 1.0), p2_st.get('trend', 1.0)
 
     # Stats da liga
-    lg_avg_ht = lg_st.get('avg_ht', 0)
-    lg_avg_ft = lg_st.get('avg_ft', 0)
+    lg_avg_ht, lg_avg_ft = lg_st['avg_ht'], lg_st['avg_ft']
+    
+    # H2H (Histórico direto)
+    h2h = get_h2h_stats(event.get('homePlayer'), event.get('awayPlayer'), history_cache.get('matches', []))
+    h2h_ht = h2h['avg_ht'] if h2h else lg_avg_ht
+    h2h_ft = h2h['avg_ft'] if h2h else lg_avg_ft
 
     def skip(reason):
         print(f"    [SKIP] {reason}")
 
     # ── Gate geral HT ──────────────────────────────────────────────
+    # Requisito extra: H2H não pode ser inferior a 80% do gate da liga
     ht_gate = (
         lg_avg_ht  >= crit['ht_gate_league'] and
         p1_ht_marc >= crit['ht_gate_p'] and
-        p2_ht_marc >= crit['ht_gate_p']
+        p2_ht_marc >= crit['ht_gate_p'] and
+        h2h_ht     >= crit['ht_gate_league'] * 0.8
     )
 
     # ── Gate geral FT ──────────────────────────────────────────────
+    # Requisito extra: H2H e Trend (mínimo 0.8 para não estar em queda livre)
     ft_gate = (
         lg_avg_ft  >= crit['ft_gate_league'] and
         p1_ft_marc >= crit['ft_gate_p'] and
-        p2_ft_marc >= crit['ft_gate_p']
+        p2_ft_marc >= crit['ft_gate_p'] and
+        h2h_ft     >= crit['ft_gate_league'] * 0.8 and
+        trend1     >= 0.8 and trend2 >= 0.8
     )
 
-    # ══════════════════════════════════════════════════════════════
-    # APOSTAS HT — só no 1ºT (is_ht) e só se gate HT passou
-    # ══════════════════════════════════════════════════════════════
     if is_ht and elapsed_sec <= ht_max_sec:
         if not ht_gate:
-            skip(f"Gate HT: liga={lg_avg_ht:.1f}(min {crit['ht_gate_league']}) "
-                 f"p1={p1_ht_marc:.1f} p2={p2_ht_marc:.1f}(min {crit['ht_gate_p']})")
+            skip(f"Gate HT: lg={lg_avg_ht:.1f} p1={p1_ht_marc:.1f} p2={p2_ht_marc:.1f} h2h={h2h_ht:.1f}")
         else:
-            # ── +0.5 HT | Placar: 0x0 ──────────────────────────────
+            # +0.5 HT | Placar: 0x0
             c = crit['ht_05']
             if hg == 0 and ag == 0:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
                     odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ +0.5 GOL HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            'name': '⚽ +0.5 GOL HT', 'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1)
                         })
-            else:
-                skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
 
-            # ── +1.5 HT | Placar: 0x0 | 1x0 | 0x1 ────────────────
+            # +1.5 HT | Placar <= 1
             c = crit['ht_15']
             if total_ht <= 1:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
                     odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ +1.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            'name': '⚽ +1.5 GOLS HT', 'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1)
                         })
-            else:
-                skip(f"+1.5 HT: placar {hg}x{ag} total={total_ht} (precisa <=1)")
 
-            # ── +2.5 HT | Placar: 1x0 | 0x1 | 1x1 ────────────────
-            c = crit['ht_25']
-            if 1 <= total_ht <= 2:
-                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 2.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name': '⚽ +2.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
-            else:
-                skip(f"+2.5 HT: placar {hg}x{ag} total={total_ht} (precisa 1-2)")
-
-            # ── BTTS HT | Placar: total <= 1, NÃO ambos marcaram ──
-            c = crit['ht_btts']
-            if total_ht <= 1 and not (hg > 0 and ag > 0):
-                if (p1_ht_marc >= c['p1_marc'] and p1_ht_sof >= c['p1_sof'] and
-                        p2_ht_marc >= c['p2_marc'] and p2_ht_sof >= c['p2_sof']):
-                    odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name': '⚽ BTTS HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
-                        })
-            else:
-                if total_ht > 1:
-                    skip(f"BTTS HT: total={total_ht} (precisa <=1)")
-                elif hg > 0 and ag > 0:
-                    skip(f"BTTS HT: placar {hg}x{ag} — ambos já marcaram")
-
-    # ══════════════════════════════════════════════════════════════
-    # APOSTAS FT — só no 2ºT (is_ft) e só se gate FT passou
-    # ══════════════════════════════════════════════════════════════
     if is_ft:
         if not ft_gate:
-            skip(f"Gate FT: liga={lg_avg_ft:.1f}(min {crit['ft_gate_league']}) "
-                 f"p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']})")
+            skip(f"Gate FT: lg={lg_avg_ft:.1f} p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f} h2h={h2h_ft:.1f} t1={trend1:.1f}")
         else:
             # ── +1.5 FT | Placar: 0 gols ────────────────────────────
             c = crit['ft_15']
@@ -1420,82 +1411,83 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +1.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            'name': '⚽ +1.5 GOLS FT (TOTAL)', 'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1)
                         })
-            else:
-                skip(f"+1.5 FT: placar {hg}x{ag} total={total_ft} (precisa 0 gols)")
-
-            # ── +2.5 FT | Placar: < 2 gols ─────────────────────────
+            
+            # ── +2.5 FT | Placar < 2
             c = crit['ft_25']
             if total_ft < 2:
                 if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
                     odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +2.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            'name': '⚽ +2.5 GOLS FT (TOTAL)', 'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1)
                         })
-            else:
-                skip(f"+2.5 FT: placar {hg}x{ag} total={total_ft} (precisa <2)")
 
-            # ── +3.5 FT | Placar: < 3 gols ─────────────────────────
+            # ── +3.5 FT | Placar < 3
             c = crit['ft_35']
             if total_ft < 3:
                 if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
                     odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +3.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            'name': '⚽ +3.5 GOLS FT (TOTAL)', 'odd': odd, 'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1)
                         })
-            else:
-                skip(f"+3.5 FT: placar {hg}x{ag} total={total_ft} (precisa <3)")
 
-            # ── +4.5 FT | Placar: <= 3 gols ────────────────────────
-            c = crit['ft_45']
-            if total_ft <= 3:
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
-                    if odd:
-                        candidates['FT'].append({
-                            'name': '⚽ +4.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
-                        })
-            else:
-                skip(f"+4.5 FT: placar {hg}x{ag} total={total_ft} (precisa <=3)")
+        # ══════════════════════════════════════════════════════════════
+        # ESTRATÉGIA GOLS JOGADOR (INDIVIDUAL) — BASEADO NOS ÚLTIMOS 3 JOGOS
+        # ══════════════════════════════════════════════════════════════
+        l3p1 = p1_st.get('last3', {})
+        l3p2 = p2_st.get('last3', {})
+        
+        # m = marcado, s = sofrido (no jogo todo)
+        m1, s1 = l3p1.get('avg_ft', 0), l3p1.get('avg_ft_sof', 0)
+        m2, s2 = l3p2.get('avg_ft', 0), l3p2.get('avg_ft_sof', 0)
 
-            # ── BTTS FT | Placar: <= 1 gol, NÃO ambos marcaram ─────
-            c = crit['ft_btts']
-            if total_ft <= 1 and not (hg > 0 and ag > 0):
-                if (p1_ft_marc >= c['p1_marc'] and p1_ft_sof >= c['p1_sof'] and
-                        p2_ft_marc >= c['p2_marc'] and p2_ft_sof >= c['p2_sof']):
-                    odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
-                    if odd:
-                        candidates['FT'].append({
-                            'name': '⚽ BTTS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
-                        })
-            else:
-                if total_ft > 1:
-                    skip(f"BTTS FT: total={total_ft} (precisa <=1)")
-                elif hg > 0 and ag > 0:
-                    skip(f"BTTS FT: placar {hg}x{ag} — ambos já marcaram")
+        # Critérios +2.5 Gols Player 1
+        if m1 >= 3.0 and s1 <= 0.7 and s2 <= 1.2 and m2 <= 1.5:
+            odd = find_odd(open_lines, 'individual', 2.5, player_raw=event.get('homePlayer'), min_odd=min_odd)
+            if odd:
+                candidates['FT'].append({
+                    'name': f"⚽ +2.5 GOLS ({event.get('homePlayer')}) — PARTIDA COMPLETA", 'odd': odd, 'category': 'FT',
+                    'score': m1 * (odd - 1) * 1.5
+                })
+        
+        # Critérios +1.5 Gols Player 1
+        elif m1 >= 2.2 and s1 <= 1.0:
+            odd = find_odd(open_lines, 'individual', 1.5, player_raw=event.get('homePlayer'), min_odd=min_odd)
+            if odd:
+                candidates['FT'].append({
+                    'name': f"⚽ +1.5 GOLS ({event.get('homePlayer')}) — PARTIDA COMPLETA", 'odd': odd, 'category': 'FT',
+                    'score': m1 * (odd - 1)
+                })
 
-    # ── Seleção: melhor HT + melhor FT ─────────────────────────────
-    chosen = []
-    for cat in ('HT', 'FT'):
+        # Lógica para Player 2 (Simétrica)
+        if m2 >= 3.0 and s2 <= 0.7 and s1 <= 1.2 and m1 <= 1.5:
+            odd = find_odd(open_lines, 'individual', 2.5, player_raw=event.get('awayPlayer'), min_odd=min_odd)
+            if odd:
+                candidates['FT'].append({
+                    'name': f"⚽ +2.5 GOLS ({event.get('awayPlayer')}) — PARTIDA COMPLETA", 'odd': odd, 'category': 'FT',
+                    'score': m2 * (odd - 1) * 1.5
+                })
+        elif m2 >= 2.2 and s2 <= 1.0:
+            odd = find_odd(open_lines, 'individual', 1.5, player_raw=event.get('awayPlayer'), min_odd=min_odd)
+            if odd:
+                candidates['FT'].append({
+                    'name': f"⚽ +1.5 GOLS ({event.get('awayPlayer')}) — PARTIDA COMPLETA", 'odd': odd, 'category': 'FT',
+                    'score': m2 * (odd - 1)
+                })
+
+    # Selecionar a melhor de cada categoria
+    final = []
+    for cat in ['HT', 'FT']:
         if candidates[cat]:
-            candidates[cat].sort(key=lambda x: x['score'], reverse=True)
-            chosen.append(candidates[cat][0])
-            if len(candidates[cat]) > 1:
-                print(f"    [{cat} descartados] {[c['name'] for c in candidates[cat][1:]]}")
-    return chosen
+            best = max(candidates[cat], key=lambda x: x['score'])
+            final.append(best)
+    return final
 
 
 # =============================================================================
@@ -1789,20 +1781,23 @@ async def check_results(bot):
             elif '+4.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 5 else 'red'
             elif 'BTTS FT (TOTAL)'      in strat: result = 'green' if ft_h > 0 and ft_a > 0 else 'red'
             # ── FT INDIVIDUAL — nick do player está no nome da estratégia
-            elif '+1.5 GOLS FT' in strat or '+2.5 GOLS FT' in strat or '+3.5 GOLS FT' in strat:
-                home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
-                away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
+            elif 'GOLS (' in strat and 'PARTIDA COMPLETA' in strat:
+                home_n   = extract_nick(tip.get('home_player', ''))
+                away_n   = extract_nick(tip.get('away_player', ''))
                 m_h      = extract_nick(matched.get('home_player', ''))
                 strat_up = strat.upper()
+                
+                # Descobrir qual player é o da tip
                 if home_n and home_n in strat_up:
                     gols = ft_h if home_n == m_h else ft_a
                 elif away_n and away_n in strat_up:
                     gols = ft_a if home_n == m_h else ft_h
                 else:
-                    gols = ft_h if home_n == m_h else ft_a
-                if   '+1.5 GOLS FT' in strat: result = 'green' if gols >= 2 else 'red'
-                elif '+2.5 GOLS FT' in strat: result = 'green' if gols >= 3 else 'red'
-                elif '+3.5 GOLS FT' in strat: result = 'green' if gols >= 4 else 'red'
+                    gols = ft_h # Fallback
+
+                if   '+1.5 GOLS' in strat: result = 'green' if gols >= 2 else 'red'
+                elif '+2.5 GOLS' in strat: result = 'green' if gols >= 3 else 'red'
+                elif '+3.5 GOLS' in strat: result = 'green' if gols >= 4 else 'red'
 
             if result:
                 tip['status'] = result
@@ -2034,10 +2029,8 @@ async def main_loop(bot):
                 per   = 'HT' if mn < get_profile(mapped).get('ht_dur', 4) else '2T'
                 pref  = f"[{home_p[:6]}x{away_p[:6]}]"
                 print(f"  {pref} {mapped} | {sc_h}-{sc_a} min {mn} ({per})")
-                print(f"  {pref}   p1 {home_p}: HT={p1_s['avg_ht']:.1f}m/{p1_s['avg_ht_sof']:.1f}s "
-                      f"FT={p1_s['avg_ft']:.1f}m/{p1_s['avg_ft_sof']:.1f}s ({p1_s['games']}j)")
-                print(f"  {pref}   p2 {away_p}: HT={p2_s['avg_ht']:.1f}m/{p2_s['avg_ht_sof']:.1f}s "
-                      f"FT={p2_s['avg_ft']:.1f}m/{p2_s['avg_ft_sof']:.1f}s ({p2_s['games']}j)")
+                print(f"  {pref}   p1 {home_p}: HT={p1_s['avg_ht']:.1f} FT={p1_s['avg_ft']:.1f} trend={p1_s['trend']:.1f}")
+                print(f"  {pref}   p2 {away_p}: HT={p2_s['avg_ht']:.1f} FT={p2_s['avg_ft']:.1f} trend={p2_s['trend']:.1f}")
                 print(f"  {pref}   liga HT={lg_s['avg_ht']:.1f} FT={lg_s['avg_ft']:.1f} "
                       f"({lg_s['games']}j{' EST' if lg_s.get('estimated') else ''})")
 
