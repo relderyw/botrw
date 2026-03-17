@@ -118,8 +118,8 @@ CRIT_6MIN = CRIT_8MIN
 # 10 min (CLA, Adriatic) e 12 min (GT, Valhalla, Battle 12)
 CRIT_12MIN = {
     # ── Gate geral ─────────────────────────────────────────────────
-    "ht_gate_league": 3.2,
-    "ht_gate_p":      2.0,
+    "ht_gate_league": 2.8,   # reduzido de 3.2 — ligas 12min têm poucos dados
+    "ht_gate_p":      1.6,   # reduzido de 2.0 — players 12min marcam menos no HT
     "ft_gate_league": 4.1,
     "ft_gate_p":      2.4,
 
@@ -1333,7 +1333,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     away_raw = event.get('awayRaw', event.get('awayPlayer', ''))
 
     elapsed_sec  = minute * 60 + second
-    ht_max_sec   = ht_dur * 60 * 0.90   # janela HT = até 90% do 1ºT
     is_ht        = elapsed_sec < ht_dur * 60   # ainda no 1ºT
     is_ft        = elapsed_sec >= ht_dur * 60  # já no 2ºT
 
@@ -1372,7 +1371,7 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     # ══════════════════════════════════════════════════════════════
     # APOSTAS HT — só no 1ºT (is_ht) e só se gate HT passou
     # ══════════════════════════════════════════════════════════════
-    if is_ht and elapsed_sec <= ht_max_sec:
+    if is_ht:
         if not ht_gate:
             skip(f"Gate HT: liga={lg_avg_ht:.1f}(min {crit['ht_gate_league']}) "
                  f"p1={p1_ht_marc:.1f} p2={p2_ht_marc:.1f}(min {crit['ht_gate_p']})")
@@ -1441,7 +1440,21 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     # APOSTAS FT — só no 2ºT (is_ft) e só se gate FT passou
     # ══════════════════════════════════════════════════════════════
     if is_ft:
-        if not ft_gate:
+        # Penalidade: se o jogo foi 0-0 no HT completo, exigir avg_ft maior
+        # Jogo 0-0 no 1ºT indica ritmo lento → risco alto para apostas FT Over
+        ht_was_zero = (hg + ag == 0)  # placar ainda 0-0 quando entrou no 2ºT
+        ft_gate_adj = ft_gate
+        if ht_was_zero:
+            adj_p1 = p1_ft_marc >= crit['ft_gate_p'] * 1.3
+            adj_p2 = p2_ft_marc >= crit['ft_gate_p'] * 1.3
+            adj_lg = lg_avg_ft  >= crit['ft_gate_league'] * 1.1
+            ft_gate_adj = adj_p1 and adj_p2 and adj_lg
+            if ft_gate and not ft_gate_adj:
+                skip(f"Gate FT ajustado (HT 0-0): "
+                     f"p1={p1_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f}) "
+                     f"p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f})")
+
+        if not ft_gate or not ft_gate_adj:
             skip(f"Gate FT: liga={lg_avg_ft:.1f}(min {crit['ft_gate_league']}) "
                  f"p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']})")
         else:
@@ -1536,6 +1549,16 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
                 elif hg > 0 and ag > 0:
                     skip(f"BTTS FT: placar {hg}x{ag} — ambos já marcaram")
+
+    # ── Debug: logar se HT não encontrou linhas ─────────────────
+    if is_ht and not candidates['HT'] and ht_gate:
+        mkt_names = list(set(ln.get('market_name', '') for ln in open_lines))
+        has_ht_mkt = any(any(x in m.lower() for x in ['1º', '1ª', '1st', 'half', 'primeiro'])
+                         for m in mkt_names)
+        if not has_ht_mkt:
+            skip(f"HT: nenhum mercado de 1ºT disponível na casa | mercados: {mkt_names[:5]}")
+        else:
+            skip(f"HT: mercados existem mas placar/critérios bloquearam")
 
     # ── Seleção: melhor HT + melhor FT ─────────────────────────────
     chosen = []
