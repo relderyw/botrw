@@ -559,7 +559,8 @@ def _classify_battle(name):
 def _fallback_by_name(name):
     n = name.upper()
     if "H2H" in n:                                    return "H2H 8 MIN"
-    if "CYBER LIVE" in n or " CLA" in n:              return "CLA 10 MIN"
+    if " CLA" in n:                                   return "CLA 10 MIN"
+    # CYBER LIVE ARENA é uma liga DIFERENTE — NÃO mapear para CLA
     if "GT" in n and ("LIGA" in n or "LEAGUE" in n):  return "GT LEAGUE 12 MIN"
     if "ADRIATIC" in n or "EAL " in n:                return "ADRIATIC"
     if "VALHALLA" in n:                               return "VALHALLA CUP"
@@ -599,6 +600,13 @@ def update_sb_struct():
                     league = _classify_battle(tname)
                 else:
                     league = _fallback_by_name(tname)
+
+                # Bloquear Cyber Live Arena independente de como chegou
+                # (nome diferente de CLA 10 MIN — liga com mercados e odds distintos)
+                if league and "CYBER LIVE" in tname.upper():
+                    print(f"[SB_STRUCT] Cyber Live Arena bloqueada: tid={tid} cat={cat_id} tname={tname!r} → ignorada")
+                    continue
+
                 new_map[tid] = {"name": league, "raw": tname}
         if new_map:
             sb_tournaments.update(new_map)
