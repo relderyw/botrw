@@ -1441,8 +1441,7 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     # ══════════════════════════════════════════════════════════════
     if is_ft:
         # Penalidade: se o jogo foi 0-0 no HT completo, exigir avg_ft maior
-        # Jogo 0-0 no 1ºT indica ritmo lento → risco alto para apostas FT Over
-        ht_was_zero = (hg + ag == 0)  # placar ainda 0-0 quando entrou no 2ºT
+        ht_was_zero = (hg + ag == 0)
         ft_gate_adj = ft_gate
         if ht_was_zero:
             adj_p1 = p1_ft_marc >= crit['ft_gate_p'] * 1.3
@@ -1453,6 +1452,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 skip(f"Gate FT ajustado (HT 0-0): "
                      f"p1={p1_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f}) "
                      f"p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f})")
+
+        # Gate extra para ADRIATIC: liga com alta variância, exige mais
+        if league_key == 'ADRIATIC':
+            adj_p1 = p1_ft_marc >= crit['ft_gate_p'] * 1.2
+            adj_p2 = p2_ft_marc >= crit['ft_gate_p'] * 1.2
+            adj_lg = lg_avg_ft  >= crit['ft_gate_league'] * 1.1
+            ft_gate_adriatic = adj_p1 and adj_p2 and adj_lg
+            if ft_gate and not ft_gate_adriatic:
+                skip(f"Gate FT ADRIATIC (×1.2): "
+                     f"p1={p1_ft_marc:.1f}(min {crit['ft_gate_p']*1.2:.1f}) "
+                     f"p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']*1.2:.1f})")
+                ft_gate_adj = False
 
         if not ft_gate or not ft_gate_adj:
             skip(f"Gate FT: liga={lg_avg_ft:.1f}(min {crit['ft_gate_league']}) "
@@ -1494,12 +1505,15 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             else:
                 skip(f"+2.5 FT: placar {hg}x{ag} total={total_ft} (precisa <2)")
 
-            # ── +3.5 FT | Placar: < 3 gols ─────────────────────────
+            # ── +3.5 FT | Placar: < 3 gols + HT >= 3 gols (ritmo alto) ─
             c = crit['ft_35']
             if total_ft < 3:
+                # Exige ritmo alto no 1ºT: HT total >= 3 gols
+                # Dados: todos os reds do +3.5 tiveram HT com 1-2 gols
+                ht_ritmo_ok = total_ht >= 3
                 pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
                           and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok:
                     odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1507,17 +1521,22 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not ht_ritmo_ok:
+                    skip(f"+3.5 FT: ritmo HT={total_ht} insuficiente (precisa >=3)")
                 elif not pct_ok:
                     skip(f"+3.5 FT: inconsistência p1={p1_st.get('pct_over_ft3',0):.0%} p2={p2_st.get('pct_over_ft3',0):.0%} (min {c.get('pct_ft3',0):.0%})")
             else:
                 skip(f"+3.5 FT: placar {hg}x{ag} total={total_ft} (precisa <3)")
 
-            # ── +4.5 FT | Placar: <= 3 gols ────────────────────────
+            # ── +4.5 FT | Placar: <= 3 gols + HT >= 2 gols ───────────
             c = crit['ft_45']
             if total_ft <= 3:
+                # Exige ritmo mínimo no 1ºT: HT total >= 2 gols
+                # Dados: todos os reds do +4.5 tiveram HT = 0 ou 1 gol
+                ht_ritmo_ok = total_ht >= 2
                 pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
                           and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok:
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok:
                     odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1525,6 +1544,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not ht_ritmo_ok:
+                    skip(f"+4.5 FT: ritmo HT={total_ht} insuficiente (precisa >=2)")
                 elif not pct_ok:
                     skip(f"+4.5 FT: inconsistência p1={p1_st.get('pct_over_ft3',0):.0%} p2={p2_st.get('pct_over_ft3',0):.0%} (min {c.get('pct_ft3',0):.0%})")
             else:
@@ -1539,11 +1560,16 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                         p2_ft_marc >= c['p2_marc'] and p2_ft_sof >= c['p2_sof'] and pct_ok):
                     odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
                     if odd:
-                        candidates['FT'].append({
-                            'name': '⚽ BTTS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
-                        })
+                        # Odd alta em BTTS = mercado sabe que um player domina
+                        # O único RED do BTTS foi com odd 6.75
+                        if odd > 4.5:
+                            skip(f"BTTS FT: odd={odd} muito alta (>4.5 indica domínio de 1 player)")
+                        else:
+                            candidates['FT'].append({
+                                'name': '⚽ BTTS FT (TOTAL)',
+                                'odd': odd, 'category': 'FT',
+                                'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
+                            })
             else:
                 if total_ft > 1:
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
@@ -1596,31 +1622,32 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
     p2_ht  = p2_st.get('avg_ht', 0) if p2_st else 0
     lg_ht  = lg_st.get('avg_ht', 0) if lg_st else 0
     lg_ft  = lg_st.get('avg_ft', 0) if lg_st else 0
-    # max_val dinâmico: escala relativa aos dois players, mínimo 4.0
-    # Assim um player com 3.0g/j (acima da média) aparece como ████████ não █████
     max_ft = max(p1_ft, p2_ft, 4.0)
 
-    # Link ao vivo
-    eid = event.get('id', '')
+    eid     = event.get('id', '')
     sb_link = event.get('superbetLink', '')
     if sb_link:
-        link = f'🎲 <a href="{sb_link}">VER AO VIVO (Superbet)</a>'
+        link = f'🔗 <a href="{sb_link}">VER AO VIVO</a>'
     elif eid:
         clean = str(eid).replace('sb-', '')
         url   = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={clean}&sportId=66"
-        link  = f'🎲 <a href="{url}">VER AO VIVO (EstrelaBet)</a>'
+        link  = f'🔗 <a href="{url}">VER AO VIVO</a>'
     else:
         link  = ''
 
-    pad  = max(len(home), len(away))
-    msg  = f"🎯 <b>{league} — {strategy}</b>\n"
-    msg += f"<b>@ {odd}</b>\n"
-    msg += f"⏱ {timer}  |  📊 {score}\n"
-    msg += "─────────────────────\n"
-    msg += f"<b>{home.ljust(pad)}</b>  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft, max_ft)}\n"
-    msg += f"<b>{away.ljust(pad)}</b>  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft, max_ft)}\n"
-    msg += "─────────────────────\n"
-    msg += f"Liga: HT {lg_ht:.1f}g/j  |  FT {lg_ft:.1f}g/j"
+    # Linha de aposta limpa
+    strat_clean = strategy.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
+
+    msg  = f"🎯 <b>{strat_clean}</b>  <code>@ {odd}</code>\n"
+    msg += f"🏆 {league}\n"
+    msg += f"⏱ {timer}   📊 {score}\n"
+    msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+    msg += f"<b>{home}</b>\n"
+    msg += f"  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft, max_ft)}\n"
+    msg += f"<b>{away}</b>\n"
+    msg += f"  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft, max_ft)}\n"
+    msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+    msg += f"Liga: HT {lg_ht:.1f}g/j  ·  FT {lg_ft:.1f}g/j"
     if link:
         msg += f"\n{link}"
     return msg
@@ -1635,27 +1662,32 @@ def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
     away   = tip.get('away_player', '?')
     odd    = tip.get('sent_odd', '')
     ft_tot = ft_h + ft_a
-    odd_str = f" @ {odd}" if odd else ""
+    ht_tot = ht_h + ht_a
+    strat_clean = strat.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
+
     msg  = f"{emoji} <b>{status}</b> — {league}\n"
-    msg += f"<b>{strat}</b>{odd_str}\n"
-    msg += "─────────────────────\n"
-    msg += f"HT {ht_h}-{ht_a}  →  FT <b>{ft_h}-{ft_a}</b>  ({ft_tot} gols)\n"
+    msg += f"<b>{strat_clean}</b>"
+    if odd:
+        msg += f"  <code>@ {odd}</code>"
+    msg += "\n"
+    msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+    msg += f"HT <b>{ht_h}-{ht_a}</b> ({ht_tot}g)  →  FT <b>{ft_h}-{ft_a}</b> ({ft_tot}g)\n"
     # Para apostas HT, mostrar só placar HT
     if 'HT' in strat and 'FT' not in strat:
-        msg += f"1ºT: {home} {ht_h} gols  |  {away} {ht_a} gols"
+        msg += f"1ºT: {home} {ht_h}g  ·  {away} {ht_a}g"
     # Para apostas individuais, destacar o player apostado
     elif '(TOTAL)' not in strat and 'BTTS' not in strat:
         home_nick = extract_nick(home)
         away_nick = extract_nick(away)
         strat_up  = strat.upper()
         if home_nick and home_nick in strat_up:
-            msg += f"<b>{home}: {ft_h} gols</b>  |  {away}: {ft_a} gols"
+            msg += f"<b>{home}</b>: {ft_h}g  ·  {away}: {ft_a}g"
         elif away_nick and away_nick in strat_up:
-            msg += f"{home}: {ft_h} gols  |  <b>{away}: {ft_a} gols</b>"
+            msg += f"{home}: {ft_h}g  ·  <b>{away}</b>: {ft_a}g"
         else:
-            msg += f"{home}: {ft_h} gols  |  {away}: {ft_a} gols"
+            msg += f"{home}: {ft_h}g  ·  {away}: {ft_a}g"
     else:
-        msg += f"{home}: {ft_h} gols  |  {away}: {ft_a} gols"
+        msg += f"{home}: {ft_h}g  ·  {away}: {ft_a}g"
     return msg
 
 # =============================================================================
@@ -1680,13 +1712,18 @@ def find_result_match(tip, recent):
     best, best_diff = None, float('inf')
 
     for m in recent:
-        m_h = extract_nick(m.get('home_player', '') or m.get('home_team', ''))
-        m_a = extract_nick(m.get('away_player', '') or m.get('away_team', ''))
+        m_h = extract_nick(m.get('home_player', '') or m.get('home_team', '') or
+                           m.get('home_nick', ''))
+        m_a = extract_nick(m.get('away_player', '') or m.get('away_team', '') or
+                           m.get('away_nick', ''))
 
         # Aceita match parcial (nick contido)
         h_ok = h_nick == m_h or h_nick in m_h or m_h in h_nick
         a_ok = a_nick == m_a or a_nick in m_a or m_a in a_nick
-        if not (h_ok and a_ok):
+        # Aceita também match cruzado (home/away trocados — raro mas possível)
+        h_ok_inv = h_nick == m_a or h_nick in m_a or m_a in h_nick
+        a_ok_inv = a_nick == m_h or a_nick in m_h or m_h in a_nick
+        if not ((h_ok and a_ok) or (h_ok_inv and a_ok_inv)):
             continue
 
         # Verificar se tem placar final
@@ -1832,11 +1869,13 @@ async def check_results(bot):
             if not matched:
                 if elapsed > 3600:
                     tip['status'] = 'expired'
-                    print(f"[EXPIRADO] {tip.get('home_player')} vs {tip.get('away_player')} — {elapsed/60:.0f}min sem match")
+                    h_nick = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
+                    a_nick = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
+                    # Log para diagnóstico: mostrar nicks buscados
+                    print(f"[EXPIRADO] buscando '{h_nick}' vs '{a_nick}' | {tip.get('league')} | {elapsed/60:.0f}min")
                 else:
                     print(f"[AGUARDANDO] {tip.get('home_player')} vs {tip.get('away_player')} "
-                          f"| {tip.get('league')} | {elapsed/60:.0f}min desde envio "
-                          f"(min_wait={min_wait//60}min)")
+                          f"| {tip.get('league')} | {elapsed/60:.0f}min (min_wait={min_wait//60}min)")
                 continue
 
             strat  = tip['strategy']
