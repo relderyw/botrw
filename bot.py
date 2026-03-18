@@ -678,8 +678,13 @@ def fetch_superbet_live():
                         try:
                             _start = datetime.fromisoformat(_utc.replace('Z', '+00:00'))
                             _elapsed = (datetime.now(timezone.utc) - _start).total_seconds()
-                            if 0 < _elapsed < 900:   # até 15 min (jogo mais longo = 12 min + margem)
+                            # Limite: elapsed deve ser menor que duração+3min do jogo
+                            # Se maior, utcDate provavelmente é início do torneio, não do jogo
+                            _dur_tmp = get_profile(map_league(league_raw)).get('duration', 12)
+                            _max_elapsed = (_dur_tmp + 3) * 60
+                            if 0 < _elapsed < _max_elapsed:
                                 minute = max(0, int(_elapsed / 60))
+                            # Se elapsed >= max, não usar (utcDate inválido) — manter minute=0
                         except:
                             pass
 
@@ -2072,6 +2077,11 @@ async def main_loop(bot):
                 mapped = event.get('mappedLeague', '')
 
                 if not mapped or mapped == 'Unknown':
+                    continue
+
+                # Bloquear ligas não reconhecidas explicitamente no LEAGUE_PROFILES
+                # Ex: "Cyber Live Arena" → mapeia para si mesma → DEFAULT → não é nossa liga
+                if mapped not in LEAGUE_PROFILES or mapped == 'DEFAULT':
                     continue
 
                 ht_done = f"{eid}_HT" in sent_keys
