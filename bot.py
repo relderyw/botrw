@@ -184,6 +184,11 @@ LIVE_MAP = {
     "Esoccer Battle Volta - 6 mins play":              "VOLTA 6 MIN",
     "Valhalla Cup": "VALHALLA CUP", "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
+    # Altenar — nomes reais com semana/edição
+    "Serie A": "BATTLE 8 MIN",        # cat=E-battles, players = Simaponika/Kavviro/Frantsuz/deroll
+    "Premier League": "BATTLE 8 MIN", # cat=E-battles, players = Noltzer/Special/Boki/maggett0
+    "World Cup A": "BATTLE 8 MIN",    # cat=E-battles, players = hotShot/GianniKid/Kodak/Kray
+    "European Conference": "GT LEAGUE 12 MIN",  # cat=E-battles, 12 min (a confirmar)
     "CLA": "CLA 10 MIN",
     # "Cyber Live Arena" — liga DIFERENTE de CLA, não mapear (evita tips em liga errada)
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
@@ -204,6 +209,13 @@ HIST_MAP = {
     "Valhalla Cup": "VALHALLA CUP", "Valkyrie Cup": "VALKYRIE CUP",
     "CLA League": "CLA 10 MIN", "CLA": "CLA 10 MIN",
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
+    # Altenar — nomes reais dos campeonatos
+    "H2H GG - E-football": "H2H 8 MIN",
+    "Volta Club World Cup": "VOLTA 6 MIN",
+    "Serie A": "BATTLE 8 MIN",
+    "Premier League": "BATTLE 8 MIN",
+    "World Cup A": "BATTLE 8 MIN",
+    "European Conference": "GT LEAGUE 12 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
     # Nomes reais confirmados pelos logs do histórico
@@ -564,7 +576,7 @@ def _fallback_by_name(name):
     if "GT" in n and ("LIGA" in n or "LEAGUE" in n):  return "GT LEAGUE 12 MIN"
     if "ADRIATIC" in n or "EAL " in n:                return "ADRIATIC"
     if "VALHALLA" in n:                               return "VALHALLA CUP"
-    if "VALKYRIE" in n:                               return "VALKYRIE CUP"
+    if "VALKYRIE" in n or "VALKIRYE" in n:            return "VALKYRIE CUP"
     if "VOLTA" in n:                                  return "VOLTA 6 MIN"
     if "BATTLE" in n and ("CAMP" in n or "2X6" in n): return "BATTLE 12 MIN"
     if "BATTLE" in n:                                 return "BATTLE 8 MIN"
@@ -767,7 +779,9 @@ def fetch_altenar_live():
         data  = r.json()
         comps = {c['id']: c for c in data.get('competitors', [])}
         champ = {c['id']: c['name'] for c in data.get('champs', [])}
-        evts  = [e for e in data.get('events', []) if e.get('sportId') == 66]
+        # sportId=146 = E-football no Altenar (URL usa sportId=66 como filtro de query,
+        # mas o JSON retorna os eventos com sportId=146)
+        evts  = [e for e in data.get('events', []) if e.get('sportId') == 146]
         result = []
 
         for ev in evts:
@@ -805,17 +819,31 @@ def fetch_altenar_live():
                 if "ECOMP" in league_name.upper() or "VIRTUAL" in league_name.upper():
                     continue
 
+                # Bloquear ligas de basquete (catIds 2086, 1729, 2130)
+                ev_catId = ev.get('catId', 0)
+                if ev_catId in (2086, 1729, 2130):
+                    continue  # E-Basquete — não é futebol
+
                 mapped = map_league(league_name)
 
-                # Parse do tempo ao vivo
+                # Parse do tempo ao vivo (Altenar usa "1ª parte", "2ª parte", "Pausa")
                 lt = ev.get('liveTime', '')
                 minute, second = 0, 0
+                is_halftime_break = False
                 if lt:
                     m = re.search(r'(\d+):(\d+)', lt)
                     if m:
                         minute, second = int(m.group(1)), int(m.group(2))
-                    elif any(x in lt.upper() for x in ['1\u00aa PARTE', '1ST HALF']):
-                        minute = 2
+                    elif any(x in lt.upper() for x in ['1\u00aa PARTE', '1ST HALF', '1ª PARTE']):
+                        minute = 2   # início do 1ºT
+                    elif any(x in lt.upper() for x in ['2\u00aa PARTE', '2ND HALF', '2ª PARTE']):
+                        pass         # minute=0 → fallback via startDate (correto para Altenar)
+                    elif 'PAUSA' in lt.upper() or 'HALF' in lt.upper() or 'INTERVALO' in lt.upper():
+                        is_halftime_break = True  # jogo pausado entre tempos
+
+                # Pular jogos em pausa (entre HT e FT)
+                if is_halftime_break:
+                    continue
 
                 result.append({
                     'id': str(eid),
