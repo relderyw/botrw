@@ -184,7 +184,8 @@ LIVE_MAP = {
     "Esoccer Battle Volta - 6 mins play":              "VOLTA 6 MIN",
     "Valhalla Cup": "VALHALLA CUP", "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
-    "CLA": "CLA 10 MIN", "Cyber Live Arena": "CLA 10 MIN",
+    "CLA": "CLA 10 MIN",
+    # "Cyber Live Arena" — liga DIFERENTE de CLA, não mapear (evita tips em liga errada)
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "Champions League B 2\u00d76": "GT LEAGUE 12 MIN",
     "Champions League B 2x6":   "GT LEAGUE 12 MIN",
@@ -1215,6 +1216,7 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
     player_raw: nome bruto do jogador para bets individuais
     """
     best = None
+    best_mkt = ''
     for ln in open_lines:
         mkt   = ln.get('market_name', '').lower()
         name  = ln.get('odd_name', '').lower()
@@ -1269,6 +1271,7 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
                 if 'sim' in name or 'yes' in name or 'ambas' in name or 'both' in name:
                     if best is None or price > best:
                         best = price
+                        best_mkt = f"{ln.get('market_name','')} | {ln.get('odd_name','')}"
 
         elif category == 'individual' and player_raw:
             # FIX: usar só o nick limpo — 'Man City (fantazer)' → busca 'fantazer'
@@ -1280,6 +1283,8 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
                     if best is None or price > best:
                         best = price
 
+    if best and 'btts' in str(best_mkt).lower() or 'ambas' in str(best_mkt).lower():
+        print(f"[find_odd] BTTS match: '{best_mkt}' @ {best}")
     return best
 
 # =============================================================================
