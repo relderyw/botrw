@@ -265,7 +265,7 @@ LEAGUE_MIN_TIPS = 5  # amostras mínimas para decisão
 
 
 class LeagueManager:
-    def __init__(self, fn='league_perf.json'):
+    def __init__(self, fn='league_performance.json'):
         self.fn = fn
         self.leagues = {}
         self._load()
@@ -2005,11 +2005,12 @@ async def check_results(bot):
         r = daily_stats.get(today_str, {}).get('red', 0)
         if g + r > 0:
             pct     = g / (g + r) * 100
-            summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
-            if summary != last_summary:
+            base_summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
+            full_summary = f"{base_summary}\n\n{league_manager.status()}"
+            if base_summary != last_summary:
                 try:
-                    await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
-                    last_summary = summary
+                    await bot.send_message(chat_id=CHAT_ID, text=full_summary, parse_mode="HTML")
+                    last_summary = base_summary
                 except:
                     pass
 
