@@ -906,21 +906,45 @@ def fetch_markets_altenar(event_id):
         lines = []
         for mkt in mkts:
             mkt_name = mkt.get('name', '')
+            mkt_sv   = str(mkt.get('sv', ''))   # sv está no nível do MERCADO no Altenar
+
+            # Altenar usa 'oddIds' na resposta (não 'desktopOddIds')
             ids = []
-            for grp in mkt.get('desktopOddIds', []):
-                if isinstance(grp, list):
-                    ids.extend(grp)
-                else:
-                    ids.append(grp)
+            for key in ('oddIds', 'desktopOddIds'):
+                raw = mkt.get(key, [])
+                for grp in raw:
+                    if isinstance(grp, list):
+                        ids.extend(grp)
+                    else:
+                        ids.append(grp)
+
+            seen = set()
             for oid in ids:
+                if oid in seen:
+                    continue
+                seen.add(oid)
                 o = odds.get(oid)
-                if o and o.get('oddStatus') == 0:
-                    lines.append({
-                        'market_name': mkt_name,
-                        'odd_name':    o.get('name', ''),
-                        'odd_sv':      o.get('sv', ''),
-                        'price':       float(o.get('price', 0)),
-                    })
+                if not o or o.get('oddStatus') != 0:
+                    continue
+
+                odd_name = o.get('name', '')
+                # sv: preferir o do mercado (mais confiável), depois tentar extrair do nome
+                # Ex: market.sv="3.5" ou odd_name="Mais de 3.5" → sv="3.5"
+                sv = mkt_sv or o.get('sv', '')
+                if not sv:
+                    # Tentar extrair número do nome da odd: "Mais de 3.5" → "3.5"
+                    m = re.search(r'(\d+\.\d+)', odd_name)
+                    if m:
+                        sv = m.group(1)
+
+                lines.append({
+                    'market_name': mkt_name,
+                    'odd_name':    odd_name,
+                    'odd_sv':      sv,
+                    'price':       float(o.get('price', 0)),
+                })
+        if lines:
+            print(f"[markets ALT] {event_id}: {len(lines)} linhas | ex: {lines[0].get('market_name')} sv={lines[0].get('odd_sv')!r}")
         return lines
     except Exception as e:
         print(f"[markets ALT] {event_id}: {e}")
