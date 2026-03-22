@@ -230,6 +230,10 @@ HIST_MAP = {
     "Volta - 6 MIN":                            "VOLTA 6 MIN",
     # BATTLE 12
     "Battle 12m":                               "BATTLE 12 MIN",
+    "BATTLE - 8 MIN":                           "BATTLE 8 MIN",
+    "BATTLE - 12 MIN":                          "BATTLE 12 MIN",
+    "Battle - 8 MIN":                           "BATTLE 8 MIN",
+    "Battle - 12 MIN":                          "BATTLE 12 MIN",
     "Champions League B 2×6":             "BATTLE 12 MIN",
     "Battle - Liga dos Campeões 2":             "BATTLE 12 MIN",
     "Battle - Liga de Campeões 2":              "BATTLE 12 MIN",
@@ -1078,6 +1082,16 @@ def _rebuild_stats_cache(matches):
         if st and not st.get('estimated'):
             new_leagues[lg] = st
 
+    # Adicionar chaves alternativas: nome tal como aparece no histórico
+    # Ex: "Kevin" → chave "KEVIN" + chave "KEVIN" (já feito pelo extract_nick)
+    # Mas se o histórico tem "Kevin Gamer", extract_nick retorna "GAMER"
+    # Então adicionamos também a chave do primeiro token
+    for nick, st in list(new_players.items()):
+        # Primeiro token do nick como chave alternativa
+        first = nick.split()[0] if ' ' in nick else None
+        if first and first not in new_players:
+            new_players[first] = st
+
     stats_cache = {
         'players': new_players,
         'leagues': new_leagues,
@@ -1094,7 +1108,7 @@ def _rebuild_stats_cache(matches):
 
 
 def get_player_stats_cached(player_name):
-    """Retorna stats do cache. Se expirado, reconstrói antes de responder."""
+    """Retorna stats do cache. Tenta múltiplos formatos de nick."""
     nick = extract_nick(player_name)
     if not nick:
         return None
@@ -1103,7 +1117,27 @@ def get_player_stats_cached(player_name):
         matches = history_cache.get('matches', [])
         if matches:
             _rebuild_stats_cache(matches)
-    return stats_cache['players'].get(nick)
+
+    players = stats_cache['players']
+
+    # Tentativa 1: nick extraído (ex: "KEVIN")
+    st = players.get(nick)
+    if st:
+        return st
+
+    # Tentativa 2: nome direto em uppercase (caso normalize_nick já limpou)
+    name_up = player_name.strip().upper()
+    st = players.get(name_up)
+    if st:
+        return st
+
+    # Tentativa 3: busca parcial — se o nick está contido em alguma chave do cache
+    # Útil quando histórico tem "Kevin Gamer" e ao vivo tem "Kevin"
+    for key, val in players.items():
+        if nick in key or key in nick:
+            return val
+
+    return None
 
 
 def get_league_stats_cached(league_name):
@@ -2232,7 +2266,16 @@ async def main_loop(bot):
                 p1_s = get_player_stats_cached(home_p)
                 p2_s = get_player_stats_cached(away_p)
                 if not p1_s or not p2_s:
-                    # Diagnosticar: quantas partidas tem no histórico para cada player
+                    # Fallback: tentar calcular direto do histórico se cache falhou
+                    hist_now = history_cache.get('matches', [])
+                    if hist_now:
+                        if not p1_s:
+                            p1_s = player_stats(home_p, hist_now, last_n=5)
+                        if not p2_s:
+                            p2_s = player_stats(away_p, hist_now, last_n=5)
+
+                if not p1_s or not p2_s:
+                    # Ainda sem dados — skip com diagnóstico
                     hist_now = history_cache.get('matches', [])
                     def _count_games(nick):
                         n = extract_nick(nick)
@@ -2241,8 +2284,12 @@ async def main_loop(bot):
                                    or extract_nick(m.get('away_player','')) == n)
                     c1 = _count_games(home_p)
                     c2 = _count_games(away_p)
-                    p1_label = f"{home_p}({'sem dados' if c1==0 else f'{c1}j<3'})"
-                    p2_label = f"{away_p}({'sem dados' if c2==0 else f'{c2}j<3'})"
+                    nick1 = extract_nick(home_p)
+                    nick2 = extract_nick(away_p)
+                    in_cache1 = nick1 in stats_cache.get('players', {})
+                    in_cache2 = nick2 in stats_cache.get('players', {})
+                    p1_label = f"{home_p}({'cache miss' if c1>0 and not in_cache1 else 'sem dados' if c1==0 else f'{c1}j'})"
+                    p2_label = f"{away_p}({'cache miss' if c2>0 and not in_cache2 else 'sem dados' if c2==0 else f'{c2}j'})"
                     print(f"  [SKIP stats] {p1_label} | {p2_label}")
                     continue
 
