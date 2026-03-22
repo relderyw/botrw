@@ -89,7 +89,7 @@ CRIT_8MIN = {
     # +0.5 HT   | Placar: 0x0
     "ht_05":   {"p1_marc": 1.5, "p2_marc": 1.5},                        # +0.2
     # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
-    "ht_15":   {"p1_marc": 1.9, "p2_marc": 1.9},                        # +0.2
+    "ht_15":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ht1": 0.60},      # +0.4 + consistência
     # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
     "ht_25":   {"p1_marc": 2.3, "p2_marc": 2.3},                        # +0.3
     # BTTS HT   | Placar: total <= 1
@@ -127,7 +127,7 @@ CRIT_12MIN = {
     # +0.5 HT   | Placar: 0x0
     "ht_05": {"p1_marc": 1.5, "p2_marc": 1.5},
     # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
-    "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9},
+    "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ht1": 0.60},
     # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
     "ht_25": {"p1_marc": 2.2, "p2_marc": 2.2},
     # BTTS HT   | Placar: total <= 1
@@ -265,7 +265,7 @@ LEAGUE_MIN_TIPS = 5  # amostras mínimas para decisão
 
 
 class LeagueManager:
-    def __init__(self, fn='league_performance.json'):
+    def __init__(self, fn='league_perf.json'):
         self.fn = fn
         self.leagues = {}
         self._load()
@@ -372,6 +372,8 @@ STATS_TTL = 120          # atualiza junto com o histórico (2 min)
 
 sent_tips       = []   # lista de dicts
 sent_keys       = set()  # "{event_id}_HT" e "{event_id}_FT"
+league_last_tip = {}     # {league: datetime} — cooldown entre tips da mesma liga
+LEAGUE_TIP_COOLDOWN = 5  # minutos mínimos entre tips da mesma liga
 player_cooldown = {}   # {nick: datetime_liberacao}
 
 daily_stats     = {}   # {"2026-03-14": {"green": N, "red": N}}
@@ -1426,7 +1428,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             c = crit['ht_05']
             if hg == 0 and ag == 0:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
+                    # min_odd=1.60 para +0.5 HT — odds menores que isso não têm valor
+                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=max(min_odd, 1.60))
                     if odd:
                         candidates['HT'].append({
                             'name': '⚽ +0.5 GOL HT',
@@ -1439,7 +1442,11 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             # ── +1.5 HT | Placar: 0x0 | 1x0 | 0x1 ────────────────
             c = crit['ht_15']
             if total_ht <= 1:
-                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                # pct_ht1: % de jogos onde o player marcou >= 1 gol no HT
+                # Todos os reds de +1.5 HT: um player marcou 0 gols no HT
+                pct_ht_ok = (p1_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0)
+                             and p2_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0))
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc'] and pct_ht_ok:
                     odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
@@ -1447,6 +1454,10 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
                         })
+                elif not pct_ht_ok:
+                    skip(f"+1.5 HT: consistência insuficiente "
+                         f"p1={p1_st.get('pct_over_ht1',0):.0%} p2={p2_st.get('pct_over_ht1',0):.0%} "
+                         f"(precisa >={c.get('pct_ht1',0):.0%})")
             else:
                 skip(f"+1.5 HT: placar {hg}x{ag} total={total_ht} (precisa <=1)")
 
@@ -1467,8 +1478,12 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             # ── BTTS HT | Placar: total <= 1, NÃO ambos marcaram ──
             c = crit['ht_btts']
             if total_ht <= 1 and not (hg > 0 and ag > 0):
+                # Exigir que AMBOS costumem marcar no HT (>= 60% dos últimos 5j)
+                # Todos os reds de BTTS HT foram quando um player dominou (outro não marcou)
+                pct_ht_ok = (p1_st.get('pct_over_ht1', 1.0) >= 0.60
+                             and p2_st.get('pct_over_ht1', 1.0) >= 0.60)
                 if (p1_ht_marc >= c['p1_marc'] and p1_ht_sof >= c['p1_sof'] and
-                        p2_ht_marc >= c['p2_marc'] and p2_ht_sof >= c['p2_sof']):
+                        p2_ht_marc >= c['p2_marc'] and p2_ht_sof >= c['p2_sof'] and pct_ht_ok):
                     odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
@@ -1476,6 +1491,10 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
                         })
+                elif not pct_ht_ok:
+                    skip(f"BTTS HT: consistência HT insuficiente "
+                         f"p1={p1_st.get('pct_over_ht1',0):.0%} p2={p2_st.get('pct_over_ht1',0):.0%} "
+                         f"(precisa >=60%)")
             else:
                 if total_ht > 1:
                     skip(f"BTTS HT: total={total_ht} (precisa <=1)")
@@ -1822,6 +1841,15 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
         print(f"[SKIP] {key} já enviado")
         return
 
+    # Cooldown de liga: não enviar 2 tips da mesma liga em menos de N minutos
+    league = event.get('mappedLeague', '')
+    last_tip_time = league_last_tip.get(league)
+    if last_tip_time:
+        ago = (datetime.now(MANAUS_TZ) - last_tip_time).total_seconds() / 60
+        if ago < LEAGUE_TIP_COOLDOWN:
+            print(f"[COOLDOWN LIGA] {league}: última tip há {ago:.1f}min (min {LEAGUE_TIP_COOLDOWN}min)")
+            return
+
     # Verificar cooldown dos jogadores
     for raw in [event.get('homeRaw', ''), event.get('awayRaw', '')]:
         blocked, mins = is_player_blocked(raw)
@@ -1841,6 +1869,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
                 parse_mode="HTML", disable_web_page_preview=True
             )
             sent_keys.add(key)
+            league_last_tip[event.get('mappedLeague', '')] = datetime.now(MANAUS_TZ)
             sent_tips.append({
                 'event_id':     event_id,
                 'strategy':     strategy,
@@ -2005,12 +2034,11 @@ async def check_results(bot):
         r = daily_stats.get(today_str, {}).get('red', 0)
         if g + r > 0:
             pct     = g / (g + r) * 100
-            base_summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
-            full_summary = f"{base_summary}\n\n{league_manager.status()}"
-            if base_summary != last_summary:
+            summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
+            if summary != last_summary:
                 try:
-                    await bot.send_message(chat_id=CHAT_ID, text=full_summary, parse_mode="HTML")
-                    last_summary = base_summary
+                    await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
+                    last_summary = summary
                 except:
                     pass
 
