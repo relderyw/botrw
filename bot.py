@@ -2029,7 +2029,9 @@ async def check_results(bot):
         # Limpar resolvidas
         sent_tips[:] = [t for t in sent_tips if t.get('status') == 'pending']
 
-        # Resumo diário
+        # Resumo diário — 2 mensagens separadas:
+        # 1ª: placar do dia (G/R/%)
+        # 2ª: status das ligas
         g = daily_stats.get(today_str, {}).get('green', 0)
         r = daily_stats.get(today_str, {}).get('red', 0)
         if g + r > 0:
@@ -2037,7 +2039,10 @@ async def check_results(bot):
             summary = f"<b>👑 RW TIPS</b>\n✅ {g}  ❌ {r}  📊 {pct:.1f}%"
             if summary != last_summary:
                 try:
+                    # Mensagem 1: placar do dia
                     await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
+                    # Mensagem 2: status das ligas (separada)
+                    await bot.send_message(chat_id=CHAT_ID, text=league_manager.status(), parse_mode="HTML")
                     last_summary = summary
                 except:
                     pass
