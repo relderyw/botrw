@@ -1847,7 +1847,7 @@ def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
 def find_result_match(tip, recent):
     """
     Encontra a partida finalizada correspondente a uma tip.
-    Usa nome dos jogadores + janela temporal.
+    Usa event_id primeiro (match exato), depois nome dos jogadores + janela temporal restrita.
     """
     h_nick = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
     a_nick = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
@@ -1860,6 +1860,28 @@ def find_result_match(tip, recent):
     if tip_time.tzinfo is None:
         tip_time = tip_time.replace(tzinfo=MANAUS_TZ)
 
+    # Tentar match exato pelo event_id primeiro
+    tip_event_id = str(tip.get('event_id', '')).replace('sb-', '')
+    if tip_event_id:
+        for m in recent:
+            m_id = str(m.get('id', '') or m.get('event_id', '')).replace('sb-', '')
+            if m_id and m_id == tip_event_id:
+                ft_h = m.get('home_score_ft')
+                ft_a = m.get('away_score_ft')
+                if ft_h is not None and ft_a is not None:
+                    return m
+
+    # Fallback: match por nome dos jogadores + janela temporal
+    # Janela restrita: -15min a +30min (jogos frequentes como Valkyrie a cada ~15min
+    # causavam falsos matches com -45min de janela)
+    lg_key   = tip.get('league', '')
+    prof     = get_profile(lg_key)
+    duration = prof.get('duration', 8)
+    # Janela negativa: no máximo -(duration) min (tip enviada próximo ao fim do jogo)
+    # Janela positiva: +(duration + 5) min de margem para o resultado aparecer na API
+    neg_window = -duration * 60
+    pos_window = (duration + 5) * 60
+
     best, best_diff = None, float('inf')
 
     for m in recent:
@@ -1868,22 +1890,18 @@ def find_result_match(tip, recent):
         m_a = extract_nick(m.get('away_player', '') or m.get('away_team', '') or
                            m.get('away_nick', ''))
 
-        # Aceita match parcial (nick contido)
         h_ok = h_nick == m_h or h_nick in m_h or m_h in h_nick
         a_ok = a_nick == m_a or a_nick in m_a or m_a in a_nick
-        # Aceita também match cruzado (home/away trocados — raro mas possível)
         h_ok_inv = h_nick == m_a or h_nick in m_a or m_a in h_nick
         a_ok_inv = a_nick == m_h or a_nick in m_h or m_h in a_nick
         if not ((h_ok and a_ok) or (h_ok_inv and a_ok_inv)):
             continue
 
-        # Verificar se tem placar final
         ft_h = m.get('home_score_ft')
         ft_a = m.get('away_score_ft')
         if ft_h is None or ft_a is None:
             continue
 
-        # Janela temporal: entre -15 min e +90 min após envio da tip
         dt_str = m.get('started_at') or m.get('data_realizacao', '')
         try:
             if 'T' in str(dt_str) or 'Z' in str(dt_str):
@@ -1894,13 +1912,7 @@ def find_result_match(tip, recent):
                 dt = dt.replace(tzinfo=timezone.utc)
             dt = dt.astimezone(MANAUS_TZ)
             delta = (dt - tip_time).total_seconds()
-            # Janela: -45min a +90min
-            # Negativa larga porque tips FT são enviadas no 2ºT —
-            # o jogo já tem ht_dur minutos quando a tip sai.
-            # Exemplo: ADRIATIC (10 min) — tip enviada no min 6 (2ºT),
-            # logo started_at está 6 min antes da tip → delta = -360s.
-            # Com -15min a janela não cobria, com -45min cobre todas as ligas.
-            if -45 * 60 <= delta <= 90 * 60:
+            if neg_window <= delta <= pos_window:
                 diff = abs(delta)
                 if diff < best_diff:
                     best_diff = diff
