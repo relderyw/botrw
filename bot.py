@@ -1425,11 +1425,17 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     p1_ht_sof  = p1_st.get('avg_ht_sof', 0)
     p1_ft_marc = p1_st.get('avg_ft', 0)
     p1_ft_sof  = p1_st.get('avg_ft_sof', 0)
+    # Média de gols marcados SÓ no 2ºT (o que ainda pode acontecer quando a tip é enviada)
+    # avg_ft inclui o HT, mas quando a tip é enviada no 2ºT, o HT já aconteceu
+    p1_ft2_marc = max(0.0, p1_ft_marc - p1_ht_marc)   # avg gols 2ºT marcados
+    p1_ft2_sof  = max(0.0, p1_ft_sof  - p1_ht_sof)    # avg gols 2ºT sofridos
 
     p2_ht_marc = p2_st.get('avg_ht', 0)
     p2_ht_sof  = p2_st.get('avg_ht_sof', 0)
     p2_ft_marc = p2_st.get('avg_ft', 0)
     p2_ft_sof  = p2_st.get('avg_ft_sof', 0)
+    p2_ft2_marc = max(0.0, p2_ft_marc - p2_ht_marc)
+    p2_ft2_sof  = max(0.0, p2_ft_sof  - p2_ht_sof)
 
     # Stats da liga
     lg_avg_ht = lg_st.get('avg_ht', 0)
@@ -1574,7 +1580,10 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             if total_ft == 0:
                 pct_ok = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
                           and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok:
+                liga_ok = lg_avg_ft >= 1.5
+                projecao = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok  = projecao >= 1.5
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and liga_ok and proj_ok:
                     odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1582,6 +1591,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not liga_ok:
+                    skip(f"+1.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=1.5)")
                 elif not pct_ok:
                     skip(f"+1.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%} (min {c.get('pct_ft2',0):.0%})")
             else:
@@ -1592,7 +1603,11 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             if total_ft < 2:
                 pct_ok = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
                           and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok:
+                liga_ok = lg_avg_ft >= 2.5
+                # Projeção real: gols já marcados + o que cada player tende a marcar no 2ºT
+                projecao = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok  = projecao >= 2.5
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and liga_ok and proj_ok:
                     odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1600,6 +1615,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not liga_ok:
+                    skip(f"+2.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=2.5)")
                 elif not pct_ok:
                     skip(f"+2.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%} (min {c.get('pct_ft2',0):.0%})")
             else:
@@ -1613,7 +1630,10 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 ht_ritmo_ok = total_ht >= 3
                 pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
                           and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok:
+                liga_ok = lg_avg_ft >= 3.5
+                projecao = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok  = projecao >= 3.5
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok and liga_ok and proj_ok:
                     odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1621,6 +1641,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not liga_ok:
+                    skip(f"+3.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=3.5)")
                 elif not ht_ritmo_ok:
                     skip(f"+3.5 FT: ritmo HT={total_ht} insuficiente (precisa >=3)")
                 elif not pct_ok:
@@ -1636,7 +1658,10 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 ht_ritmo_ok = total_ht >= 2
                 pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
                           and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
-                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok:
+                liga_ok = lg_avg_ft >= 4.5
+                projecao = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok  = projecao >= 4.5
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok and liga_ok and proj_ok:
                     odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
@@ -1644,6 +1669,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             'odd': odd, 'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
+                elif not liga_ok:
+                    skip(f"+4.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=4.5)")
                 elif not ht_ritmo_ok:
                     skip(f"+4.5 FT: ritmo HT={total_ht} insuficiente (precisa >=2)")
                 elif not pct_ok:
