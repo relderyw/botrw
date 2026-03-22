@@ -109,7 +109,7 @@ CRIT_8MIN = {
     # BTTS FT   | Placar: total <= 1
     "ft_btts": {"p1_marc": 1.2, "p1_sof": 1.2, "p2_marc": 1.2, "p2_sof": 1.2, "pct_ft2": 0.60},
 
-    "min_odd": 1.55,
+    "min_odd": 1.70,
 }
 
 # 6 min (Volta) — mesmos critérios do 8 min
@@ -140,7 +140,7 @@ CRIT_12MIN = {
     "ft_45":   {"p1_marc": 3.5, "p2_marc": 3.5, "pct_ft3": 0.80},
     "ft_btts": {"p1_marc": 2.0, "p1_sof": 1.5, "p2_marc": 2.0, "p2_sof": 1.5, "pct_ft2": 0.60},
 
-    "min_odd": 1.55,
+    "min_odd": 1.70,
 }
 
 LEAGUE_PROFILES = {
@@ -372,8 +372,10 @@ STATS_TTL = 120          # atualiza junto com o histórico (2 min)
 
 sent_tips       = []   # lista de dicts
 sent_keys       = set()  # "{event_id}_HT" e "{event_id}_FT"
-league_last_tip = {}     # {league: datetime} — cooldown entre tips da mesma liga
-LEAGUE_TIP_COOLDOWN = 5  # minutos mínimos entre tips da mesma liga
+league_last_tip     = {}  # {league: datetime} — cooldown entre tips da mesma liga
+LEAGUE_TIP_COOLDOWN = 8   # minutos mínimos entre tips da mesma liga
+league_red_cooldown = {}  # {league: datetime} — bloqueio após RED
+LEAGUE_RED_BLOCK    = 15  # minutos de bloqueio após qualquer RED na liga
 player_cooldown = {}   # {nick: datetime_liberacao}
 
 daily_stats     = {}   # {"2026-03-14": {"green": N, "red": N}}
@@ -1250,7 +1252,7 @@ def league_stats(league_name, all_matches, last_n=5):
 # =============================================================================
 # BUSCA DE ODD NO MERCADO
 # =============================================================================
-def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.55):
+def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
     """
     Retorna a melhor odd para a estratégia pedida.
 
@@ -1428,8 +1430,7 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             c = crit['ht_05']
             if hg == 0 and ag == 0:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    # min_odd=1.60 para +0.5 HT — odds menores que isso não têm valor
-                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=max(min_odd, 1.60))
+                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
                             'name': '⚽ +0.5 GOL HT',
@@ -1843,6 +1844,18 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
 
     # Cooldown de liga: não enviar 2 tips da mesma liga em menos de N minutos
     league = event.get('mappedLeague', '')
+    
+    # Bloqueio por RED: se a liga teve um red recente, aguardar antes de enviar
+    red_block_until = league_red_cooldown.get(league)
+    if red_block_until:
+        now = datetime.now(MANAUS_TZ)
+        if isinstance(red_block_until, datetime) and red_block_until.tzinfo is None:
+            red_block_until = red_block_until.replace(tzinfo=MANAUS_TZ)
+        if now < red_block_until:
+            mins_left = (red_block_until - now).total_seconds() / 60
+            print(f"[BLOCK RED] {league}: bloqueada por {mins_left:.0f}min após RED")
+            return
+
     last_tip_time = league_last_tip.get(league)
     if last_tip_time:
         ago = (datetime.now(MANAUS_TZ) - last_tip_time).total_seconds() / 60
@@ -1924,18 +1937,22 @@ async def check_results(bot):
 
             elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
 
-            # Aguardar tempo mínimo baseado no tipo e na duração da liga
-            cat      = tip.get('category', 'FT')
-            lg_key   = tip.get('league', '')
-            prof     = get_profile(lg_key)
-            duration = prof.get('duration', 8)   # minutos totais do jogo
-            ht_dur   = prof.get('ht_dur', 4)
-            # HT: aguardar o fim do HT + 1 min de margem para a API atualizar
-            # FT: aguardar o fim do jogo inteiro + 1 min
+            # Aguardar tempo dinâmico: quanto falta para o jogo terminar
+            cat         = tip.get('category', 'FT')
+            lg_key      = tip.get('league', '')
+            prof        = get_profile(lg_key)
+            duration    = prof.get('duration', 8)
+            ht_dur      = prof.get('ht_dur', 4)
+            sent_minute = tip.get('sent_minute', 0)
+
             if cat == 'HT':
-                min_wait = (ht_dur + 1) * 60
+                # Falta: ht_dur - sent_minute + 1 min de margem
+                remaining   = max(1, ht_dur - sent_minute)
+                min_wait    = (remaining + 1) * 60
             else:
-                min_wait = (duration + 2) * 60
+                # FT: falta duration - sent_minute + 1 min de margem
+                remaining   = max(1, duration - sent_minute)
+                min_wait    = (remaining + 1) * 60
 
             if elapsed < min_wait:
                 continue
@@ -2020,6 +2037,12 @@ async def check_results(bot):
                 # Cooldown do jogador
                 for raw_key in ['homeRaw', 'awayRaw', 'home_player', 'away_player']:
                     update_cooldown(tip.get(raw_key, ''), result)
+
+                # Bloqueio de liga por RED: pausar por 15 min
+                if result == 'red' and lg:
+                    block_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_RED_BLOCK)
+                    league_red_cooldown[lg] = block_until
+                    print(f"[BLOCK RED] {lg} bloqueada por {LEAGUE_RED_BLOCK}min")
 
                 # Daily stats
                 dk = tip['sent_time'].strftime('%Y-%m-%d')
@@ -2268,13 +2291,13 @@ async def main_loop(bot):
 
 async def results_checker(bot):
     print("[CHECKER] Iniciando verificador de resultados...")
-    await asyncio.sleep(60)  # aguarda 1 min antes do primeiro check
+    await asyncio.sleep(30)  # aguarda 30s antes do primeiro check
     while True:
         try:
             await check_results(bot)
         except Exception as e:
             print(f"[results_checker] {e}")
-        await asyncio.sleep(120)  # verifica a cada 2 minutos
+        await asyncio.sleep(30)  # verifica a cada 30 segundos
 
 # =============================================================================
 # INICIALIZAÇÃO
