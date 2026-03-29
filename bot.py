@@ -92,6 +92,10 @@ CRIT_8MIN = {
     "ht_15":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ht1": 0.60},      # +0.4 + consistência
     # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
     "ht_25":   {"p1_marc": 2.3, "p2_marc": 2.3},                        # +0.3
+    # +3.5 HT   | Placar: 1x1 | 2x0 | 0x2 | 2x1 | 1x2
+    "ht_35":   {"p1_marc": 2.7, "p2_marc": 2.7},                        # +0.4
+    # +4.5 HT   | Placar: 2x1 | 1x2 | 2x2 | 3x0 | 0x3
+    "ht_45":   {"p1_marc": 3.2, "p2_marc": 3.2},                        # +0.5
     # BTTS HT   | Placar: total <= 1
     "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},
 
@@ -130,6 +134,10 @@ CRIT_12MIN = {
     "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ht1": 0.60},
     # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
     "ht_25": {"p1_marc": 2.2, "p2_marc": 2.2},
+    # +3.5 HT
+    "ht_35": {"p1_marc": 2.5, "p2_marc": 2.5},
+    # +4.5 HT
+    "ht_45": {"p1_marc": 3.0, "p2_marc": 3.0},
     # BTTS HT   | Placar: total <= 1
     "ht_btts": {"p1_marc": 1.6, "p1_sof": 1.0, "p2_marc": 1.6, "p2_sof": 1.0},
 
@@ -946,9 +954,8 @@ def fetch_markets_altenar(event_id):
                     continue
 
                 odd_name = o.get('name', '')
-                # sv: preferir o do mercado (mais confiável), depois tentar extrair do nome
-                # Ex: market.sv="3.5" ou odd_name="Mais de 3.5" → sv="3.5"
-                sv = mkt_sv or o.get('sv', '')
+                # sv: preferir o da odd individual (sempre correto), depois do mercado
+                sv = o.get('sv', '') or mkt_sv
                 if not sv:
                     # Tentar extrair número do nome da odd: "Mais de 3.5" → "3.5"
                     m = re.search(r'(\d+\.\d+)', odd_name)
@@ -1397,11 +1404,18 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
         is_ht_mkt = any(x in mkt for x in
                         ['1º', '1ª', '1st', 'primeiro', 'half', 'período', '1 per'])
         # FIX: mercados individuais ('Rose - Total de Gols') têm jogador antes do ' - '
-        _mkt_prefix = ln.get('market_name', '').split(' - ')[0].lower()
+        _mkt_parts = ln.get('market_name', '').split(' - ')
+        _mkt_prefix = _mkt_parts[0].lower()
         _is_player_mkt = (' - ' in ln.get('market_name', '') and
                           any(x in mkt for x in ['total', 'gol', 'score']) and
                           not any(x in _mkt_prefix for x in
-                                  ['1º', '1ª', 'total', 'gol', 'ambas', 'ambos']))
+                                  ['1º', '1ª', '1st', 'total', 'gol', 'ambas', 'ambos']))
+
+        # Reforço: se o mercado contém nomes de times/players ou palavras como 'casa'/'fora'
+        if not _is_player_mkt and (' - ' in ln.get('market_name', '')):
+            if any(x in mkt for x in ['casa', 'fora', 'home', 'away', 'individual']):
+                _is_player_mkt = True
+
         is_total_mkt = (any(x in mkt for x in ['total', 'gol', 'score', 'num'])
                         and not _is_player_mkt)
         is_over = any(x in name for x in ['mais', 'over', 'acima', '+'])
@@ -1595,6 +1609,34 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                         })
             else:
                 skip(f"+2.5 HT: placar {hg}x{ag} total={total_ht} (precisa 1-2)")
+
+            # ── +3.5 HT | Placar: 1x1 | 2x0 | 0x2 | 2x1 | 1x2 ────
+            c = crit.get('ht_35', {"p1_marc": 2.7, "p2_marc": 2.7}) # fallback se não existir
+            if 2 <= total_ht <= 3:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ht_total', 3.5, min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ +3.5 GOLS HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+3.5 HT: placar {hg}x{ag} total={total_ht} (precisa 2-3)")
+
+            # ── +4.5 HT | Placar: 2x1 | 1x2 | 2x2 | 3x0 | 0x3 ────
+            c = crit.get('ht_45', {"p1_marc": 3.2, "p2_marc": 3.2})
+            if 3 <= total_ht <= 4:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    odd = find_odd(open_lines, 'ht_total', 4.5, min_odd=min_odd)
+                    if odd:
+                        candidates['HT'].append({
+                            'name': '⚽ +4.5 GOLS HT',
+                            'odd': odd, 'category': 'HT',
+                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                        })
+            else:
+                skip(f"+4.5 HT: placar {hg}x{ag} total={total_ht} (precisa 3-4)")
 
             # ── BTTS HT | Critérios estritos últimos 3 jogos ──────
             c = crit['ht_btts']
