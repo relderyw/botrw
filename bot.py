@@ -118,8 +118,8 @@ CRIT_6MIN = CRIT_8MIN
 # 10 min (CLA, Adriatic) e 12 min (GT, Valhalla, Battle 12)
 CRIT_12MIN = {
     # ── Gate geral ─────────────────────────────────────────────────
-    "ht_gate_league": 2.8,   # reduzido de 3.2 — ligas 12min têm poucos dados
-    "ht_gate_p":      1.6,   # reduzido de 2.0 — players 12min marcam menos no HT
+    "ht_gate_league": 2.0,   # GT LEAGUES avg HT real = 2.0g (dados confirmados)
+    "ht_gate_p":      1.4,   # players 12min marcam menos no HT — gate calibrado
     "ft_gate_league": 4.1,
     "ft_gate_p":      2.4,
 
@@ -190,6 +190,7 @@ LIVE_MAP = {
     "World Cup A": "BATTLE 8 MIN",    # cat=E-battles, players = hotShot/GianniKid/Kodak/Kray
     "European Conference": "GT LEAGUE 12 MIN",  # cat=E-battles, 12 min (a confirmar)
     "CLA": "CLA 10 MIN",
+    "CLA LEAGUE": "CLA 10 MIN",    # nome exato Altenar ao vivo
     # "Cyber Live Arena" — liga DIFERENTE de CLA, não mapear (evita tips em liga errada)
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "Champions League B 2\u00d76": "GT LEAGUE 12 MIN",
@@ -208,6 +209,9 @@ HIST_MAP = {
     "Esoccer H2H GG League - 8 mins play":   "H2H 8 MIN",
     "Valhalla Cup": "VALHALLA CUP", "Valkyrie Cup": "VALKYRIE CUP",
     "CLA League": "CLA 10 MIN", "CLA": "CLA 10 MIN",
+    "CLA LEAGUE":  "CLA 10 MIN",   # nome exato retornado pelo histórico Altenar
+    "Cla League":  "CLA 10 MIN",
+    "cla league":  "CLA 10 MIN",
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     # Altenar — nomes reais dos campeonatos
     "H2H GG - E-football": "H2H 8 MIN",
@@ -226,10 +230,17 @@ HIST_MAP = {
     "GT Leagues":                               "GT LEAGUE 12 MIN",
     # VOLTA
     "VOLTA - 6 MIN":                            "VOLTA 6 MIN",
+    "Volta - 6 MIN":                            "VOLTA 6 MIN",
+    "Volta 6 min":                              "VOLTA 6 MIN",
+    "VOLTA 6 MIN":                              "VOLTA 6 MIN",
     "Volta 6m":                                 "VOLTA 6 MIN",
     "Volta - 6 MIN":                            "VOLTA 6 MIN",
     # BATTLE 12
     "Battle 12m":                               "BATTLE 12 MIN",
+    "BATTLE 12":                                "BATTLE 12 MIN",
+    "BATTLE - 12 MIN":                          "BATTLE 12 MIN",
+    "Battle - 12 MIN":                          "BATTLE 12 MIN",
+    "Esoccer Battle - 12 mins play":            "BATTLE 12 MIN",
     "BATTLE - 8 MIN":                           "BATTLE 8 MIN",
     "BATTLE - 12 MIN":                          "BATTLE 12 MIN",
     "Battle - 8 MIN":                           "BATTLE 8 MIN",
@@ -240,6 +251,9 @@ HIST_MAP = {
     "BATTLE 12":                                "BATTLE 12 MIN",
     # ADRIATIC
     "eAdriatic League":                         "ADRIATIC",
+    "Adriatic League":                          "ADRIATIC",
+    "ADRIATIC LEAGUE":                          "ADRIATIC",
+    "eADRIATIC":                                "ADRIATIC",
     "E-Adriatic":                               "ADRIATIC",
     "Adriatic":                                 "ADRIATIC",
     # H2H
@@ -264,8 +278,8 @@ def map_league(name):
 LEAGUE_INITIAL = {lg: True for lg in LEAGUE_PROFILES if lg != "DEFAULT"}
 LEAGUE_RELOCK  = 55  # % → bloqueia
 LEAGUE_UNLOCK  = 68  # % → desbloqueia
-LEAGUE_WINDOW  = 15  # últimas N tips
-LEAGUE_MIN_TIPS = 5  # amostras mínimas para decisão
+LEAGUE_WINDOW  = 10  # últimas N tips (janela de avaliação)
+LEAGUE_MIN_TIPS = 3  # amostras mínimas para primeira decisão
 
 
 class LeagueManager:
@@ -1869,14 +1883,14 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
     # Linha de aposta limpa
     strat_clean = strategy.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
 
-    msg  = f"🎯 <b>{strat_clean}</b>  <code>@ {odd}</code>\n\n"
+    msg  = f"🎯 <b>{strat_clean}</b>  <code>@ {odd}</code>\n"
     msg += f"🏆 {league}\n"
     msg += f"⏱ {timer}   📊 {score}\n"
     msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
     msg += f"<b>{home}</b>\n"
     msg += f"  HT {p1_ht:.1f}g  FT {p1_ft:.1f}g  {_bar(p1_ft, max_ft)}\n"
-    msg += f"<b>{away}</b>\n\n"
-    msg += f"  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft, max_ft)}\n\n"
+    msg += f"<b>{away}</b>\n"
+    msg += f"  HT {p2_ht:.1f}g  FT {p2_ft:.1f}g  {_bar(p2_ft, max_ft)}\n"
     msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
     msg += f"Liga: HT {lg_ht:.1f}g/j  ·  FT {lg_ft:.1f}g/j"
     if link:
@@ -2270,8 +2284,8 @@ async def check_results(bot):
             pnl_emoji  = "📈" if pnl >= 0 else "📉"
             investido  = daily_stats.get(today_str, {}).get('investido', 0.0)
             roi_str    = f"{pnl/investido*100:+.1f}%" if investido > 0 else "—"
-            summary    = (f"<b>👑 RW TIPS</b>\n\n"
-                          f"✅ {g}  ❌ {r}  📊 {pct:.1f}%\n\n"
+            summary    = (f"<b>👑 RW TIPS</b>\n"
+                          f"✅ {g}  ❌ {r}  📊 {pct:.1f}%\n"
                           f"{pnl_emoji} {pnl_str} un  |  ROI {roi_str}")
             if summary != last_summary:
                 try:
@@ -2534,6 +2548,33 @@ async def results_checker(bot):
 # =============================================================================
 # INICIALIZAÇÃO
 # =============================================================================
+
+def reset_league_window(leagues_to_reset):
+    """
+    Reseta a janela de performance de ligas específicas no LeagueManager.
+    Usado para ligas pausadas com critérios antigos — com os novos critérios
+    mais seletivos, elas precisam recomeçar a coleta do zero.
+    """
+    for lg in leagues_to_reset:
+        if lg in league_manager.leagues:
+            d = league_manager.leagues[lg]
+            d['window'] = __import__('collections').deque(maxlen=LEAGUE_WINDOW)
+            d['active'] = True
+            d['total']  = 0
+            print(f"[RESET] {lg}: janela apagada, coleta reiniciada")
+        else:
+            league_manager._ensure(lg)
+            print(f"[RESET] {lg}: criada do zero")
+    league_manager.save()
+
+
+LIGAS_RESET_STARTUP = [
+    "ADRIATIC",       # avg HT=7.0g FT=7.5g — pausada por critérios antigos
+    "VOLTA 6 MIN",    # avg HT=3.8g FT=5.5g — pausada por critérios antigos
+    "BATTLE 12 MIN",  # avg FT=4.5g — pausada por critérios antigos
+    "BATTLE 8 MIN",   # aguardar mais dados, mas resetar para coletar novamente
+]
+
 async def main():
     print("=" * 65)
     print("🤖 RW TIPS — BOT FIFA v5.0 (CRITÉRIOS DIRETOS)")
@@ -2588,6 +2629,11 @@ async def main():
     # Pre-carregar histórico
     print("[INFO] Pré-carregando histórico...")
     hist = fetch_history(pages=15)
+
+    # Resetar ligas pausadas injustamente (critérios antigos eram frouxos)
+    # Com os novos critérios (pct_l3, btts_ft, draw_pct, liga_avg>=linha),
+    # essas ligas precisam recomeçar a coleta do zero
+    reset_league_window(LIGAS_RESET_STARTUP)
 
     # Registrar todas as ligas conhecidas antecipadamente
     for lg in LEAGUE_PROFILES:
