@@ -250,13 +250,10 @@ HIST_MAP = {
     "Battle - 12 MIN":                          "BATTLE 12 MIN",
     "Esoccer Battle - 12 mins play":            "BATTLE 12 MIN",
     "BATTLE - 8 MIN":                           "BATTLE 8 MIN",
-    "BATTLE - 12 MIN":                          "BATTLE 12 MIN",
     "Battle - 8 MIN":                           "BATTLE 8 MIN",
-    "Battle - 12 MIN":                          "BATTLE 12 MIN",
     "Champions League B 2×6":             "BATTLE 12 MIN",
     "Battle - Liga dos Campeões 2":             "BATTLE 12 MIN",
     "Battle - Liga de Campeões 2":              "BATTLE 12 MIN",
-    "BATTLE 12":                                "BATTLE 12 MIN",
     # ADRIATIC
     "eAdriatic League":                         "ADRIATIC",
     "Adriatic League":                          "ADRIATIC",
@@ -1380,6 +1377,11 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
     category: 'ht_total' | 'ft_total' | 'ht_btts' | 'ft_btts' | 'individual'
     value: float linha (0.5, 1.5, ...) ou None para BTTS
     player_raw: nome bruto do jogador para bets individuais
+
+    CORREÇÃO: mercados com nick do player entre parênteses (ex: "Jacob17", "Antonio")
+    são sempre mercados INDIVIDUAIS e nunca devem ser usados como total da partida.
+    Isso evita o bug onde "+1.5 HT" pegava a odd do mercado individual do player
+    em vez da odd do total de gols da partida.
     """
     best = None
     best_mkt = ''
@@ -1400,19 +1402,37 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
         except:
             pass
 
+        # ── CORREÇÃO DO BUG ────────────────────────────────────────────────
+        # Mercados com nick do player entre parênteses são SEMPRE individuais.
+        # Ex: "1º tempo - FSV Mainz 05 (Jacob17) total"
+        #     "1º tempo - Heidenheim (Antonio) total"
+        # Esses mercados NÃO devem ser usados para apostas de total da partida.
+        # A regra anterior falhava porque o prefixo "1º tempo" fazia
+        # _is_player_mkt = False, permitindo que a odd individual fosse
+        # retornada erroneamente como total do jogo.
+        _market_name_raw = ln.get('market_name', '')
+        _has_player_paren = bool(re.search(r'\([^)]{2,16}\)', _market_name_raw))
+
         # HT: mercado de 1º tempo — NÃO inclui 'tempo' sozinho ('Tempo Normal' é FT)
         is_ht_mkt = any(x in mkt for x in
                         ['1º', '1ª', '1st', 'primeiro', 'half', 'período', '1 per'])
-        # FIX: mercados individuais ('Rose - Total de Gols') têm jogador antes do ' - '
-        _mkt_parts = ln.get('market_name', '').split(' - ')
-        _mkt_prefix = _mkt_parts[0].lower()
-        _is_player_mkt = (' - ' in ln.get('market_name', '') and
-                          any(x in mkt for x in ['total', 'gol', 'score']) and
-                          not any(x in _mkt_prefix for x in
-                                  ['1º', '1ª', '1st', 'total', 'gol', 'ambas', 'ambos']))
 
-        # Reforço: se o mercado contém nomes de times/players ou palavras como 'casa'/'fora'
-        if not _is_player_mkt and (' - ' in ln.get('market_name', '')):
+        # Mercado individual: tem parênteses com nick OU tem ' - ' separando
+        # nome do player do tipo de mercado
+        _mkt_parts = _market_name_raw.split(' - ')
+        _mkt_prefix = _mkt_parts[0].lower()
+        _is_player_mkt_legacy = (
+            ' - ' in _market_name_raw and
+            any(x in mkt for x in ['total', 'gol', 'score']) and
+            not any(x in _mkt_prefix for x in
+                    ['1º', '1ª', '1st', 'total', 'gol', 'ambas', 'ambos'])
+        )
+
+        # Detecção final: parênteses com nick = individual (regra principal + mais robusta)
+        _is_player_mkt = _has_player_paren or _is_player_mkt_legacy
+
+        # Reforço adicional via palavras-chave de lado
+        if not _is_player_mkt and (' - ' in _market_name_raw):
             if any(x in mkt for x in ['casa', 'fora', 'home', 'away', 'individual']):
                 _is_player_mkt = True
 
