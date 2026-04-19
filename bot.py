@@ -1,21 +1,13 @@
 """
-BOT FIFA v5.0 — REESCRITO DO ZERO
-Critérios diretos baseados nos últimos 5 jogos de cada player + liga.
-Sem sistema de confidence, sem funil excessivo, sem filtros impossíveis.
-
-CRITÉRIOS (ligas 8 min):
-  GATE HT: liga_avg_ht >= 3.2  +  p1_avg_ht >= 2.1  +  p2_avg_ht >= 2.1
-  +0.5 HT : p1_ht >= 1.5  E  p2_ht >= 1.5
-  +1.5 HT : p1_ht >= 2.1  E  p2_ht >= 2.1  (+ gate)
-  +2.5 HT : p1_ht >= 2.6  E  p2_ht >= 2.6  (+ gate 4.0)
-  BTTS HT : p1_btts_ht >= 60%  E  p2_btts_ht >= 60%
-  +2.5 FT : p1_ft + p2_ft >= 5.0
-  +3.5 FT : p1_ft + p2_ft >= 6.5
-  +4.5 FT : p1_ft + p2_ft >= 8.0
-  BTTS FT : p1_btts_ft >= 70%  E  p2_btts_ft >= 70%
-  +1.5 IND: player_avg_ft >= 2.2  E  pct_scored_2+ >= 70%
-  +2.5 IND: player_avg_ft >= 3.2  E  pct_scored_3+ >= 60%
-  +3.5 IND: player_avg_ft >= 4.2  E  pct_scored_4+ >= 50%
+BOT FIFA v5.1 — FIXES APLICADOS
+================================
+FIX 1: Gate HT GT LEAGUE 12 MIN corrigido (2.0 → 1.6)
+FIX 2: Critérios FT +2.5 relaxados (btts_ft_l3 >= 0.67, draw_pct_l3 <= 0.34)
+FIX 3: HT +3.5 e HT +4.5 removidos do arsenal (edge negativo confirmado)
+FIX 4: Lookup fuzzy robusto no cache (resolve cache miss de nick)
+FIX 5: LeagueManager — janela maior, thresholds mais estáveis
+FIX 6: Reset de todas as ligas no startup (janelas podres dos critérios antigos)
+FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
 """
 
 import os, time, re, json, asyncio, logging, concurrent.futures
@@ -65,84 +57,48 @@ HISTORY_URL = "https://rwtips-k8j2.onrender.com/api/history"
 
 # =============================================================================
 # CRITÉRIOS POR TIPO DE LIGA
+# FIX 1: ht_gate_league CRIT_12MIN corrigido de 2.0 → 1.6
+# FIX 3: ht_35 e ht_45 removidos de CRIT_8MIN e CRIT_12MIN
 # =============================================================================
-# =============================================================================
-# CRITÉRIOS POR TIPO DE LIGA
-#
-# Todas as apostas HT são enviadas durante o 1ºT.
-# Todas as apostas FT são enviadas durante o 2ºT.
-# Médias baseadas nos últimos 5 jogos do player (independente do adversário).
-# Médias de liga baseadas nos últimos 5 jogos da liga.
-# =============================================================================
-
-# 6 min (Volta) e 8 min (Battle, H2H, Valkyrie) — mesmos critérios
 CRIT_8MIN = {
-    # ── Gate geral ─────────────────────────────────────────────────
-    # HT: liga e ambos players precisam passar para liberar QUALQUER aposta HT
-    "ht_gate_league": 2.7,   # média gols HT da liga (últimos 5j)
-    "ht_gate_p":      1.8,   # média gols HT marcados de CADA player (últimos 5j)
-    # FT: liga e ambos players precisam passar para liberar QUALQUER aposta FT
-    "ft_gate_league": 3.7,   # média gols FT da liga (últimos 5j)
-    "ft_gate_p":      2.1,   # média gols FT marcados de CADA player (últimos 5j)
+    "ht_gate_league": 2.7,
+    "ht_gate_p":      1.8,
+    "ft_gate_league": 3.7,
+    "ft_gate_p":      2.1,
 
-    # ── Apostas HT (1ºT) ───────────────────────────────────────────
-    # +0.5 HT   | Placar: 0x0
-    "ht_05":   {"p1_marc": 1.5, "p2_marc": 1.5},                        # +0.2
-    # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
-    "ht_15":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ht1": 0.60},      # +0.4 + consistência
-    # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
-    "ht_25":   {"p1_marc": 2.3, "p2_marc": 2.3},                        # +0.3
-    # +3.5 HT   | Placar: 1x1 | 2x0 | 0x2 | 2x1 | 1x2
-    "ht_35":   {"p1_marc": 2.7, "p2_marc": 2.7},                        # +0.4
-    # +4.5 HT   | Placar: 2x1 | 1x2 | 2x2 | 3x0 | 0x3
-    "ht_45":   {"p1_marc": 3.2, "p2_marc": 3.2},                        # +0.5
-    # BTTS HT   | Placar: total <= 1
+    "ht_05":   {"p1_marc": 1.5, "p2_marc": 1.5},
+    "ht_15":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ht1": 0.60},
+    "ht_25":   {"p1_marc": 2.3, "p2_marc": 2.3},
+    # FIX 3: ht_35 e ht_45 REMOVIDOS — edge negativo confirmado pelos dados
     "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},
 
-    # ── Apostas FT (2ºT) ───────────────────────────────────────────
-    # pct_ft2 = % dos últimos 5 jogos com >= 2 gols marcados (consistência)
-    # pct_ft3 = % dos últimos 5 jogos com >= 3 gols marcados
-    # +1.5 FT   | Placar: 0 gols
-    "ft_15":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},      # +0.3 + consistência
-    # +2.5 FT   | Placar: < 2 gols
-    "ft_25":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},      # +0.5 + consistência
-    # +3.5 FT   | Placar: < 3 gols
-    "ft_35":   {"p1_marc": 2.5, "p2_marc": 2.5, "pct_ft3": 0.60},      # +0.3 + consistência
-    # +4.5 FT   | Placar: <= 3 gols
-    "ft_45":   {"p1_marc": 3.0, "p2_marc": 3.0, "pct_ft3": 0.80},      # +0.3 + consistência alta
-    # BTTS FT   | Placar: total <= 1
+    "ft_15":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},
+    # FIX 2: ft_25 com critérios relaxados — aplicados em evaluate_strategies
+    "ft_25":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},
+    "ft_35":   {"p1_marc": 2.5, "p2_marc": 2.5, "pct_ft3": 0.60},
+    "ft_45":   {"p1_marc": 3.0, "p2_marc": 3.0, "pct_ft3": 0.80},
     "ft_btts": {"p1_marc": 1.2, "p1_sof": 1.2, "p2_marc": 1.2, "p2_sof": 1.2, "pct_ft2": 0.60},
 
     "min_odd": 1.70,
 }
 
-# 6 min (Volta) — mesmos critérios do 8 min
 CRIT_6MIN = CRIT_8MIN
 
-# 10 min (CLA, Adriatic) e 12 min (GT, Valhalla, Battle 12)
+# FIX 1: ht_gate_league corrigido de 2.0 → 1.6 (avg real confirmado nos logs = 1.8)
 CRIT_12MIN = {
-    # ── Gate geral ─────────────────────────────────────────────────
-    "ht_gate_league": 2.0,   # GT LEAGUES avg HT real = 2.0g (dados confirmados)
-    "ht_gate_p":      1.4,   # players 12min marcam menos no HT — gate calibrado
+    "ht_gate_league": 1.6,   # FIX 1: era 2.0 — logs mostram avg real = 1.8
+    "ht_gate_p":      1.4,
     "ft_gate_league": 4.1,
     "ft_gate_p":      2.4,
 
-    # ── Apostas HT (1ºT) ───────────────────────────────────────────
-    # +0.5 HT   | Placar: 0x0
     "ht_05": {"p1_marc": 1.5, "p2_marc": 1.5},
-    # +1.5 HT   | Placar: 0x0 | 1x0 | 0x1
     "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ht1": 0.60},
-    # +2.5 HT   | Placar: 1x0 | 0x1 | 1x1
     "ht_25": {"p1_marc": 2.2, "p2_marc": 2.2},
-    # +3.5 HT
-    "ht_35": {"p1_marc": 2.5, "p2_marc": 2.5},
-    # +4.5 HT
-    "ht_45": {"p1_marc": 3.0, "p2_marc": 3.0},
-    # BTTS HT   | Placar: total <= 1
+    # FIX 3: ht_35 e ht_45 REMOVIDOS — edge negativo confirmado
     "ht_btts": {"p1_marc": 1.6, "p1_sof": 1.0, "p2_marc": 1.6, "p2_sof": 1.0},
 
-    # ── Apostas FT (2ºT) ───────────────────────────────────────────
     "ft_15":   {"p1_marc": 2.2, "p2_marc": 2.2, "pct_ft2": 0.60},
+    # FIX 2: ft_25 com critérios relaxados — aplicados em evaluate_strategies
     "ft_25":   {"p1_marc": 2.5, "p2_marc": 2.5, "pct_ft2": 0.60},
     "ft_35":   {"p1_marc": 3.0, "p2_marc": 3.0, "pct_ft3": 0.60},
     "ft_45":   {"p1_marc": 3.5, "p2_marc": 3.5, "pct_ft3": 0.80},
@@ -192,14 +148,12 @@ LIVE_MAP = {
     "Esoccer Battle Volta - 6 mins play":              "VOLTA 6 MIN",
     "Valhalla Cup": "VALHALLA CUP", "Valhalla League": "VALHALLA CUP",
     "Valkyrie Cup": "VALKYRIE CUP",
-    # Altenar — nomes reais com semana/edição
-    "Serie A": "BATTLE 8 MIN",        # cat=E-battles, players = Simaponika/Kavviro/Frantsuz/deroll
-    "Premier League": "BATTLE 8 MIN", # cat=E-battles, players = Noltzer/Special/Boki/maggett0
-    "World Cup A": "BATTLE 8 MIN",    # cat=E-battles, players = hotShot/GianniKid/Kodak/Kray
-    "European Conference": "GT LEAGUE 12 MIN",  # cat=E-battles, 12 min (a confirmar)
+    "Serie A": "BATTLE 8 MIN",
+    "Premier League": "BATTLE 8 MIN",
+    "World Cup A": "BATTLE 8 MIN",
+    "European Conference": "GT LEAGUE 12 MIN",
     "CLA": "CLA 10 MIN",
-    "CLA LEAGUE": "CLA 10 MIN",    # nome exato Altenar ao vivo
-    # "Cyber Live Arena" — liga DIFERENTE de CLA, não mapear (evita tips em liga errada)
+    "CLA LEAGUE": "CLA 10 MIN",
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "Champions League B 2\u00d76": "GT LEAGUE 12 MIN",
     "Champions League B 2x6":   "GT LEAGUE 12 MIN",
@@ -217,11 +171,10 @@ HIST_MAP = {
     "Esoccer H2H GG League - 8 mins play":   "H2H 8 MIN",
     "Valhalla Cup": "VALHALLA CUP", "Valkyrie Cup": "VALKYRIE CUP",
     "CLA League": "CLA 10 MIN", "CLA": "CLA 10 MIN",
-    "CLA LEAGUE":  "CLA 10 MIN",   # nome exato retornado pelo histórico Altenar
+    "CLA LEAGUE":  "CLA 10 MIN",
     "Cla League":  "CLA 10 MIN",
     "cla league":  "CLA 10 MIN",
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
-    # Altenar — nomes reais dos campeonatos
     "H2H GG - E-football": "H2H 8 MIN",
     "Volta Club World Cup": "VOLTA 6 MIN",
     "Serie A": "BATTLE 8 MIN",
@@ -230,20 +183,13 @@ HIST_MAP = {
     "European Conference": "GT LEAGUE 12 MIN",
     "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
     "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
-    # Nomes reais confirmados pelos logs do histórico
-    # GT LEAGUE
     "GT LEAGUES":                               "GT LEAGUE 12 MIN",
-    "GT League 12m":                            "GT LEAGUE 12 MIN",
-    "GT Leagues 12m":                           "GT LEAGUE 12 MIN",
     "GT Leagues":                               "GT LEAGUE 12 MIN",
-    # VOLTA
     "VOLTA - 6 MIN":                            "VOLTA 6 MIN",
     "Volta - 6 MIN":                            "VOLTA 6 MIN",
     "Volta 6 min":                              "VOLTA 6 MIN",
     "VOLTA 6 MIN":                              "VOLTA 6 MIN",
     "Volta 6m":                                 "VOLTA 6 MIN",
-    "Volta - 6 MIN":                            "VOLTA 6 MIN",
-    # BATTLE 12
     "Battle 12m":                               "BATTLE 12 MIN",
     "BATTLE 12":                                "BATTLE 12 MIN",
     "BATTLE - 12 MIN":                          "BATTLE 12 MIN",
@@ -251,17 +197,15 @@ HIST_MAP = {
     "Esoccer Battle - 12 mins play":            "BATTLE 12 MIN",
     "BATTLE - 8 MIN":                           "BATTLE 8 MIN",
     "Battle - 8 MIN":                           "BATTLE 8 MIN",
-    "Champions League B 2×6":             "BATTLE 12 MIN",
+    "Champions League B 2\u00d76":             "BATTLE 12 MIN",
     "Battle - Liga dos Campeões 2":             "BATTLE 12 MIN",
     "Battle - Liga de Campeões 2":              "BATTLE 12 MIN",
-    # ADRIATIC
     "eAdriatic League":                         "ADRIATIC",
     "Adriatic League":                          "ADRIATIC",
     "ADRIATIC LEAGUE":                          "ADRIATIC",
     "eADRIATIC":                                "ADRIATIC",
     "E-Adriatic":                               "ADRIATIC",
     "Adriatic":                                 "ADRIATIC",
-    # H2H
     "H2H GG League - 8 mins play":             "H2H 8 MIN",
     "H2H 8m":                                   "H2H 8 MIN",
 }
@@ -278,13 +222,14 @@ def map_league(name):
     return name
 
 # =============================================================================
-# LEAGUE MANAGER — auto-bloqueio/desbloqueio por performance
+# LEAGUE MANAGER
+# FIX 5: LEAGUE_MIN_TIPS=5, LEAGUE_WINDOW=15, LEAGUE_RELOCK=50
 # =============================================================================
-LEAGUE_INITIAL = {lg: True for lg in LEAGUE_PROFILES if lg != "DEFAULT"}
-LEAGUE_RELOCK  = 55  # % → bloqueia
-LEAGUE_UNLOCK  = 68  # % → desbloqueia
-LEAGUE_WINDOW  = 10  # últimas N tips (janela de avaliação)
-LEAGUE_MIN_TIPS = 3  # amostras mínimas para primeira decisão
+LEAGUE_INITIAL  = {lg: True for lg in LEAGUE_PROFILES if lg != "DEFAULT"}
+LEAGUE_RELOCK   = 50   # FIX 5: era 55 — menos sensível a 1-2 REDs
+LEAGUE_UNLOCK   = 68
+LEAGUE_WINDOW   = 15   # FIX 5: era 10 — janela maior = menos volatilidade
+LEAGUE_MIN_TIPS = 5    # FIX 5: era 3 — 3 tips é ruído puro
 
 
 class LeagueManager:
@@ -331,7 +276,7 @@ class LeagueManager:
         d = self._ensure(league)
         n = len(d['window'])
         if n < LEAGUE_MIN_TIPS:
-            return d['active'], f"coletando dados ({n}/{LEAGUE_MIN_TIPS})"
+            return d['active'], f"coletando ({n}/{LEAGUE_MIN_TIPS})"
         pct = sum(d['window']) / n * 100
         return d['active'], f"{pct:.0f}% | {n} tips"
 
@@ -382,44 +327,43 @@ league_manager = LeagueManager()
 # ESTADO GLOBAL
 # =============================================================================
 history_cache  = {'matches': [], 'ts': 0}
-HISTORY_TTL    = 120   # segundos
+HISTORY_TTL    = 120
 
-# Cache de stats pré-computados (atualizado junto com o histórico)
-# Evita re-varredura de 800+ partidas a cada ciclo
 stats_cache = {
-    'players': {},       # {nick_upper: {avg_ht, avg_ft, avg_ht_sof, avg_ft_sof, games}}
-    'leagues': {},       # {league_name: {avg_ht, avg_ft, games}}
-    'ts':       0,       # timestamp da última atualização
+    'players': {},
+    'leagues': {},
+    'ts':       0,
 }
-STATS_TTL = 120          # atualiza junto com o histórico (2 min)
+STATS_TTL = 120
 
-sent_tips       = []   # lista de dicts
-sent_keys       = set()  # "{event_id}_HT" e "{event_id}_FT"
-league_last_tip     = {}  # {league: datetime} — cooldown entre tips da mesma liga
-LEAGUE_TIP_COOLDOWN = 8   # minutos mínimos entre tips da mesma liga
-league_red_cooldown = {}  # {league: datetime} — bloqueio após RED
-LEAGUE_RED_BLOCK    = 15  # minutos de bloqueio após qualquer RED na liga
-player_cooldown = {}   # {nick: datetime_liberacao}
+sent_tips           = []
+sent_keys           = set()
+league_last_tip     = {}
+LEAGUE_TIP_COOLDOWN = 8
+league_red_cooldown = {}
+LEAGUE_RED_BLOCK    = 15
+player_cooldown     = {}
 
-daily_stats     = {}   # {"2026-03-14": {"green": N, "red": N}}
+daily_stats     = {}
 last_summary    = None
 last_daily_date = None
 
-sb_tournaments     = {}   # {tid: {"name": liga_canonica, "raw": str}}
-sb_struct_ts       = 0
+sb_tournaments  = {}
+sb_struct_ts    = 0
 
-PLAYER_COOLDOWN_MIN = 30   # minutos de cooldown após 3 reds seguidos
+PLAYER_COOLDOWN_MIN = 30
 PLAYER_RED_BLOCK    = 3
 
 
 def save_state():
     try:
         state = {
-            'sent_keys':      list(sent_keys),
-            'player_cooldown': {k: v.isoformat() for k, v in player_cooldown.items() if isinstance(v, datetime)},
-            'last_summary':   last_summary,
+            'sent_keys':       list(sent_keys),
+            'player_cooldown': {k: v.isoformat() for k, v in player_cooldown.items()
+                                if isinstance(v, datetime)},
+            'last_summary':    last_summary,
             'last_daily_date': last_daily_date,
-            'daily_stats':    daily_stats,   # inclui pnl
+            'daily_stats':     daily_stats,
         }
         with open('bot_state.json', 'w') as f:
             json.dump(state, f, indent=2)
@@ -469,14 +413,13 @@ def load_state():
             sent_keys       = set(s.get('sent_keys', []))
             last_summary    = s.get('last_summary')
             last_daily_date = s.get('last_daily_date')
-            # Restaurar daily_stats com pnl se disponível
             if s.get('daily_stats'):
                 daily_stats.update(s['daily_stats'])
             for k, v in s.get('player_cooldown', {}).items():
                 try:
                     player_cooldown[k] = datetime.fromisoformat(v)
                 except (TypeError, ValueError):
-                    pass  # ignora valores não-datetime
+                    pass
 
         if os.path.exists('tips_pending.json'):
             with open('tips_pending.json') as f:
@@ -505,7 +448,6 @@ def load_state():
 # UTILITÁRIOS
 # =============================================================================
 def extract_nick(raw):
-    """Extrai o apelido curto de um nome bruto como 'Man City (fantazer)'."""
     if not raw or not isinstance(raw, str):
         return ""
     m = re.search(r'\(([^)]+)\)', raw)
@@ -513,10 +455,8 @@ def extract_nick(raw):
         inside = m.group(1).strip()
         if 2 <= len(inside) <= 16:
             return inside.upper()
-    # Remove números de time, mantém só o nick
     cleaned = re.sub(r'\s*\(.*?\)', '', raw).strip()
     words = cleaned.split()
-    # Preferir a última palavra (geralmente o nick)
     for w in reversed(words):
         if len(w) >= 2 and not w.isdigit():
             return w.upper()
@@ -524,7 +464,6 @@ def extract_nick(raw):
 
 
 def normalize_nick(raw):
-    """Versão que mantém capitalização bonita."""
     nick = extract_nick(raw)
     return nick.capitalize() if nick else raw.strip()
 
@@ -567,7 +506,6 @@ def update_cooldown(player_raw, result):
 
 
 def parse_dt(s):
-    """Converte string de data/hora para datetime com timezone."""
     if not s:
         return None
     s = str(s)
@@ -587,13 +525,13 @@ SB_CAT_MAP = {
     1293: "CLA 10 MIN",
     1269: "GT LEAGUE 12 MIN",
     1588: "ADRIATIC",
-    # 1294 = Battle → classificado pelo nome
 }
 
 
 def _classify_battle(name):
     n = name.upper()
-    if "VOLTA" in n:                                           return "VOLTA 6 MIN"
+    if "VOLTA" in n:
+        return "VOLTA 6 MIN"
     if ("LIGA DOS CAMP" in n or "LIGA DE CAMP" in n) and ("2" in n or " II" in n):
         return "BATTLE 12 MIN"
     return "BATTLE 8 MIN"
@@ -603,7 +541,6 @@ def _fallback_by_name(name):
     n = name.upper()
     if "H2H" in n:                                    return "H2H 8 MIN"
     if " CLA" in n:                                   return "CLA 10 MIN"
-    # CYBER LIVE ARENA é uma liga DIFERENTE — NÃO mapear para CLA
     if "GT" in n and ("LIGA" in n or "LEAGUE" in n):  return "GT LEAGUE 12 MIN"
     if "ADRIATIC" in n or "EAL " in n:                return "ADRIATIC"
     if "VALHALLA" in n:                               return "VALHALLA CUP"
@@ -644,8 +581,6 @@ def update_sb_struct():
                 else:
                     league = _fallback_by_name(tname)
 
-                # Bloquear Cyber Live Arena independente de como chegou
-                # (nome diferente de CLA 10 MIN — liga com mercados e odds distintos)
                 if league and "CYBER LIVE" in tname.upper():
                     print(f"[SB_STRUCT] Cyber Live Arena bloqueada: tid={tid} cat={cat_id} tname={tname!r} → ignorada")
                     continue
@@ -685,8 +620,8 @@ def fetch_superbet_live():
         r = requests.get(url, headers=hdrs, timeout=15)
         if r.status_code != 200:
             return []
-        events    = r.json().get('data', [])
-        result    = []
+        events = r.json().get('data', [])
+        result = []
         for ev in events:
             if not isinstance(ev, dict) or ev.get('sportId') != 75:
                 continue
@@ -713,7 +648,6 @@ def fetch_superbet_live():
                 ag     = int(meta.get('awayTeamScore', 0) or 0)
                 eid    = str(ev.get('eventId'))
 
-                # Tentar múltiplos campos — matchTime pode ser 0 mesmo com jogo em andamento
                 minute = 0
                 for _f in ['matchTime', 'currentTime', 'liveTime', 'matchClock',
                            'matchMinute', 'elapsed', 'minute']:
@@ -722,31 +656,24 @@ def fetch_superbet_live():
                         minute = int(_v)
                         break
 
-                # Fallback via utcDate — calcular elapsed desde o início do jogo
                 if minute == 0:
                     _utc = ev.get('utcDate', '')
                     if _utc:
                         try:
                             _start = datetime.fromisoformat(_utc.replace('Z', '+00:00'))
                             _elapsed = (datetime.now(timezone.utc) - _start).total_seconds()
-                            # Limite: elapsed deve ser menor que duração+3min do jogo
-                            # Se maior, utcDate provavelmente é início do torneio, não do jogo
                             _dur_tmp = get_profile(map_league(league_raw)).get('duration', 12)
                             _max_elapsed = (_dur_tmp + 3) * 60
                             if 0 < _elapsed < _max_elapsed:
                                 minute = max(0, int(_elapsed / 60))
-                            # Se elapsed >= max, não usar (utcDate inválido) — manter minute=0
                         except:
                             pass
 
-                # Fallback final: placar alto → provavelmente 2ºT
                 if minute == 0 and (hg + ag) >= 4:
-                    # Jogo com 4+ gols dificilmente está no início
-                    # Usar duração do HT + 1 como estimativa conservadora
-                    _t_id_tmp = str(ev.get('tournamentId', ''))
+                    _t_id_tmp  = str(ev.get('tournamentId', ''))
                     _cached_tmp = sb_tournaments.get(_t_id_tmp, {})
-                    _lg_tmp = _cached_tmp.get('name', '') if isinstance(_cached_tmp, dict) else ''
-                    _prof_tmp = get_profile(map_league(_lg_tmp))
+                    _lg_tmp    = _cached_tmp.get('name', '') if isinstance(_cached_tmp, dict) else ''
+                    _prof_tmp  = get_profile(map_league(_lg_tmp))
                     minute = _prof_tmp.get('ht_dur', 4) + 1
 
                 def _slug(s):
@@ -761,8 +688,6 @@ def fetch_superbet_live():
                            f"{_slug(home_raw)}-x-{_slug(away_raw)}-{eid}"
                            f"/?t=offer-live-{t_id}&mdt=o")
 
-                # Filtrar jogo que já deveria ter encerrado
-                # (Superbet pode manter evento como 'active' por alguns minutos após o fim)
                 _utc_start = ev.get('utcDate', '')
                 if _utc_start:
                     try:
@@ -771,7 +696,7 @@ def fetch_superbet_live():
                         _dur_total = _prof_tmp.get('duration', 12)
                         _expected_end = _start_dt + timedelta(minutes=_dur_total + 2)
                         if _expected_end < datetime.now(timezone.utc):
-                            continue   # Jogo provavelmente encerrado — ignorar
+                            continue
                     except:
                         pass
 
@@ -810,14 +735,12 @@ def fetch_altenar_live():
         data  = r.json()
         comps = {c['id']: c for c in data.get('competitors', [])}
         champ = {c['id']: c['name'] for c in data.get('champs', [])}
-        # sportId=146 = E-football no Altenar (URL usa sportId=66 como filtro de query,
-        # mas o JSON retorna os eventos com sportId=146)
         evts  = [e for e in data.get('events', []) if e.get('sportId') == 146]
         result = []
 
         for ev in evts:
             try:
-                eid = ev.get('id')
+                eid  = ev.get('id')
                 cids = ev.get('competitorIds', [])
                 sc_raw = ev.get('score', [0, 0])
 
@@ -850,14 +773,12 @@ def fetch_altenar_live():
                 if "ECOMP" in league_name.upper() or "VIRTUAL" in league_name.upper():
                     continue
 
-                # Bloquear ligas de basquete (catIds 2086, 1729, 2130)
                 ev_catId = ev.get('catId', 0)
                 if ev_catId in (2086, 1729, 2130):
-                    continue  # E-Basquete — não é futebol
+                    continue
 
                 mapped = map_league(league_name)
 
-                # Parse do tempo ao vivo (Altenar usa "1ª parte", "2ª parte", "Pausa")
                 lt = ev.get('liveTime', '')
                 minute, second = 0, 0
                 is_halftime_break = False
@@ -866,13 +787,12 @@ def fetch_altenar_live():
                     if m:
                         minute, second = int(m.group(1)), int(m.group(2))
                     elif any(x in lt.upper() for x in ['1\u00aa PARTE', '1ST HALF', '1ª PARTE']):
-                        minute = 2   # início do 1ºT
+                        minute = 2
                     elif any(x in lt.upper() for x in ['2\u00aa PARTE', '2ND HALF', '2ª PARTE']):
-                        pass         # minute=0 → fallback via startDate (correto para Altenar)
+                        pass
                     elif 'PAUSA' in lt.upper() or 'HALF' in lt.upper() or 'INTERVALO' in lt.upper():
-                        is_halftime_break = True  # jogo pausado entre tempos
+                        is_halftime_break = True
 
-                # Pular jogos em pausa (entre HT e FT)
                 if is_halftime_break:
                     continue
 
@@ -901,9 +821,8 @@ def fetch_altenar_live():
 
 
 def fetch_live_matches():
-    """Combina Superbet + Altenar, deduplicando por par de jogadores."""
-    sb   = fetch_superbet_live()
-    alt  = fetch_altenar_live()
+    sb  = fetch_superbet_live()
+    alt = fetch_altenar_live()
     seen = set()
     out  = []
     for ev in sb + alt:
@@ -919,19 +838,17 @@ def fetch_live_matches():
 # =============================================================================
 def fetch_markets_altenar(event_id):
     try:
-        url = ALTENAR_EVENT.format(event_id)
+        url  = ALTENAR_EVENT.format(event_id)
         hdrs = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.estrelabet.bet.br/"}
-        r = requests.get(url, headers=hdrs, timeout=10)
+        r    = requests.get(url, headers=hdrs, timeout=10)
         r.raise_for_status()
-        data  = r.json()
-        mkts  = data.get('markets', [])
-        odds  = {o['id']: o for o in data.get('odds', [])}
+        data = r.json()
+        mkts = data.get('markets', [])
+        odds = {o['id']: o for o in data.get('odds', [])}
         lines = []
         for mkt in mkts:
             mkt_name = mkt.get('name', '')
-            mkt_sv   = str(mkt.get('sv', ''))   # sv está no nível do MERCADO no Altenar
-
-            # Altenar usa 'oddIds' na resposta (não 'desktopOddIds')
+            mkt_sv   = str(mkt.get('sv', ''))
             ids = []
             for key in ('oddIds', 'desktopOddIds'):
                 raw = mkt.get(key, [])
@@ -940,7 +857,6 @@ def fetch_markets_altenar(event_id):
                         ids.extend(grp)
                     else:
                         ids.append(grp)
-
             seen = set()
             for oid in ids:
                 if oid in seen:
@@ -949,16 +865,12 @@ def fetch_markets_altenar(event_id):
                 o = odds.get(oid)
                 if not o or o.get('oddStatus') != 0:
                     continue
-
                 odd_name = o.get('name', '')
-                # sv: preferir o da odd individual (sempre correto), depois do mercado
                 sv = o.get('sv', '') or mkt_sv
                 if not sv:
-                    # Tentar extrair número do nome da odd: "Mais de 3.5" → "3.5"
                     m = re.search(r'(\d+\.\d+)', odd_name)
                     if m:
                         sv = m.group(1)
-
                 lines.append({
                     'market_name': mkt_name,
                     'odd_name':    odd_name,
@@ -1008,7 +920,7 @@ def fetch_markets(event_id):
     return fetch_markets_altenar(event_id)
 
 # =============================================================================
-# FETCH — HISTÓRICO (RWTIPS API)
+# FETCH — HISTÓRICO
 # =============================================================================
 def fetch_history(pages=20, use_cache=True):
     global history_cache
@@ -1060,39 +972,30 @@ def fetch_history(pages=20, use_cache=True):
         started = _fix_dt(m.get('started_at', ''))
 
         matches.append({
-            'id': m.get('event_id') or m.get('id') or '',
-            'league_name': league,
-            'home_player': home_p,
-            'away_player': away_p,
-            'home_team':   m.get('home_raw') or m.get('home_team', ''),
-            'away_team':   m.get('away_raw') or m.get('away_team', ''),
+            'id':              m.get('event_id') or m.get('id') or '',
+            'league_name':     league,
+            'home_player':     home_p,
+            'away_player':     away_p,
+            'home_team':       m.get('home_raw') or m.get('home_team', ''),
+            'away_team':       m.get('away_raw') or m.get('away_team', ''),
             'data_realizacao': data_r,
             'started_at':      started,
-            'home_score_ht': int(m.get('home_score_ht') or 0),
-            'away_score_ht': int(m.get('away_score_ht') or 0),
-            'home_score_ft': int(m.get('home_score_ft') or 0),  # TOTAL do jogo
-            'away_score_ft': int(m.get('away_score_ft') or 0),  # TOTAL do jogo
+            'home_score_ht':   int(m.get('home_score_ht') or 0),
+            'away_score_ht':   int(m.get('away_score_ht') or 0),
+            'home_score_ft':   int(m.get('home_score_ft') or 0),
+            'away_score_ft':   int(m.get('away_score_ft') or 0),
         })
 
     matches.sort(key=lambda x: x['data_realizacao'], reverse=True)
     history_cache = {'matches': matches, 'ts': time.time()}
     print(f"[history] {len(matches)} partidas carregadas")
-    # Pré-computar stats de todos os players e ligas vistos
     _rebuild_stats_cache(matches)
     return matches
 
 
 def _rebuild_stats_cache(matches):
-    """
-    Pré-computa e armazena as estatísticas de TODOS os players e ligas
-    encontrados no histórico. Chamado automaticamente após fetch_history.
-
-    Custo: único — percorre a lista uma vez por player único.
-    Benefício: main_loop faz lookup O(1) em vez de varredura O(n) por ciclo.
-    """
     global stats_cache
 
-    # Coletar todos os nicks únicos
     nicks = set()
     for m in matches:
         h = extract_nick(m.get('home_player', ''))
@@ -1100,40 +1003,23 @@ def _rebuild_stats_cache(matches):
         if h: nicks.add(h)
         if a: nicks.add(a)
 
-    # Coletar todas as ligas únicas
     leagues = set(m.get('league_name', '') for m in matches if m.get('league_name'))
 
     new_players = {}
     new_leagues = {}
 
-    # Log das ligas únicas no histórico — ajuda a identificar nomes não mapeados
-    mapped_leagues   = set()
-    unmapped_leagues = set()
-    for lg in sorted(leagues):
-        mapped = map_league(lg)
-        if mapped != lg:
-            mapped_leagues.add(f"{lg!r} → {mapped!r}")
-        else:
-            unmapped_leagues.add(lg)
-
-    # Computar stats por player
     for nick in nicks:
         st = player_stats(nick, matches, last_n=5)
         if st:
             new_players[nick] = st
 
-    # Computar stats por liga (nome já mapeado pelo fetch_history)
     for lg in leagues:
         st = league_stats(lg, matches, last_n=5)
         if st and not st.get('estimated'):
             new_leagues[lg] = st
 
-    # Adicionar chaves alternativas: nome tal como aparece no histórico
-    # Ex: "Kevin" → chave "KEVIN" + chave "KEVIN" (já feito pelo extract_nick)
-    # Mas se o histórico tem "Kevin Gamer", extract_nick retorna "GAMER"
-    # Então adicionamos também a chave do primeiro token
+    # Adicionar chaves alternativas (primeiro token)
     for nick, st in list(new_players.items()):
-        # Primeiro token do nick como chave alternativa
         first = nick.split()[0] if ' ' in nick else None
         if first and first not in new_players:
             new_players[first] = st
@@ -1144,21 +1030,16 @@ def _rebuild_stats_cache(matches):
         'ts':      time.time(),
     }
     print(f"[stats_cache] {len(new_players)} players | {len(new_leagues)} ligas")
-    # Ligas com dados reais no histórico
     known = sorted(new_leagues.keys())
     print(f"[stats_cache] ligas com dados: {known}")
-    # Ligas do LEAGUE_PROFILES sem dados no histórico
-    missing = [lg for lg in LEAGUE_PROFILES if lg != 'DEFAULT' and lg not in new_leagues]
-    if missing:
-        print(f"[stats_cache] ligas SEM dados (EST): {missing}")
 
 
+# FIX 4: Lookup fuzzy robusto — resolve cache miss por diferença de formato de nick
 def get_player_stats_cached(player_name):
-    """Retorna stats do cache. Tenta múltiplos formatos de nick."""
     nick = extract_nick(player_name)
     if not nick:
         return None
-    # Cache expirado? Forçar rebuild
+
     if time.time() - stats_cache['ts'] > STATS_TTL:
         matches = history_cache.get('matches', [])
         if matches:
@@ -1166,28 +1047,37 @@ def get_player_stats_cached(player_name):
 
     players = stats_cache['players']
 
-    # Tentativa 1: nick extraído (ex: "KEVIN")
+    # Tentativa 1: match exato do nick extraído (ex: "KEVIN")
     st = players.get(nick)
     if st:
         return st
 
-    # Tentativa 2: nome direto em uppercase (caso normalize_nick já limpou)
+    # Tentativa 2: nome completo uppercase
     name_up = player_name.strip().upper()
     st = players.get(name_up)
     if st:
         return st
 
-    # Tentativa 3: busca parcial — se o nick está contido em alguma chave do cache
-    # Útil quando histórico tem "Kevin Gamer" e ao vivo tem "Kevin"
+    # Tentativa 3: nick contido em chave do cache OU chave contida no nick
     for key, val in players.items():
         if nick in key or key in nick:
             return val
+
+    # Tentativa 4: qualquer token do nome (>= 3 chars) bate com chave do cache
+    tokens = [t.upper() for t in player_name.replace('(', ' ').replace(')', ' ').split()
+              if len(t) >= 3]
+    for token in tokens:
+        st = players.get(token)
+        if st:
+            return st
+        for key, val in players.items():
+            if token in key or key in token:
+                return val
 
     return None
 
 
 def get_league_stats_cached(league_name):
-    """Retorna stats da liga do cache. Se expirado, reconstrói antes."""
     if time.time() - stats_cache['ts'] > STATS_TTL:
         matches = history_cache.get('matches', [])
         if matches:
@@ -1195,31 +1085,20 @@ def get_league_stats_cached(league_name):
     st = stats_cache['leagues'].get(league_name)
     if st:
         return st
-    # Liga sem dados suficientes — retorna estimativa baseada no perfil
     prof = get_profile(league_name)
     crit = get_crit(league_name)
     return {
-        'avg_ht':   crit['ht_gate_league'],
-        'avg_ft':   crit['ft_gate_league'],
-        'games':    0,
+        'avg_ht':    crit['ht_gate_league'],
+        'avg_ft':    crit['ft_gate_league'],
+        'games':     0,
         'estimated': True,
     }
 
 # =============================================================================
-# ESTATÍSTICAS — PLAYER E LIGA (últimos 5 jogos)
+# ESTATÍSTICAS — PLAYER E LIGA
 # =============================================================================
 def player_stats(player_name, all_matches, last_n=5):
-    """
-    Calcula estatísticas de um jogador nos últimos N jogos
-    (independente do adversário).
-
-    Retorna médias de gols MARCADOS e SOFRIDOS para HT e FT,
-    necessárias para critérios de BTTS e linhas individuais.
-
-    home_score_ft = gols TOTAIS do jogo inteiro (inclui HT)
-    home_score_ht = gols só do 1T
-    """
-    nick = extract_nick(player_name)
+    nick  = extract_nick(player_name)
     games = []
     for m in all_matches:
         h = extract_nick(m.get('home_player', ''))
@@ -1233,10 +1112,7 @@ def player_stats(player_name, all_matches, last_n=5):
     if n < 3:
         return None
 
-    ht_marc = []   # gols marcados pelo player no HT
-    ht_sof  = []   # gols sofridos pelo player no HT (= gols do adversário no HT)
-    ft_marc = []   # gols marcados pelo player no jogo inteiro
-    ft_sof  = []   # gols sofridos pelo player no jogo inteiro
+    ht_marc, ht_sof, ft_marc, ft_sof = [], [], [], []
 
     for m in games:
         is_home = extract_nick(m.get('home_player', '')) == nick
@@ -1255,8 +1131,6 @@ def player_stats(player_name, all_matches, last_n=5):
     avg_ft = sum(ft_marc) / n
     avg_ht = sum(ht_marc) / n
 
-    # Trend: razão média dos 2 jogos mais recentes / média dos anteriores
-    # > 1.0 = em alta | < 1.0 = em queda | 1.0 = estável
     if n >= 4:
         recent = sum(ft_marc[:2]) / 2
         older  = sum(ft_marc[2:]) / len(ft_marc[2:])
@@ -1264,70 +1138,49 @@ def player_stats(player_name, all_matches, last_n=5):
     else:
         trend = 1.0
 
-    # % de jogos com FT marcado >= threshold (consistência)
     pct_over_ft3 = sum(1 for v in ft_marc if v >= 3) / n
     pct_over_ft2 = sum(1 for v in ft_marc if v >= 2) / n
     pct_over_ht1 = sum(1 for v in ht_marc if v >= 1) / n
 
-    # ── Estatísticas dos últimos 3 jogos (critérios mais estritos) ──
     last3_ht_marc = ht_marc[:3]
     last3_ht_sof  = ht_sof[:3]
     last3_ft_marc = ft_marc[:3]
     last3_ft_sof  = ft_sof[:3]
-    n3 = len(last3_ht_marc)   # 3 ou menos se n < 3 (já garantido n >= 3)
+    n3 = len(last3_ht_marc)
 
-    # Marcou no HT nos últimos 3 jogos? (todos = 100%)
     pct_ht_marc_l3 = sum(1 for v in last3_ht_marc if v >= 1) / n3
-
-    # Sofreu gol no HT nos últimos 3 jogos? (todos = 100%)
     pct_ht_sof_l3  = sum(1 for v in last3_ht_sof  if v >= 1) / n3
-
-    # BTTS FT nos últimos 3 jogos (player marcou E sofreu gol no jogo)
-    btts_ft_l3 = sum(
-        1 for m_ft, s_ft in zip(last3_ft_marc, last3_ft_sof)
-        if m_ft >= 1 and s_ft >= 1
-    ) / n3
-
-    # % de empates nos últimos 3 jogos (ft marcado == ft sofrido)
-    draw_pct_l3 = sum(
-        1 for m_ft, s_ft in zip(last3_ft_marc, last3_ft_sof)
-        if m_ft == s_ft
-    ) / n3
+    btts_ft_l3     = sum(1 for m_ft, s_ft in zip(last3_ft_marc, last3_ft_sof)
+                         if m_ft >= 1 and s_ft >= 1) / n3
+    draw_pct_l3    = sum(1 for m_ft, s_ft in zip(last3_ft_marc, last3_ft_sof)
+                         if m_ft == s_ft) / n3
 
     return {
-        'avg_ht':          avg_ht,
-        'avg_ft':          avg_ft,
-        'avg_ht_sof':      sum(ht_sof)  / n,
-        'avg_ft_sof':      sum(ft_sof)  / n,
-        'pct_over_ft3':    pct_over_ft3,
-        'pct_over_ft2':    pct_over_ft2,
-        'pct_over_ht1':    pct_over_ht1,
-        'trend':           trend,
-        'ht_list':         ht_marc,
-        'ft_list':         ft_marc,
-        'games':           n,
-        # últimos 3 jogos
-        'pct_ht_marc_l3':  pct_ht_marc_l3,   # % marcou no HT nos últimos 3
-        'pct_ht_sof_l3':   pct_ht_sof_l3,    # % sofreu no HT nos últimos 3
-        'btts_ft_l3':      btts_ft_l3,        # % BTTS FT nos últimos 3
-        'draw_pct_l3':     draw_pct_l3,       # % empates nos últimos 3
+        'avg_ht':         avg_ht,
+        'avg_ft':         avg_ft,
+        'avg_ht_sof':     sum(ht_sof) / n,
+        'avg_ft_sof':     sum(ft_sof) / n,
+        'pct_over_ft3':   pct_over_ft3,
+        'pct_over_ft2':   pct_over_ft2,
+        'pct_over_ht1':   pct_over_ht1,
+        'trend':          trend,
+        'ht_list':        ht_marc,
+        'ft_list':        ft_marc,
+        'games':          n,
+        'pct_ht_marc_l3': pct_ht_marc_l3,
+        'pct_ht_sof_l3':  pct_ht_sof_l3,
+        'btts_ft_l3':     btts_ft_l3,
+        'draw_pct_l3':    draw_pct_l3,
     }
 
 
 def league_stats(league_name, all_matches, last_n=5):
-    """
-    Média de gols HT e FT nos últimos N jogos da liga.
-    Busca tanto pelo nome mapeado quanto pelos nomes originais do histórico.
-    """
-    # Busca direta pelo nome mapeado
     games = [m for m in all_matches if m.get('league_name') == league_name]
-    # Se não encontrou, tentar pelos nomes alternativos do histórico
     if len(games) < last_n:
         for raw, mapped in HIST_MAP.items():
             if mapped == league_name:
                 extras = [m for m in all_matches if m.get('league_name') == raw]
                 games.extend(extras)
-        # Deduplica preservando ordem
         seen = set()
         uniq = []
         for g in games:
@@ -1350,9 +1203,7 @@ def league_stats(league_name, all_matches, last_n=5):
     btts_ft   = [1 if int(m.get('home_score_ft', 0) or 0) > 0
                       and int(m.get('away_score_ft', 0) or 0) > 0 else 0 for m in games]
 
-    # Média dos últimos 3 jogos da liga (para critérios mais estritos)
-    last3_ht = ht_totals[:3]
-    last3_ft = ft_totals[:3]
+    last3_ft  = ft_totals[:3]
     btts_ht_l3 = [1 if int(m.get('home_score_ht',0) or 0) > 0
                        and int(m.get('away_score_ht',0) or 0) > 0 else 0 for m in games[:3]]
 
@@ -1371,18 +1222,6 @@ def league_stats(league_name, all_matches, last_n=5):
 # BUSCA DE ODD NO MERCADO
 # =============================================================================
 def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
-    """
-    Retorna a melhor odd para a estratégia pedida.
-
-    category: 'ht_total' | 'ft_total' | 'ht_btts' | 'ft_btts' | 'individual'
-    value: float linha (0.5, 1.5, ...) ou None para BTTS
-    player_raw: nome bruto do jogador para bets individuais
-
-    CORREÇÃO: mercados com nick do player entre parênteses (ex: "Jacob17", "Antonio")
-    são sempre mercados INDIVIDUAIS e nunca devem ser usados como total da partida.
-    Isso evita o bug onde "+1.5 HT" pegava a odd do mercado individual do player
-    em vez da odd do total de gols da partida.
-    """
     best = None
     best_mkt = ''
     for ln in open_lines:
@@ -1402,24 +1241,12 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
         except:
             pass
 
-        # ── CORREÇÃO DO BUG ────────────────────────────────────────────────
-        # Mercados com nick do player entre parênteses são SEMPRE individuais.
-        # Ex: "1º tempo - FSV Mainz 05 (Jacob17) total"
-        #     "1º tempo - Heidenheim (Antonio) total"
-        # Esses mercados NÃO devem ser usados para apostas de total da partida.
-        # A regra anterior falhava porque o prefixo "1º tempo" fazia
-        # _is_player_mkt = False, permitindo que a odd individual fosse
-        # retornada erroneamente como total do jogo.
-        _market_name_raw = ln.get('market_name', '')
+        _market_name_raw  = ln.get('market_name', '')
         _has_player_paren = bool(re.search(r'\([^)]{2,16}\)', _market_name_raw))
-
-        # HT: mercado de 1º tempo — NÃO inclui 'tempo' sozinho ('Tempo Normal' é FT)
         is_ht_mkt = any(x in mkt for x in
                         ['1º', '1ª', '1st', 'primeiro', 'half', 'período', '1 per'])
 
-        # Mercado individual: tem parênteses com nick OU tem ' - ' separando
-        # nome do player do tipo de mercado
-        _mkt_parts = _market_name_raw.split(' - ')
+        _mkt_parts  = _market_name_raw.split(' - ')
         _mkt_prefix = _mkt_parts[0].lower()
         _is_player_mkt_legacy = (
             ' - ' in _market_name_raw and
@@ -1428,10 +1255,7 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
                     ['1º', '1ª', '1st', 'total', 'gol', 'ambas', 'ambos'])
         )
 
-        # Detecção final: parênteses com nick = individual (regra principal + mais robusta)
         _is_player_mkt = _has_player_paren or _is_player_mkt_legacy
-
-        # Reforço adicional via palavras-chave de lado
         if not _is_player_mkt and (' - ' in _market_name_raw):
             if any(x in mkt for x in ['casa', 'fora', 'home', 'away', 'individual']):
                 _is_player_mkt = True
@@ -1467,7 +1291,6 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
                         best_mkt = f"{ln.get('market_name','')} | {ln.get('odd_name','')}"
 
         elif category == 'individual' and player_raw:
-            # FIX: usar só o nick limpo — 'Man City (fantazer)' → busca 'fantazer'
             p_nick_lo = extract_nick(player_raw).lower()
             in_mkt  = p_nick_lo in mkt
             in_name = p_nick_lo in name
@@ -1476,96 +1299,75 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
                     if best is None or price > best:
                         best = price
 
-    if best and 'btts' in str(best_mkt).lower() or 'ambas' in str(best_mkt).lower():
+    if best and ('btts' in str(best_mkt).lower() or 'ambas' in str(best_mkt).lower()):
         print(f"[find_odd] BTTS match: '{best_mkt}' @ {best}")
     return best
 
 # =============================================================================
 # AVALIAÇÃO DAS ESTRATÉGIAS
+# FIX 2: FT +2.5 relaxado (btts_ft_l3 >= 0.67, draw_pct_l3 <= 0.34)
+# FIX 3: HT +3.5 e HT +4.5 removidos
+# FIX 7: Filtro de timing — não enviar no último minuto do HT
 # =============================================================================
 def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
-    """
-    Avalia estratégias HT (durante o 1ºT) e FT (durante o 2ºT).
-
-    Detecção de período:
-      is_ht = minute < ht_dur       → estamos no 1ºT
-      is_ft = minute >= ht_dur      → estamos no 2ºT
-
-    Regras de placar por aposta:
-      HT +0.5  : 0x0
-      HT +1.5  : 0x0 | 1x0 | 0x1            (total_ht <= 1)
-      HT +2.5  : 1x0 | 0x1 | 1x1            (1 <= total_ht <= 2)
-      HT BTTS  : total_ht <= 1 e NÃO ambos marcaram
-      FT +1.5  : total_ft == 0
-      FT +2.5  : total_ft < 2  (0 ou 1)
-      FT +3.5  : total_ft < 3  (0, 1 ou 2)
-      FT +4.5  : total_ft <= 3 (0, 1, 2 ou 3)
-      FT BTTS  : total_ft <= 1 e NÃO ambos marcaram
-
-    Gate geral HT: liga_avg_ht >= gate_league E p1_avg_ht >= gate_p E p2_avg_ht >= gate_p
-    Gate geral FT: liga_avg_ft >= gate_league E p1_avg_ft >= gate_p E p2_avg_ft >= gate_p
-
-    Resultado: max 1 tip HT + max 1 tip FT (melhor score de cada grupo).
-    """
     candidates = {'HT': [], 'FT': []}
 
     league_key = event.get('mappedLeague', '')
     crit        = get_crit(league_key)
     profile     = get_profile(league_key)
-    ht_dur      = profile['ht_dur']    # minutos do 1ºT
-    duration    = profile['duration']  # duração total do jogo
+    ht_dur      = profile['ht_dur']
+    duration    = profile['duration']
     min_odd     = crit['min_odd']
 
     timer    = event.get('timer', {})
     minute   = timer.get('minute', 0)
     second   = timer.get('second', 0)
     score    = event.get('score', {})
-    hg       = score.get('home', 0)    # gols home acumulados até agora
-    ag       = score.get('away', 0)    # gols away acumulados até agora
-    total_ft = hg + ag                 # total de gols no jogo até agora
-
-    # Durante o 1ºT: hg/ag são os gols do HT
+    hg       = score.get('home', 0)
+    ag       = score.get('away', 0)
+    total_ft = hg + ag
     total_ht = total_ft
 
     home_raw = event.get('homeRaw', event.get('homePlayer', ''))
     away_raw = event.get('awayRaw', event.get('awayPlayer', ''))
 
-    elapsed_sec  = minute * 60 + second
-    is_ht        = elapsed_sec < ht_dur * 60   # ainda no 1ºT
-    is_ft        = elapsed_sec >= ht_dur * 60  # já no 2ºT
+    elapsed_sec = minute * 60 + second
+    is_ht       = elapsed_sec < ht_dur * 60
+    is_ft       = elapsed_sec >= ht_dur * 60
 
-    # Stats dos players
-    p1_ht_marc = p1_st.get('avg_ht', 0)
-    p1_ht_sof  = p1_st.get('avg_ht_sof', 0)
-    p1_ft_marc = p1_st.get('avg_ft', 0)
-    p1_ft_sof  = p1_st.get('avg_ft_sof', 0)
-    # Média de gols marcados SÓ no 2ºT (o que ainda pode acontecer quando a tip é enviada)
-    # avg_ft inclui o HT, mas quando a tip é enviada no 2ºT, o HT já aconteceu
-    p1_ft2_marc = max(0.0, p1_ft_marc - p1_ht_marc)   # avg gols 2ºT marcados
-    p1_ft2_sof  = max(0.0, p1_ft_sof  - p1_ht_sof)    # avg gols 2ºT sofridos
+    # FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
+    # Odds já incorporaram o placar atual e não há tempo de execução
+    ht_time_remaining = ht_dur * 60 - elapsed_sec
+    if is_ht and ht_time_remaining < 60:
+        print(f"    [SKIP] HT timing: {ht_time_remaining:.0f}s restantes no HT (mín 60s)")
+        is_ht = False
 
-    p2_ht_marc = p2_st.get('avg_ht', 0)
-    p2_ht_sof  = p2_st.get('avg_ht_sof', 0)
-    p2_ft_marc = p2_st.get('avg_ft', 0)
-    p2_ft_sof  = p2_st.get('avg_ft_sof', 0)
+    p1_ht_marc  = p1_st.get('avg_ht', 0)
+    p1_ht_sof   = p1_st.get('avg_ht_sof', 0)
+    p1_ft_marc  = p1_st.get('avg_ft', 0)
+    p1_ft_sof   = p1_st.get('avg_ft_sof', 0)
+    p1_ft2_marc = max(0.0, p1_ft_marc - p1_ht_marc)
+    p1_ft2_sof  = max(0.0, p1_ft_sof  - p1_ht_sof)
+
+    p2_ht_marc  = p2_st.get('avg_ht', 0)
+    p2_ht_sof   = p2_st.get('avg_ht_sof', 0)
+    p2_ft_marc  = p2_st.get('avg_ft', 0)
+    p2_ft_sof   = p2_st.get('avg_ft_sof', 0)
     p2_ft2_marc = max(0.0, p2_ft_marc - p2_ht_marc)
     p2_ft2_sof  = max(0.0, p2_ft_sof  - p2_ht_sof)
 
-    # Stats da liga
     lg_avg_ht = lg_st.get('avg_ht', 0)
     lg_avg_ft = lg_st.get('avg_ft', 0)
 
     def skip(reason):
         print(f"    [SKIP] {reason}")
 
-    # ── Gate geral HT ──────────────────────────────────────────────
     ht_gate = (
         lg_avg_ht  >= crit['ht_gate_league'] and
         p1_ht_marc >= crit['ht_gate_p'] and
         p2_ht_marc >= crit['ht_gate_p']
     )
 
-    # ── Gate geral FT ──────────────────────────────────────────────
     ft_gate = (
         lg_avg_ft  >= crit['ft_gate_league'] and
         p1_ft_marc >= crit['ft_gate_p'] and
@@ -1573,7 +1375,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     )
 
     # ══════════════════════════════════════════════════════════════
-    # APOSTAS HT — só no 1ºT (is_ht) e só se gate HT passou
+    # APOSTAS HT — só no 1ºT
+    # FIX 3: +3.5 HT e +4.5 HT REMOVIDOS
     # ══════════════════════════════════════════════════════════════
     if is_ht:
         if not ht_gate:
@@ -1587,26 +1390,26 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ +0.5 GOL HT',
-                            'odd': odd, 'category': 'HT',
+                            'name':  '⚽ +0.5 GOL HT',
+                            'odd':   odd,
+                            'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
                         })
             else:
                 skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
 
-            # ── +1.5 HT | Placar: 0x0 | 1x0 | 0x1 ────────────────
+            # ── +1.5 HT | Placar: ≤1 gol ──────────────────────────
             c = crit['ht_15']
             if total_ht <= 1:
-                # pct_ht1: % de jogos onde o player marcou >= 1 gol no HT
-                # Todos os reds de +1.5 HT: um player marcou 0 gols no HT
                 pct_ht_ok = (p1_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0)
                              and p2_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0))
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc'] and pct_ht_ok:
                     odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ +1.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
+                            'name':  '⚽ +1.5 GOLS HT',
+                            'odd':   odd,
+                            'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
                         })
                 elif not pct_ht_ok:
@@ -1614,7 +1417,7 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                          f"p1={p1_st.get('pct_over_ht1',0):.0%} p2={p2_st.get('pct_over_ht1',0):.0%} "
                          f"(precisa >={c.get('pct_ht1',0):.0%})")
             else:
-                skip(f"+1.5 HT: placar {hg}x{ag} total={total_ht} (precisa <=1)")
+                skip(f"+1.5 HT: total={total_ht} (precisa <=1)")
 
             # ── +2.5 HT | Placar: 1x0 | 0x1 | 1x1 ────────────────
             c = crit['ht_25']
@@ -1623,50 +1426,19 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     odd = find_odd(open_lines, 'ht_total', 2.5, min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ +2.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
+                            'name':  '⚽ +2.5 GOLS HT',
+                            'odd':   odd,
+                            'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
                         })
             else:
-                skip(f"+2.5 HT: placar {hg}x{ag} total={total_ht} (precisa 1-2)")
+                skip(f"+2.5 HT: total={total_ht} (precisa 1-2)")
 
-            # ── +3.5 HT | Placar: 1x1 | 2x0 | 0x2 | 2x1 | 1x2 ────
-            c = crit.get('ht_35', {"p1_marc": 2.7, "p2_marc": 2.7}) # fallback se não existir
-            if 2 <= total_ht <= 3:
-                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 3.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name': '⚽ +3.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
-            else:
-                skip(f"+3.5 HT: placar {hg}x{ag} total={total_ht} (precisa 2-3)")
-
-            # ── +4.5 HT | Placar: 2x1 | 1x2 | 2x2 | 3x0 | 0x3 ────
-            c = crit.get('ht_45', {"p1_marc": 3.2, "p2_marc": 3.2})
-            if 3 <= total_ht <= 4:
-                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 4.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name': '⚽ +4.5 GOLS HT',
-                            'odd': odd, 'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
-            else:
-                skip(f"+4.5 HT: placar {hg}x{ag} total={total_ht} (precisa 3-4)")
+            # FIX 3: +3.5 HT e +4.5 HT REMOVIDOS — edge negativo confirmado
 
             # ── BTTS HT | Critérios estritos últimos 3 jogos ──────
             c = crit['ht_btts']
             if total_ht <= 1 and not (hg > 0 and ag > 0):
-                # Critérios baseados nos ÚLTIMOS 3 JOGOS de cada player:
-                # 1. Player 1 marcou no HT nos 3 jogos (100%)
-                # 2. Player 1 sofreu gol no HT nos 3 jogos (100%)
-                # 3. Player 2 marcou no HT nos 3 jogos (100%)
-                # 4. Player 2 sofreu gol no HT nos 3 jogos (100%)
-                # 5. Liga: BTTS HT nos últimos 3 jogos >= 88%
                 p1_marc_l3 = p1_st.get('pct_ht_marc_l3', 0)
                 p1_sof_l3  = p1_st.get('pct_ht_sof_l3',  0)
                 p2_marc_l3 = p2_st.get('pct_ht_marc_l3', 0)
@@ -1674,35 +1446,36 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 lg_btts_l3 = lg_st.get('btts_ht_pct_l3', 0)
 
                 btts_ok = (
-                    p1_marc_l3 >= 1.0 and   # marcou em 100% dos últimos 3 HTs
-                    p1_sof_l3  >= 1.0 and   # sofreu em 100% dos últimos 3 HTs
+                    p1_marc_l3 >= 1.0 and
+                    p1_sof_l3  >= 1.0 and
                     p2_marc_l3 >= 1.0 and
                     p2_sof_l3  >= 1.0 and
-                    lg_btts_l3 >= 88          # liga BTTS HT >= 88% nos últimos 3
+                    lg_btts_l3 >= 88
                 )
                 if btts_ok:
                     odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
                     if odd:
                         candidates['HT'].append({
-                            'name': '⚽ BTTS HT',
-                            'odd': odd, 'category': 'HT',
+                            'name':  '⚽ BTTS HT',
+                            'odd':   odd,
+                            'category': 'HT',
                             'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
                         })
                 else:
                     skip(f"BTTS HT: p1_marc_l3={p1_marc_l3:.0%} p1_sof_l3={p1_sof_l3:.0%} "
                          f"p2_marc_l3={p2_marc_l3:.0%} p2_sof_l3={p2_sof_l3:.0%} "
-                         f"liga_btts_l3={lg_btts_l3:.0f}% (precisa 100%/100%/100%/100%/88%)")
+                         f"liga_btts_l3={lg_btts_l3:.0f}%")
             else:
                 if total_ht > 1:
                     skip(f"BTTS HT: total={total_ht} (precisa <=1)")
                 elif hg > 0 and ag > 0:
-                    skip(f"BTTS HT: placar {hg}x{ag} — ambos já marcaram")
+                    skip(f"BTTS HT: {hg}x{ag} ambos já marcaram")
 
     # ══════════════════════════════════════════════════════════════
-    # APOSTAS FT — só no 2ºT (is_ft) e só se gate FT passou
+    # APOSTAS FT — só no 2ºT
+    # FIX 2: FT +2.5 relaxado
     # ══════════════════════════════════════════════════════════════
     if is_ft:
-        # Penalidade: se o jogo foi 0-0 no HT completo, exigir avg_ft maior
         ht_was_zero = (hg + ag == 0)
         ft_gate_adj = ft_gate
         if ht_was_zero:
@@ -1715,7 +1488,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                      f"p1={p1_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f}) "
                      f"p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']*1.3:.1f})")
 
-        # Gate extra para ADRIATIC: liga com alta variância, exige mais
         if league_key == 'ADRIATIC':
             adj_p1 = p1_ft_marc >= crit['ft_gate_p'] * 1.2
             adj_p2 = p2_ft_marc >= crit['ft_gate_p'] * 1.2
@@ -1734,72 +1506,69 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             # ── +1.5 FT | Placar: 0 gols ────────────────────────────
             c = crit['ft_15']
             if total_ft == 0:
-                pct_ok = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
-                          and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
-                liga_ok = lg_avg_ft >= 1.5
+                pct_ok   = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
+                            and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
+                liga_ok  = lg_avg_ft >= 1.5
                 projecao = total_ft + p1_ft2_marc + p2_ft2_marc
                 proj_ok  = projecao >= 1.5
                 if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and liga_ok and proj_ok:
                     odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +1.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
+                            'name':  '⚽ +1.5 GOLS FT (TOTAL)',
+                            'odd':   odd,
+                            'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
                 elif not liga_ok:
-                    skip(f"+1.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=1.5)")
+                    skip(f"+1.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=1.5)")
                 elif not pct_ok:
-                    skip(f"+1.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%} (min {c.get('pct_ft2',0):.0%})")
+                    skip(f"+1.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%}")
             else:
-                skip(f"+1.5 FT: placar {hg}x{ag} total={total_ft} (precisa 0 gols)")
+                skip(f"+1.5 FT: total={total_ft} (precisa 0 gols)")
 
             # ── +2.5 FT | Placar: < 2 gols ─────────────────────────
+            # FIX 2: btts_ft_l3 >= 0.67 (2/3), draw_pct_l3 <= 0.34 (1/3)
             c = crit['ft_25']
             if total_ft < 2:
-                # Critério especial para +2.5 FT:
-                # HT deve ter tido EXATAMENTE 1 gol (jogo vivo, não morto nem explosivo)
-                # BTTS FT dos últimos 3 jogos = 100% para AMBOS
-                # Taxa de empate dos últimos 3 jogos <= 35% para AMBOS
-                ht_1gol_ok   = (total_ht == 1)
-                btts_ft_ok   = (p1_st.get('btts_ft_l3', 0) >= 1.0 and
-                                p2_st.get('btts_ft_l3', 0) >= 1.0)
-                # draw <= 0 (zero empates nos últimos 3) — empate mata o +2.5
-                draw_ok      = (p1_st.get('draw_pct_l3', 1.0) <= 0.0 and
-                                p2_st.get('draw_pct_l3', 1.0) <= 0.0)
-                liga_ok      = lg_avg_ft >= 2.5
-                projecao     = total_ft + p1_ft2_marc + p2_ft2_marc
-                proj_ok      = projecao >= 2.5
-                # HT: aceitar >= 1 gol (jogo vivo) — HT=0 passa se btts+draw ok
-                ht_ok        = (total_ht >= 1) or (total_ht == 0 and btts_ft_ok and draw_ok)
+                # FIX 2: critérios relaxados de 100%/0% para 67%/34%
+                btts_ft_ok = (p1_st.get('btts_ft_l3', 0) >= 0.67
+                              and p2_st.get('btts_ft_l3', 0) >= 0.67)
+                draw_ok    = (p1_st.get('draw_pct_l3', 1.0) <= 0.34
+                              and p2_st.get('draw_pct_l3', 1.0) <= 0.34)
+                liga_ok    = lg_avg_ft >= 2.5
+                projecao   = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok    = projecao >= 2.5
+                ht_ok      = (total_ht >= 1) or (total_ht == 0 and btts_ft_ok and draw_ok)
                 if (p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']
                         and ht_ok and btts_ft_ok and draw_ok and liga_ok and proj_ok):
                     odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +2.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
+                            'name':  '⚽ +2.5 GOLS FT (TOTAL)',
+                            'odd':   odd,
+                            'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
                 elif not liga_ok:
-                    skip(f"+2.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=2.5)")
+                    skip(f"+2.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=2.5)")
                 elif not ht_ok:
-                    skip(f"+2.5 FT: HT={total_ht} gols sem condições (precisa >=1 ou btts+draw ok com HT=0)")
+                    skip(f"+2.5 FT: HT={total_ht} sem condições")
                 elif not btts_ft_ok:
-                    skip(f"+2.5 FT: btts_ft_l3 p1={p1_st.get('btts_ft_l3',0):.0%} p2={p2_st.get('btts_ft_l3',0):.0%} (precisa 100%)")
+                    skip(f"+2.5 FT: btts_ft_l3 p1={p1_st.get('btts_ft_l3',0):.0%} "
+                         f"p2={p2_st.get('btts_ft_l3',0):.0%} (precisa >=67%)")
                 elif not draw_ok:
-                    skip(f"+2.5 FT: empates p1={p1_st.get('draw_pct_l3',0):.0%} p2={p2_st.get('draw_pct_l3',0):.0%} (precisa 0%)")
+                    skip(f"+2.5 FT: draw_l3 p1={p1_st.get('draw_pct_l3',0):.0%} "
+                         f"p2={p2_st.get('draw_pct_l3',0):.0%} (precisa <=34%)")
             else:
-                skip(f"+2.5 FT: placar {hg}x{ag} total={total_ft} (precisa <2)")
+                skip(f"+2.5 FT: total={total_ft} (precisa <2)")
 
-            # ── +3.5 FT | Placar: < 3 gols + HT >= 3 gols (ritmo alto) ─
+            # ── +3.5 FT | Placar: < 3 gols + ritmo HT ─────────────
             c = crit['ft_35']
             if total_ft < 3:
-                # Exige ritmo alto no 1ºT: HT total >= 3 gols
-                # Dados: todos os reds do +3.5 tiveram HT com 1-2 gols
                 ht_ritmo_ok = total_ht >= 3
-                pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
-                          and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
+                pct_ok  = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
+                           and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
                 liga_ok = lg_avg_ft >= 3.5
                 projecao = total_ft + p1_ft2_marc + p2_ft2_marc
                 proj_ok  = projecao >= 3.5
@@ -1807,29 +1576,26 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +3.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
+                            'name':  '⚽ +3.5 GOLS FT (TOTAL)',
+                            'odd':   odd,
+                            'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
                 elif not liga_ok:
-                    skip(f"+3.5 FT: liga_avg_ft={lg_avg_ft:.1f} abaixo da linha (precisa >=3.5)")
+                    skip(f"+3.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=3.5)")
                 elif not ht_ritmo_ok:
-                    skip(f"+3.5 FT: ritmo HT={total_ht} insuficiente (precisa >=3)")
+                    skip(f"+3.5 FT: ritmo HT={total_ht} (precisa >=3)")
                 elif not pct_ok:
-                    skip(f"+3.5 FT: inconsistência p1={p1_st.get('pct_over_ft3',0):.0%} p2={p2_st.get('pct_over_ft3',0):.0%} (min {c.get('pct_ft3',0):.0%})")
+                    skip(f"+3.5 FT: pct_ft3 p1={p1_st.get('pct_over_ft3',0):.0%} p2={p2_st.get('pct_over_ft3',0):.0%}")
             else:
-                skip(f"+3.5 FT: placar {hg}x{ag} total={total_ft} (precisa <3)")
+                skip(f"+3.5 FT: total={total_ft} (precisa <3)")
 
-            # ── +4.5 FT | Placar: <= 3 gols + HT >= 2 gols ───────────
+            # ── +4.5 FT | Placar: ≤3 gols + ritmo alto ─────────────
             c = crit['ft_45']
             if total_ft <= 3:
-                # Exige ritmo mínimo no 1ºT: HT total >= 2 gols
-                # Dados: todos os reds do +4.5 tiveram HT = 0 ou 1 gol
                 ht_ritmo_ok = total_ht >= 2
-                pct_ok = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
-                          and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
-                # Critério adicional +4.5 FT:
-                # avg_ft >= 2.8 para ambos, HT exatamente 2 gols, liga l3 >= 5.5
+                pct_ok      = (p1_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0)
+                               and p2_st.get('pct_over_ft3', 1.0) >= c.get('pct_ft3', 0))
                 liga_ok     = lg_avg_ft >= 4.5
                 avg_ft_ok   = (p1_ft_marc >= 2.8 and p2_ft_marc >= 2.8)
                 ht_exato_ok = (total_ht > 1 and total_ht <= 2)
@@ -1841,24 +1607,23 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
                     if odd:
                         candidates['FT'].append({
-                            'name': '⚽ +4.5 GOLS FT (TOTAL)',
-                            'odd': odd, 'category': 'FT',
+                            'name':  '⚽ +4.5 GOLS FT (TOTAL)',
+                            'odd':   odd,
+                            'category': 'FT',
                             'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
                         })
                 elif not avg_ft_ok:
                     skip(f"+4.5 FT: avg_ft p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f} (precisa >=2.8)")
                 elif not ht_exato_ok:
-                    skip(f"+4.5 FT: HT={total_ht} gols (precisa >1 e <=2)")
+                    skip(f"+4.5 FT: HT={total_ht} (precisa >1 e <=2)")
                 elif not liga_l3_ok:
                     skip(f"+4.5 FT: liga avg_ft_l3={lg_st.get('avg_ft_l3',0):.1f} (precisa >=5.5)")
                 elif not liga_ok:
                     skip(f"+4.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=4.5)")
-                elif not pct_ok:
-                    skip(f"+4.5 FT: pct_ft3 p1={p1_st.get('pct_over_ft3',0):.0%} p2={p2_st.get('pct_over_ft3',0):.0%}")
             else:
-                skip(f"+4.5 FT: placar {hg}x{ag} total={total_ft} (precisa <=3)")
+                skip(f"+4.5 FT: total={total_ft} (precisa <=3)")
 
-            # ── BTTS FT | Placar: <= 1 gol, NÃO ambos marcaram ─────
+            # ── BTTS FT | Placar: ≤1 gol, NÃO ambos marcaram ──────
             c = crit['ft_btts']
             if total_ft <= 1 and not (hg > 0 and ag > 0):
                 pct_ok = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
@@ -1867,33 +1632,30 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                         p2_ft_marc >= c['p2_marc'] and p2_ft_sof >= c['p2_sof'] and pct_ok):
                     odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
                     if odd:
-                        # Odd alta em BTTS = mercado sabe que um player domina
-                        # O único RED do BTTS foi com odd 6.75
                         if odd > 4.5:
-                            skip(f"BTTS FT: odd={odd} muito alta (>4.5 indica domínio de 1 player)")
+                            skip(f"BTTS FT: odd={odd} muito alta (>4.5 indica domínio)")
                         else:
                             candidates['FT'].append({
-                                'name': '⚽ BTTS FT (TOTAL)',
-                                'odd': odd, 'category': 'FT',
+                                'name':  '⚽ BTTS FT (TOTAL)',
+                                'odd':   odd,
+                                'category': 'FT',
                                 'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
                             })
             else:
                 if total_ft > 1:
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
                 elif hg > 0 and ag > 0:
-                    skip(f"BTTS FT: placar {hg}x{ag} — ambos já marcaram")
+                    skip(f"BTTS FT: {hg}x{ag} ambos já marcaram")
 
-    # ── Debug: logar se HT não encontrou linhas ─────────────────
+    # ── Debug: sem linhas HT disponíveis ─────────────────────────
     if is_ht and not candidates['HT'] and ht_gate:
         mkt_names = list(set(ln.get('market_name', '') for ln in open_lines))
         has_ht_mkt = any(any(x in m.lower() for x in ['1º', '1ª', '1st', 'half', 'primeiro'])
                          for m in mkt_names)
         if not has_ht_mkt:
-            skip(f"HT: nenhum mercado de 1ºT disponível na casa | mercados: {mkt_names[:5]}")
-        else:
-            skip(f"HT: mercados existem mas placar/critérios bloquearam")
+            skip(f"HT: nenhum mercado de 1ºT disponível | mercados: {mkt_names[:5]}")
 
-    # ── Seleção: melhor HT + melhor FT ─────────────────────────────
+    # ── Seleção: melhor HT + melhor FT ─────────────────────────
     chosen = []
     for cat in ('HT', 'FT'):
         if candidates[cat]:
@@ -1908,10 +1670,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
 # FORMATAÇÃO DE MENSAGENS
 # =============================================================================
 def _bar(val, max_val=6.0):
-    """
-    Barra visual de progresso.
-    Usa '●' para preenchido e '○' para vazio — contraste claro no Telegram dark/light.
-    """
     filled = min(10, round(val / max_val * 10))
     return "●" * filled + "○" * (10 - filled)
 
@@ -1940,9 +1698,8 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
         url   = f"https://www.estrelabet.bet.br/apostas-ao-vivo?page=liveEvent&eventId={clean}&sportId=66"
         link  = f'🔗 <a href="{url}">VER AO VIVO</a>'
     else:
-        link  = ''
+        link = ''
 
-    # Linha de aposta limpa
     strat_clean = strategy.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
 
     msg  = f"🎯 <b>{strat_clean}</b>  <code>@ {odd}</code>\n"
@@ -1979,10 +1736,8 @@ def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
     msg += "\n"
     msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
     msg += f"HT <b>{ht_h}-{ht_a}</b> ({ht_tot}g)  →  FT <b>{ft_h}-{ft_a}</b> ({ft_tot}g)\n"
-    # Para apostas HT, mostrar só placar HT
     if 'HT' in strat and 'FT' not in strat:
         msg += f"1ºT: {home} {ht_h}g  ·  {away} {ht_a}g"
-    # Para apostas individuais, destacar o player apostado
     elif '(TOTAL)' not in strat and 'BTTS' not in strat:
         home_nick = extract_nick(home)
         away_nick = extract_nick(away)
@@ -2001,10 +1756,6 @@ def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
 # MATCH DE RESULTADO
 # =============================================================================
 def find_result_match(tip, recent):
-    """
-    Encontra a partida finalizada correspondente a uma tip.
-    Usa event_id primeiro (match exato), depois nome dos jogadores + janela temporal restrita.
-    """
     h_nick = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
     a_nick = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
     if not h_nick or not a_nick:
@@ -2016,7 +1767,6 @@ def find_result_match(tip, recent):
     if tip_time.tzinfo is None:
         tip_time = tip_time.replace(tzinfo=MANAUS_TZ)
 
-    # Tentar match exato pelo event_id primeiro
     tip_event_id = str(tip.get('event_id', '')).replace('sb-', '')
     if tip_event_id:
         for m in recent:
@@ -2027,14 +1777,9 @@ def find_result_match(tip, recent):
                 if ft_h is not None and ft_a is not None:
                     return m
 
-    # Fallback: match por nome dos jogadores + janela temporal
-    # Janela restrita: -15min a +30min (jogos frequentes como Valkyrie a cada ~15min
-    # causavam falsos matches com -45min de janela)
     lg_key   = tip.get('league', '')
     prof     = get_profile(lg_key)
     duration = prof.get('duration', 8)
-    # Janela negativa: no máximo -(duration) min (tip enviada próximo ao fim do jogo)
-    # Janela positiva: +(duration + 5) min de margem para o resultado aparecer na API
     neg_window = -duration * 60
     pos_window = (duration + 5) * 60
 
@@ -2046,8 +1791,8 @@ def find_result_match(tip, recent):
         m_a = extract_nick(m.get('away_player', '') or m.get('away_team', '') or
                            m.get('away_nick', ''))
 
-        h_ok = h_nick == m_h or h_nick in m_h or m_h in h_nick
-        a_ok = a_nick == m_a or a_nick in m_a or m_a in a_nick
+        h_ok     = h_nick == m_h or h_nick in m_h or m_h in h_nick
+        a_ok     = a_nick == m_a or a_nick in m_a or m_a in a_nick
         h_ok_inv = h_nick == m_a or h_nick in m_a or m_a in h_nick
         a_ok_inv = a_nick == m_h or a_nick in m_h or m_h in a_nick
         if not ((h_ok and a_ok) or (h_ok_inv and a_ok_inv)):
@@ -2081,32 +1826,25 @@ def find_result_match(tip, recent):
 # =============================================================================
 # ENVIO DE TIP
 # =============================================================================
-
 def get_units(league):
-    """
-    Retorna as unidades a apostar baseado na assertividade atual da liga.
-    70%-75% → 0.5 un | 76%-90% → 1.0 un | 91%-95% → 1.5 un | 96%-100% → 2.0 un
-    Liga em coleta ou fora da faixa → 0.5 un (conservador)
-    """
     d = league_manager._ensure(league)
     n = len(d['window'])
     if n < LEAGUE_MIN_TIPS:
-        return 0.5   # coletando dados → conservador
+        return 0.5
     pct = sum(d['window']) / n * 100
-    if pct >= 96:   return 2.0
-    if pct >= 91:   return 1.5
-    if pct >= 76:   return 1.0
-    if pct >= 70:   return 0.5
-    return 0.0      # abaixo de 70% → liga pausada, não deve chegar aqui
+    if pct >= 96: return 2.0
+    if pct >= 91: return 1.5
+    if pct >= 76: return 1.0
+    if pct >= 70: return 0.5
+    return 0.0
 
 
 async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
-    """Envia uma tip e registra no estado global."""
     global sent_tips, sent_keys
 
     strategy = tip_info['name']
     odd      = tip_info['odd']
-    category = tip_info.get('category', 'FT')  # 'HT' ou 'FT'
+    category = tip_info.get('category', 'FT')
     event_id = event.get('id')
     key      = f"{event_id}_{category}"
 
@@ -2114,10 +1852,8 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
         print(f"[SKIP] {key} já enviado")
         return
 
-    # Cooldown de liga: não enviar 2 tips da mesma liga em menos de N minutos
     league = event.get('mappedLeague', '')
-    
-    # Bloqueio por RED: se a liga teve um red recente, aguardar antes de enviar
+
     red_block_until = league_red_cooldown.get(league)
     if red_block_until:
         now = datetime.now(MANAUS_TZ)
@@ -2135,11 +1871,10 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             print(f"[COOLDOWN LIGA] {league}: última tip há {ago:.1f}min (min {LEAGUE_TIP_COOLDOWN}min)")
             return
 
-    # Verificar cooldown dos jogadores
     for raw in [event.get('homeRaw', ''), event.get('awayRaw', '')]:
         blocked, mins = is_player_blocked(raw)
         if blocked:
-            print(f"[COOLDOWN] {extract_nick(raw)} bloqueado ({mins:.0f}min restantes)")
+            print(f"[COOLDOWN] {extract_nick(raw)} bloqueado ({mins:.0f}min)")
             return
 
     home  = event.get('homePlayer', '')
@@ -2190,14 +1925,12 @@ async def check_results(bot):
     global sent_tips, daily_stats, last_summary, last_daily_date
 
     try:
-        # Usar o cache já atualizado pelo history_refresher em background
-        recent = history_cache.get('matches', [])
+        recent    = history_cache.get('matches', [])
         if not recent:
             recent = fetch_history(pages=20, use_cache=True)
-        today  = datetime.now(MANAUS_TZ)
+        today     = datetime.now(MANAUS_TZ)
         today_str = today.strftime('%Y-%m-%d')
 
-        # Manter apenas últimos 5 dias de tips
         cutoff = (today - timedelta(days=5)).date()
         sent_tips[:] = [
             t for t in sent_tips
@@ -2209,9 +1942,7 @@ async def check_results(bot):
             if tip.get('status') != 'pending':
                 continue
 
-            elapsed = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
-
-            # Aguardar tempo dinâmico: quanto falta para o jogo terminar
+            elapsed     = (datetime.now(MANAUS_TZ) - tip['sent_time']).total_seconds()
             cat         = tip.get('category', 'FT')
             lg_key      = tip.get('league', '')
             prof        = get_profile(lg_key)
@@ -2220,13 +1951,11 @@ async def check_results(bot):
             sent_minute = tip.get('sent_minute', 0)
 
             if cat == 'HT':
-                # Falta: ht_dur - sent_minute + 1 min de margem
-                remaining   = max(1, ht_dur - sent_minute)
-                min_wait    = (remaining + 1) * 60
+                remaining = max(1, ht_dur - sent_minute)
+                min_wait  = (remaining + 1) * 60
             else:
-                # FT: falta duration - sent_minute + 1 min de margem
-                remaining   = max(1, duration - sent_minute)
-                min_wait    = (remaining + 1) * 60
+                remaining = max(1, duration - sent_minute)
+                min_wait  = (remaining + 1) * 60
 
             if elapsed < min_wait:
                 continue
@@ -2237,11 +1966,10 @@ async def check_results(bot):
                     tip['status'] = 'expired'
                     h_nick = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
                     a_nick = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
-                    # Log para diagnóstico: mostrar nicks buscados
-                    print(f"[EXPIRADO] buscando '{h_nick}' vs '{a_nick}' | {tip.get('league')} | {elapsed/60:.0f}min")
+                    print(f"[EXPIRADO] '{h_nick}' vs '{a_nick}' | {tip.get('league')} | {elapsed/60:.0f}min")
                 else:
                     print(f"[AGUARDANDO] {tip.get('home_player')} vs {tip.get('away_player')} "
-                          f"| {tip.get('league')} | {elapsed/60:.0f}min (min_wait={min_wait//60}min)")
+                          f"| {tip.get('league')} | {elapsed/60:.0f}min")
                 continue
 
             strat  = tip['strategy']
@@ -2252,21 +1980,17 @@ async def check_results(bot):
             ht_tot = ht_h + ht_a
             ft_tot = ft_h + ft_a
 
-            # home_score_ft = TOTAL do jogo (já inclui HT)
             result = None
 
-            # ── HT ──────────────────────────────────────────────────────
-            if   '+0.5 GOL HT'  in strat: result = 'green' if ht_tot >= 1 else 'red'
-            elif '+1.5 GOLS HT' in strat: result = 'green' if ht_tot >= 2 else 'red'
-            elif '+2.5 GOLS HT' in strat: result = 'green' if ht_tot >= 3 else 'red'
-            elif 'BTTS HT'      in strat: result = 'green' if ht_h > 0 and ht_a > 0 else 'red'
-            # ── FT TOTAL — checar (TOTAL) ANTES dos individuais ─────────
+            if   '+0.5 GOL HT'          in strat: result = 'green' if ht_tot >= 1 else 'red'
+            elif '+1.5 GOLS HT'         in strat: result = 'green' if ht_tot >= 2 else 'red'
+            elif '+2.5 GOLS HT'         in strat: result = 'green' if ht_tot >= 3 else 'red'
+            elif 'BTTS HT'              in strat: result = 'green' if ht_h > 0 and ht_a > 0 else 'red'
             elif '+1.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 2 else 'red'
             elif '+2.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 3 else 'red'
             elif '+3.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 4 else 'red'
             elif '+4.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 5 else 'red'
             elif 'BTTS FT (TOTAL)'      in strat: result = 'green' if ft_h > 0 and ft_a > 0 else 'red'
-            # ── FT INDIVIDUAL — nick do player está no nome da estratégia
             elif '+1.5 GOLS FT' in strat or '+2.5 GOLS FT' in strat or '+3.5 GOLS FT' in strat:
                 home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
                 away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
@@ -2298,7 +2022,6 @@ async def check_results(bot):
                 save_result(tip, ht_h, ht_a, ft_h, ft_a)
                 print(f"[{result.upper()}] {strat} | HT {ht_h}-{ht_a} FT {ft_h}-{ft_a}")
 
-                # Atualizar LeagueManager
                 lg = tip.get('league', '')
                 if lg:
                     changed, lm_msg = league_manager.record(lg, result == 'green')
@@ -2308,47 +2031,37 @@ async def check_results(bot):
                         except:
                             pass
 
-                # Cooldown do jogador
                 for raw_key in ['homeRaw', 'awayRaw', 'home_player', 'away_player']:
                     update_cooldown(tip.get(raw_key, ''), result)
 
-                # Bloqueio de liga por RED: pausar por 15 min
                 if result == 'red' and lg:
                     block_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_RED_BLOCK)
                     league_red_cooldown[lg] = block_until
                     print(f"[BLOCK RED] {lg} bloqueada por {LEAGUE_RED_BLOCK}min")
 
-                # Daily stats — incluindo P&L em unidades
                 dk = tip['sent_time'].strftime('%Y-%m-%d')
                 daily_stats.setdefault(dk, {'green': 0, 'red': 0, 'pnl': 0.0, 'investido': 0.0})
                 daily_stats[dk][result] += 1
-                units  = float(tip.get('units', 0.5))
-                t_odd  = float(tip.get('sent_odd', 1.0))
-                if result == 'green':
-                    lucro = round((t_odd - 1) * units, 2)
-                else:
-                    lucro = -units
+                units = float(tip.get('units', 0.5))
+                t_odd = float(tip.get('sent_odd', 1.0))
+                lucro = round((t_odd - 1) * units, 2) if result == 'green' else -units
                 daily_stats[dk]['pnl']      = round(daily_stats[dk].get('pnl', 0.0) + lucro, 2)
                 daily_stats[dk]['investido'] = round(daily_stats[dk].get('investido', 0.0) + units, 2)
 
-        # Limpar resolvidas
         sent_tips[:] = [t for t in sent_tips if t.get('status') == 'pending']
 
-        # Resumo diário — 2 mensagens separadas:
-        # 1ª: placar do dia (G/R/%)
-        # 2ª: status das ligas
         g   = daily_stats.get(today_str, {}).get('green', 0)
         r   = daily_stats.get(today_str, {}).get('red', 0)
         pnl = daily_stats.get(today_str, {}).get('pnl', 0.0)
         if g + r > 0:
-            pct        = g / (g + r) * 100
-            pnl_str    = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
-            pnl_emoji  = "📈" if pnl >= 0 else "📉"
-            investido  = daily_stats.get(today_str, {}).get('investido', 0.0)
-            roi_str    = f"{pnl/investido*100:+.1f}%" if investido > 0 else "—"
-            summary    = (f"<b>👑 RW TIPS</b>\n"
-                          f"✅ {g}  ❌ {r}  📊 {pct:.1f}%\n"
-                          f"{pnl_emoji} {pnl_str} un  |  ROI {roi_str}")
+            pct       = g / (g + r) * 100
+            pnl_str   = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
+            pnl_emoji = "📈" if pnl >= 0 else "📉"
+            investido = daily_stats.get(today_str, {}).get('investido', 0.0)
+            roi_str   = f"{pnl/investido*100:+.1f}%" if investido > 0 else "—"
+            summary   = (f"<b>👑 RW TIPS</b>\n"
+                         f"✅ {g}  ❌ {r}  📊 {pct:.1f}%\n"
+                         f"{pnl_emoji} {pnl_str} un  |  ROI {roi_str}")
             if summary != last_summary:
                 try:
                     await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
@@ -2357,12 +2070,11 @@ async def check_results(bot):
                 except:
                     pass
 
-        # Virada de dia
         global last_daily_date
         if last_daily_date and last_daily_date != today_str:
             try:
                 dates = sorted(daily_stats)[-7:]
-                msg = "🚨 <b>Resumo Geral:</b>\n\n"
+                msg   = "🚨 <b>Resumo Geral:</b>\n\n"
                 total_pnl = 0.0
                 for d in dates:
                     ds = daily_stats[d]
@@ -2385,7 +2097,7 @@ async def check_results(bot):
 
         if last_daily_date != today_str:
             last_daily_date = today_str
-            last_summary = None   # resetar para o resumo do novo dia
+            last_summary = None
 
         save_state()
 
@@ -2396,22 +2108,18 @@ async def check_results(bot):
 # ATUALIZAÇÃO DE HISTÓRICO EM BACKGROUND
 # =============================================================================
 _last_history_refresh = 0
-HISTORY_REFRESH_SEC   = 120   # atualizar histórico + stats a cada 2 min
+HISTORY_REFRESH_SEC   = 120
+
 
 async def history_refresher():
-    """
-    Atualiza o histórico e pré-computa stats em background a cada 2 min.
-    Roda em paralelo com o main_loop — nunca bloqueia o loop de odds.
-    """
     global _last_history_refresh
     print("[REFRESH] Iniciando atualizador de histórico...")
-    await asyncio.sleep(5)   # aguarda o carregamento inicial terminar
+    await asyncio.sleep(5)
     while True:
         try:
             now = time.time()
             if now - _last_history_refresh >= HISTORY_REFRESH_SEC:
                 loop = asyncio.get_event_loop()
-                # Rodar em thread para não bloquear o event loop
                 await loop.run_in_executor(
                     None,
                     lambda: fetch_history(pages=30, use_cache=False)
@@ -2423,24 +2131,12 @@ async def history_refresher():
                       f"{len(stats_cache.get('players', {}))} players)")
         except Exception as e:
             print(f"[history_refresher] {e}")
-        await asyncio.sleep(10)   # verifica se precisa atualizar a cada 10s
-
+        await asyncio.sleep(10)
 
 # =============================================================================
 # LOOP PRINCIPAL
 # =============================================================================
 async def main_loop(bot):
-    """
-    Ciclo rápido a cada 10s:
-      1. fetch_live_matches()         — ~600ms (2 requests paralelos)
-      2. filtros rápidos (liga, keys) — O(1)
-      3. fetch_markets em paralelo    — ~300ms × N eventos (ThreadPool)
-      4. lookup stats do cache        — O(1) por player/liga
-      5. evaluate_strategies          — puro cálculo, sem I/O
-      6. send_tip se aprovado
-
-    Histórico e stats são atualizados em background pelo history_refresher.
-    """
     print("[LOOP] Iniciando...")
     while True:
         t_start = time.time()
@@ -2448,7 +2144,6 @@ async def main_loop(bot):
             now_str = datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')
             print(f"\n[CICLO] {now_str}")
 
-            # ── 1. Eventos ao vivo ─────────────────────────────────
             loop = asyncio.get_event_loop()
             live = await loop.run_in_executor(None, fetch_live_matches)
             _logged_liga_skips: set = set()
@@ -2458,7 +2153,6 @@ async def main_loop(bot):
                 await asyncio.sleep(10)
                 continue
 
-            # ── 2. Filtrar eventos que ainda precisam de tip ───────
             pending = []
             for event in live:
                 eid    = event.get('id')
@@ -2467,8 +2161,6 @@ async def main_loop(bot):
                 if not mapped or mapped == 'Unknown':
                     continue
 
-                # Bloquear ligas não reconhecidas explicitamente no LEAGUE_PROFILES
-                # Ex: "Cyber Live Arena" → mapeia para si mesma → DEFAULT → não é nossa liga
                 if mapped not in LEAGUE_PROFILES or mapped == 'DEFAULT':
                     continue
 
@@ -2494,12 +2186,10 @@ async def main_loop(bot):
 
             print(f"[CICLO] {len(live)} ao vivo → {len(pending)} pendentes")
 
-            # ── 3. Buscar mercados em paralelo ─────────────────────
-            # Todos os eventos pendentes buscam odds ao mesmo tempo
             def _fetch_mkt(ev):
                 return ev, fetch_markets(ev.get('id'))
 
-            markets_map = {}   # {event_id: [lines]}
+            markets_map = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
                 futs = {ex.submit(_fetch_mkt, ev): ev for ev in pending}
                 for fut in concurrent.futures.as_completed(futs):
@@ -2512,7 +2202,6 @@ async def main_loop(bot):
 
             print(f"[CICLO] Mercados: {len(markets_map)}/{len(pending)} com linhas abertas")
 
-            # ── 4. Avaliar cada evento ─────────────────────────────
             for event in pending:
                 eid    = event.get('id')
                 mapped = event.get('mappedLeague', '')
@@ -2523,11 +2212,10 @@ async def main_loop(bot):
                 if not lines:
                     continue
 
-                # Lookup O(1) no cache pré-computado
+                # FIX 4: lookup fuzzy no cache
                 p1_s = get_player_stats_cached(home_p)
                 p2_s = get_player_stats_cached(away_p)
                 if not p1_s or not p2_s:
-                    # Fallback: tentar calcular direto do histórico se cache falhou
                     hist_now = history_cache.get('matches', [])
                     if hist_now:
                         if not p1_s:
@@ -2536,7 +2224,6 @@ async def main_loop(bot):
                             p2_s = player_stats(away_p, hist_now, last_n=5)
 
                 if not p1_s or not p2_s:
-                    # Ainda sem dados — skip com diagnóstico
                     hist_now = history_cache.get('matches', [])
                     def _count_games(nick):
                         n = extract_nick(nick)
@@ -2545,8 +2232,8 @@ async def main_loop(bot):
                                    or extract_nick(m.get('away_player','')) == n)
                     c1 = _count_games(home_p)
                     c2 = _count_games(away_p)
-                    nick1 = extract_nick(home_p)
-                    nick2 = extract_nick(away_p)
+                    nick1    = extract_nick(home_p)
+                    nick2    = extract_nick(away_p)
                     in_cache1 = nick1 in stats_cache.get('players', {})
                     in_cache2 = nick2 in stats_cache.get('players', {})
                     p1_label = f"{home_p}({'cache miss' if c1>0 and not in_cache1 else 'sem dados' if c1==0 else f'{c1}j'})"
@@ -2556,7 +2243,6 @@ async def main_loop(bot):
 
                 lg_s = get_league_stats_cached(mapped)
 
-                sc = event.get('score', {})
                 timer_now = event.get('timer', {})
                 sc        = event.get('score', {})
                 sc_h  = sc.get('home', 0)
@@ -2599,28 +2285,30 @@ async def main_loop(bot):
 
 async def results_checker(bot):
     print("[CHECKER] Iniciando verificador de resultados...")
-    await asyncio.sleep(30)  # aguarda 30s antes do primeiro check
+    await asyncio.sleep(30)
     while True:
         try:
             await check_results(bot)
         except Exception as e:
             print(f"[results_checker] {e}")
-        await asyncio.sleep(30)  # verifica a cada 30 segundos
+        await asyncio.sleep(30)
 
 # =============================================================================
 # INICIALIZAÇÃO
+# FIX 6: Reset de TODAS as ligas no startup — limpa janelas com critérios antigos
 # =============================================================================
-
 def reset_league_window(leagues_to_reset):
     """
-    Reseta a janela de performance de ligas específicas no LeagueManager.
-    Usado para ligas pausadas com critérios antigos — com os novos critérios
-    mais seletivos, elas precisam recomeçar a coleta do zero.
+    Reseta a janela de performance de ligas específicas.
+    Todas as ligas são resetadas no startup v5.1 porque os critérios
+    antigos eram mais frouxos e as janelas estão envenenadas com REDs
+    que não aconteceriam com os critérios corrigidos.
     """
+    import collections as _col
     for lg in leagues_to_reset:
         if lg in league_manager.leagues:
             d = league_manager.leagues[lg]
-            d['window'] = __import__('collections').deque(maxlen=LEAGUE_WINDOW)
+            d['window'] = _col.deque(maxlen=LEAGUE_WINDOW)
             d['active'] = True
             d['total']  = 0
             print(f"[RESET] {lg}: janela apagada, coleta reiniciada")
@@ -2630,34 +2318,49 @@ def reset_league_window(leagues_to_reset):
     league_manager.save()
 
 
+# FIX 6: Resetar TODAS as ligas — critérios v5.0 eram diferentes dos v5.1
 LIGAS_RESET_STARTUP = [
-    "ADRIATIC",       # avg HT=7.0g FT=7.5g — pausada por critérios antigos
-    "VOLTA 6 MIN",    # avg HT=3.8g FT=5.5g — pausada por critérios antigos
-    "BATTLE 12 MIN",  # avg FT=4.5g — pausada por critérios antigos
-    "BATTLE 8 MIN",   # aguardar mais dados, mas resetar para coletar novamente
+    "BATTLE 8 MIN",
+    "BATTLE 12 MIN",
+    "H2H 8 MIN",
+    "VALKYRIE CUP",
+    "VALHALLA CUP",
+    "GT LEAGUE 12 MIN",
+    "CLA 10 MIN",
+    "ADRIATIC",
+    "VOLTA 6 MIN",
 ]
+
 
 async def main():
     print("=" * 65)
-    print("🤖 RW TIPS — BOT FIFA v5.0 (CRITÉRIOS DIRETOS)")
+    print("🤖 RW TIPS — BOT FIFA v5.1 (7 FIXES APLICADOS)")
     print("=" * 65)
     print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
     print()
+    print("FIXES v5.1:")
+    print("  FIX 1: GT LEAGUE gate HT 2.0 → 1.6 (calibrado por logs reais)")
+    print("  FIX 2: FT +2.5 relaxado (btts_l3>=67%, draw<=34%)")
+    print("  FIX 3: HT +3.5 e +4.5 REMOVIDOS (edge negativo)")
+    print("  FIX 4: Lookup fuzzy robusto no cache (resolve cache miss)")
+    print("  FIX 5: LeagueManager janela=15, min_tips=5, relock=50%")
+    print("  FIX 6: Reset de todas as ligas no startup")
+    print("  FIX 7: Filtro timing HT (não enviar no último min)")
+    print()
     c8  = CRIT_8MIN
     c12 = CRIT_12MIN
-    print("=== CRITÉRIOS 6/8 min (Battle, H2H, Valkyrie, Volta) ===")
+    print("=== CRITÉRIOS 6/8 MIN (Battle, H2H, Valkyrie, Volta) ===")
     print(f"  Gate HT: liga>={c8['ht_gate_league']} | p>={c8['ht_gate_p']}")
     print(f"  Gate FT: liga>={c8['ft_gate_league']} | p>={c8['ft_gate_p']}")
-    print(f"  FT +1.5: p>={c8['ft_15']['p1_marc']} pct2>={c8['ft_15'].get('pct_ft2',0):.0%}")
-    print(f"  FT +2.5: p>={c8['ft_25']['p1_marc']} pct2>={c8['ft_25'].get('pct_ft2',0):.0%}")
-    print(f"  FT +3.5: p>={c8['ft_35']['p1_marc']} pct3>={c8['ft_35'].get('pct_ft3',0):.0%}")
-    print(f"  FT +4.5: p>={c8['ft_45']['p1_marc']} pct3>={c8['ft_45'].get('pct_ft3',0):.0%}")
-    print("=== CRITÉRIOS 10/12 min (GT, Valhalla, Battle 12, CLA, Adriatic) ===")
-    print(f"  Gate HT: liga>={c12['ht_gate_league']} | p>={c12['ht_gate_p']}")
+    print(f"  HT: +0.5 | +1.5 | +2.5 | BTTS  [FIX 3: +3.5/+4.5 removidos]")
+    print(f"  FT +2.5: btts_l3>=67% draw<=34%  [FIX 2: era 100%/0%]")
+    print()
+    print("=== CRITÉRIOS 10/12 MIN (GT, Valhalla, Battle 12, CLA, Adriatic) ===")
+    print(f"  Gate HT: liga>={c12['ht_gate_league']} | p>={c12['ht_gate_p']}  [FIX 1: era 2.0]")
     print(f"  Gate FT: liga>={c12['ft_gate_league']} | p>={c12['ft_gate_p']}")
-    print(f"  FT +2.5: p>={c12['ft_25']['p1_marc']} pct2>={c12['ft_25'].get('pct_ft2',0):.0%}")
-    print(f"  FT +3.5: p>={c12['ft_35']['p1_marc']} pct3>={c12['ft_35'].get('pct_ft3',0):.0%}")
-    print(f"  FT +4.5: p>={c12['ft_45']['p1_marc']} pct3>={c12['ft_45'].get('pct_ft3',0):.0%}")
+    print(f"  HT: +0.5 | +1.5 | +2.5 | BTTS  [FIX 3: +3.5/+4.5 removidos]")
+    print()
+    print(f"LeagueManager: janela={LEAGUE_WINDOW} min_tips={LEAGUE_MIN_TIPS} relock={LEAGUE_RELOCK}%")
     print("=" * 65)
 
     bot = Bot(
@@ -2671,7 +2374,6 @@ async def main():
         )
     )
 
-    # Conectar
     for attempt in range(5):
         try:
             me = await bot.get_me()
@@ -2685,34 +2387,29 @@ async def main():
                 print("[CONN] Não foi possível conectar")
                 return
 
-    # Carregar estado
     load_state()
 
-    # Pre-carregar histórico
     print("[INFO] Pré-carregando histórico...")
-    hist = fetch_history(pages=15)
+    fetch_history(pages=15)
 
-    # Resetar ligas pausadas injustamente (critérios antigos eram frouxos)
-    # Com os novos critérios (pct_l3, btts_ft, draw_pct, liga_avg>=linha),
-    # essas ligas precisam recomeçar a coleta do zero
+    # FIX 6: Resetar todas as ligas — janelas envenenadas com critérios antigos
     reset_league_window(LIGAS_RESET_STARTUP)
 
-    # Registrar todas as ligas conhecidas antecipadamente
     for lg in LEAGUE_PROFILES:
         if lg != "DEFAULT":
             league_manager.register(lg)
 
-    # Enviar status inicial
     try:
         await bot.send_message(
             chat_id=CHAT_ID,
-            text=f"🤖 <b>BOT v5.0 ONLINE</b>\n{league_manager.status()}",
+            text=(f"🤖 <b>BOT v5.1 ONLINE</b>\n"
+                  f"7 fixes aplicados — ligas resetadas\n\n"
+                  f"{league_manager.status()}"),
             parse_mode="HTML"
         )
     except Exception as e:
         print(f"[INFO] Não enviou status inicial: {e}")
 
-    # Iniciar loops
     await asyncio.gather(
         main_loop(bot),
         results_checker(bot),
