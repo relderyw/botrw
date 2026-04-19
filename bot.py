@@ -541,6 +541,7 @@ def _fallback_by_name(name):
     n = name.upper()
     if "H2H" in n:                                    return "H2H 8 MIN"
     if " CLA" in n:                                   return "CLA 10 MIN"
+    if "CYBER LIVE" in n or "CYBER" in n:             return "CLA 10 MIN"
     if "GT" in n and ("LIGA" in n or "LEAGUE" in n):  return "GT LEAGUE 12 MIN"
     if "ADRIATIC" in n or "EAL " in n:                return "ADRIATIC"
     if "VALHALLA" in n:                               return "VALHALLA CUP"
@@ -580,10 +581,6 @@ def update_sb_struct():
                     league = _classify_battle(tname)
                 else:
                     league = _fallback_by_name(tname)
-
-                if league and "CYBER LIVE" in tname.upper():
-                    print(f"[SB_STRUCT] Cyber Live Arena bloqueada: tid={tid} cat={cat_id} tname={tname!r} → ignorada")
-                    continue
 
                 new_map[tid] = {"name": league, "raw": tname}
         if new_map:
