@@ -1,0 +1,8 @@
+serviceAccountKey.json
+__pycache__/
+bot_state.json
+logs.json
+tips_pending.json
+tips_results.json
+bot_output.txt
+.vscode/

@@ -11,8 +11,10 @@ FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
 """
 
 import os, time, re, json, asyncio, logging, concurrent.futures
-import requests
+import datetime as dt_mod
 from datetime import datetime, timezone, timedelta
+import firebase_admin
+from firebase_admin import credentials, firestore
 from collections import deque
 from telegram import Bot
 from telegram.request import HTTPXRequest
@@ -22,6 +24,86 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
     datefmt='%H:%M:%S'
 )
+
+# =============================================================================
+# CONFIGURAÇÃO FIREBASE (INTEGRAÇÃO COM GERENCIADOR DE BANCAS)
+# =============================================================================
+BOT_USER_EMAIL    = "reldery1422@gmail.com"  # <--- SEU EMAIL DA PLATAFORMA
+FIREBASE_KEY_PATH = "serviceAccountKey.json" # <--- ARQUIVO DE CREDENCIAIS NA RAIZ
+
+class FirestoreManager:
+    def __init__(self):
+        self.db = None
+        self.bankroll_id = None
+        self.unit_value = 100
+
+    def initialize(self):
+        if not os.path.exists(FIREBASE_KEY_PATH):
+            print(f"[Firestore] AVISO: Arquivo {FIREBASE_KEY_PATH} não encontrado. Integração desativada.")
+            return
+        try:
+            if not firebase_admin._apps:
+                cred = credentials.Certificate(FIREBASE_KEY_PATH)
+                firebase_admin.initialize_app(cred)
+            self.db = firestore.client()
+            print("[Firestore] Conectado com sucesso")
+            self._find_bot_bankroll()
+        except Exception as e:
+            print(f"[Firestore] Erro ao inicializar: {e}")
+
+    def _find_bot_bankroll(self):
+        try:
+            docs = self.db.collection('bankrolls')\
+                .where('userEmail', '==', BOT_USER_EMAIL)\
+                .where('name', '==', 'BOT').get()
+            
+            if docs:
+                self.bankroll_id = docs[0].id
+                data = docs[0].to_dict()
+                self.unit_value = float(data.get('unitValue', 100))
+                print(f"[Firestore] Banca 'BOT' encontrada: {self.bankroll_id} (Unidade: R$ {self.unit_value})")
+            else:
+                print(f"[Firestore] AVISO: Banca 'BOT' não encontrada para {BOT_USER_EMAIL}. Verifique o nome da banca.")
+        except Exception as e:
+            print(f"[Firestore] Erro ao buscar banca: {e}")
+
+    def save_bet(self, tip):
+        if not self.db or not self.bankroll_id:
+            return None
+        try:
+            stake = float(tip.get('units', 0.5)) * self.unit_value
+            bet_data = {
+                'bankrollId': self.bankroll_id,
+                'userEmail':  BOT_USER_EMAIL,
+                'type':       'simples',
+                'stake':      stake,
+                'odds':       float(tip.get('sent_odd', 0)),
+                'resultado':  'aguardando',
+                'liga':       tip.get('league', ''),
+                'jogador1':   tip.get('home_player', ''),
+                'jogador2':   tip.get('away_player', ''),
+                'mercado':    tip.get('strategy', '').replace('⚽ ', ''),
+                'timestamp':  firestore.SERVER_TIMESTAMP,
+                'bot_event_id': tip.get('event_id', '')
+            }
+            _, doc_ref = self.db.collection('apostas').add(bet_data)
+            return doc_ref.id
+        except Exception as e:
+            print(f"[Firestore] Erro ao salvar bet: {e}")
+            return None
+
+    def update_bet_result(self, firestore_id, result):
+        if not self.db or not firestore_id:
+            return
+        try:
+            self.db.collection('apostas').document(firestore_id).update({
+                'resultado': result
+            })
+            print(f"[Firestore] Bet {firestore_id} atualizada para {result}")
+        except Exception as e:
+            print(f"[Firestore] Erro ao atualizar bet: {e}")
+
+firestore_mgr = FirestoreManager()
 
 # =============================================================================
 # CONFIGURAÇÃO
@@ -1888,6 +1970,16 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             sent_keys.add(key)
             league_last_tip[event.get('mappedLeague', '')] = datetime.now(MANAUS_TZ)
             units = get_units(event.get('mappedLeague', ''))
+            firestore_id = firestore_mgr.save_bet({
+                'units': units,
+                'sent_odd': odd,
+                'league': event.get('mappedLeague', ''),
+                'home_player': home,
+                'away_player': away,
+                'strategy': strategy,
+                'event_id': event_id
+            })
+
             sent_tips.append({
                 'event_id':     event_id,
                 'strategy':     strategy,
@@ -1906,6 +1998,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
                 'scoreboard':   event.get('scoreboard', '0-0'),
                 'startDateRaw': event.get('startDateRaw', ''),
                 'liveTimeRaw':  event.get('liveTimeRaw', ''),
+                'firestore_id': firestore_id,
             })
             save_state()
             print(f"[✓] TIP: {strategy} @ {odd} — {home} vs {away}")
@@ -2017,6 +2110,7 @@ async def check_results(bot):
                     print(f"[edit_result] {e}")
 
                 save_result(tip, ht_h, ht_a, ft_h, ft_a)
+                firestore_mgr.update_bet_result(tip.get('firestore_id'), result)
                 print(f"[{result.upper()}] {strat} | HT {ht_h}-{ht_a} FT {ft_h}-{ft_a}")
 
                 lg = tip.get('league', '')
@@ -2385,6 +2479,7 @@ async def main():
                 return
 
     load_state()
+    firestore_mgr.initialize()
 
     print("[INFO] Pré-carregando histórico...")
     fetch_history(pages=15)
