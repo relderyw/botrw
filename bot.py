@@ -47,14 +47,20 @@ class FirestoreManager:
         try:
             if not firebase_admin._apps:
                 cred = None
-                if os.environ.get('FIREBASE_CREDENTIALS'):
+                env_cred = os.environ.get('FIREBASE_CREDENTIALS')
+                if env_cred:
                     import json
-                    cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
-                    cred = credentials.Certificate(cred_dict)
-                elif os.path.exists(FIREBASE_KEY_PATH):
+                    try:
+                        cred_dict = json.loads(env_cred)
+                        cred = credentials.Certificate(cred_dict)
+                    except Exception as json_err:
+                        print(f"[Firestore] Erro ao ler env var FIREBASE_CREDENTIALS: {json_err}. Tentando arquivo físico...")
+                
+                if not cred and os.path.exists(FIREBASE_KEY_PATH):
                     cred = credentials.Certificate(FIREBASE_KEY_PATH)
-                else:
-                    print(f"[Firestore] AVISO: Credenciais não encontradas (nem env var, nem {FIREBASE_KEY_PATH}). Integração desativada.")
+                
+                if not cred:
+                    print(f"[Firestore] AVISO: Credenciais não encontradas (nem env var válida, nem {FIREBASE_KEY_PATH}). Integração desativada.")
                     return
                 
                 firebase_admin.initialize_app(cred)
@@ -63,7 +69,7 @@ class FirestoreManager:
             print("[Firestore] Conectado com sucesso")
             self._find_bot_bankroll()
         except Exception as e:
-            print(f"[Firestore] Erro ao inicializar: {e}")
+            print(f"[Firestore] Erro geral ao inicializar: {e}")
 
     def _find_bot_bankroll(self):
         try:
