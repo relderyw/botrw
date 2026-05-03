@@ -44,13 +44,21 @@ class FirestoreManager:
         self.unit_value = 100
 
     def initialize(self):
-        if not os.path.exists(FIREBASE_KEY_PATH):
-            print(f"[Firestore] AVISO: Arquivo {FIREBASE_KEY_PATH} não encontrado. Integração desativada.")
-            return
         try:
             if not firebase_admin._apps:
-                cred = credentials.Certificate(FIREBASE_KEY_PATH)
+                cred = None
+                if os.environ.get('FIREBASE_CREDENTIALS'):
+                    import json
+                    cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
+                    cred = credentials.Certificate(cred_dict)
+                elif os.path.exists(FIREBASE_KEY_PATH):
+                    cred = credentials.Certificate(FIREBASE_KEY_PATH)
+                else:
+                    print(f"[Firestore] AVISO: Credenciais não encontradas (nem env var, nem {FIREBASE_KEY_PATH}). Integração desativada.")
+                    return
+                
                 firebase_admin.initialize_app(cred)
+            
             self.db = firestore.client()
             print("[Firestore] Conectado com sucesso")
             self._find_bot_bankroll()
