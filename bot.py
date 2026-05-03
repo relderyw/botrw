@@ -11,6 +11,7 @@ FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
 """
 
 import os, time, re, json, asyncio, logging, concurrent.futures
+import requests
 import sys, io
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
