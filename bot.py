@@ -11,6 +11,11 @@ FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
 """
 
 import os, time, re, json, asyncio, logging, concurrent.futures
+import sys, io
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import datetime as dt_mod
 from datetime import datetime, timezone, timedelta
 import firebase_admin
@@ -143,7 +148,7 @@ HISTORY_URL = "https://rwtips-k8j2.onrender.com/api/history"
 # FIX 3: ht_35 e ht_45 removidos de CRIT_8MIN e CRIT_12MIN
 # =============================================================================
 CRIT_8MIN = {
-    "ht_gate_league": 2.7,
+    "ht_gate_league": 1.7,
     "ht_gate_p":      1.8,
     "ft_gate_league": 3.7,
     "ft_gate_p":      2.1,
@@ -315,7 +320,7 @@ LEAGUE_MIN_TIPS = 5    # FIX 5: era 3 — 3 tips é ruído puro
 
 
 class LeagueManager:
-    def __init__(self, fn='league_perf.json'):
+    def __init__(self, fn='league_performance.json'):
         self.fn = fn
         self.leagues = {}
         self._load()
