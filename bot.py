@@ -41,7 +41,7 @@ class FirestoreManager:
     def __init__(self):
         self.db = None
         self.bankroll_id = None
-        self.unit_value = 100
+        self.unit_value = 20
 
     def initialize(self):
         try:
@@ -80,7 +80,12 @@ class FirestoreManager:
             if docs:
                 self.bankroll_id = docs[0].id
                 data = docs[0].to_dict()
-                self.unit_value = float(data.get('unitValue', 100))
+                # Tenta pegar unitValue, se não existir ou for 0, usa 100
+                val = data.get('unitValue')
+                if val is not None and float(val) > 0:
+                    self.unit_value = float(val)
+                else:
+                    self.unit_value = 20
                 print(f"[Firestore] Banca 'BOT' encontrada: {self.bankroll_id} (Unidade: R$ {self.unit_value})")
             else:
                 print(f"[Firestore] AVISO: Banca 'BOT' não encontrada para {BOT_USER_EMAIL}. Verifique o nome da banca.")
@@ -91,12 +96,18 @@ class FirestoreManager:
         if not self.db or not self.bankroll_id:
             return None
         try:
-            stake = float(tip.get('units', 0.5)) * self.unit_value
+            # Garante unit_value válido (Padrão R$ 20)
+            uv = self.unit_value if self.unit_value > 0 else 20
+            units = float(tip.get('units', 0.5))
+            stake = units * uv
+            
             bet_data = {
                 'bankrollId': self.bankroll_id,
                 'userEmail':  BOT_USER_EMAIL,
                 'type':       'simples',
                 'stake':      stake,
+                'units':      units,
+                'valorEntrada': stake,
                 'odds':       float(tip.get('sent_odd', 0)),
                 'resultado':  'aguardando',
                 'liga':       tip.get('league', ''),
@@ -112,16 +123,40 @@ class FirestoreManager:
             print(f"[Firestore] Erro ao salvar bet: {e}")
             return None
 
-    def update_bet_result(self, firestore_id, result):
+    def update_bet_result(self, tip, result):
+        firestore_id = tip.get('firestore_id')
         if not self.db or not firestore_id:
             return
         try:
-            self.db.collection('apostas').document(firestore_id).update({
-                'resultado': result
-            })
-            print(f"[Firestore] Bet {firestore_id} atualizada para {result}")
+            uv = self.unit_value if self.unit_value > 0 else 20
+            stake = float(tip.get('units', 0.5)) * uv
+            odds = float(tip.get('sent_odd', 0))
+            
+            lucro = 0
+            if result == 'green':
+                lucro = stake * (odds - 1)
+            elif result == 'red':
+                lucro = -stake
+            elif result == 'meio-green':
+                lucro = (stake / 2) * (odds - 1)
+            elif result == 'meio-red':
+                lucro = -stake / 2
+            
+            valor_retorno = stake + lucro if result != 'red' else 0
+            if result == 'reembolso':
+                lucro = 0
+                valor_retorno = stake
+
+            update_data = {
+                'resultado': result,
+                'lucro': lucro,
+                'valorRetorno': valor_retorno
+            }
+            
+            self.db.collection('apostas').document(firestore_id).update(update_data)
+            print(f"[Firestore] Bet {firestore_id} atualizada: {result} (Lucro: {lucro:.2f})")
         except Exception as e:
-            print(f"[Firestore] Erro ao atualizar bet: {e}")
+            print(f"[Firestore] Erro ao atualizar bet {firestore_id}: {e}")
 
 firestore_mgr = FirestoreManager()
 
@@ -1773,7 +1808,7 @@ def _bar(val, max_val=6.0):
     return "●" * filled + "○" * (10 - filled)
 
 
-def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
+def format_tip(event, strategy, odd, p1_st, p2_st, lg_st, units):
     home   = event.get('homePlayer', '?')
     away   = event.get('awayPlayer', '?')
     timer  = event.get('timer', {}).get('formatted', '00:00')
@@ -1802,6 +1837,7 @@ def format_tip(event, strategy, odd, p1_st, p2_st, lg_st):
     strat_clean = strategy.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
 
     msg  = f"🎯 <b>{strat_clean}</b>  <code>@ {odd}</code>\n"
+    msg += f"💰 Entrada: <b>{units}u</b>\n"
     msg += f"🏆 {league}\n"
     msg += f"⏱ {timer}   📊 {score}\n"
     msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
@@ -1824,15 +1860,13 @@ def format_result(tip, ht_h, ht_a, ft_h, ft_a, result):
     home   = tip.get('home_player', '?')
     away   = tip.get('away_player', '?')
     odd    = tip.get('sent_odd', '')
+    units  = tip.get('units', 0.5)
     ft_tot = ft_h + ft_a
     ht_tot = ht_h + ht_a
     strat_clean = strat.replace('⚽ ', '').replace('GOLS ', '').replace(' (TOTAL)', '')
 
     msg  = f"{emoji} <b>{status}</b> — {league}\n"
-    msg += f"<b>{strat_clean}</b>"
-    if odd:
-        msg += f"  <code>@ {odd}</code>"
-    msg += "\n"
+    msg += f"<b>{strat_clean}</b>  <code>@ {odd}</code> ({units}u)\n"
     msg += "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
     msg += f"HT <b>{ht_h}-{ht_a}</b> ({ht_tot}g)  →  FT <b>{ft_h}-{ft_a}</b> ({ft_tot}g)\n"
     if 'HT' in strat and 'FT' not in strat:
@@ -1979,10 +2013,11 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
     home  = event.get('homePlayer', '')
     away  = event.get('awayPlayer', '')
     timer = event.get('timer', {})
+    units = get_units(league)
 
     for attempt in range(3):
         try:
-            msg = format_tip(event, strategy, odd, p1_st, p2_st, lg_st)
+            msg = format_tip(event, strategy, odd, p1_st, p2_st, lg_st, units)
             obj = await bot.send_message(
                 chat_id=CHAT_ID, text=msg,
                 parse_mode="HTML", disable_web_page_preview=True
@@ -2130,7 +2165,7 @@ async def check_results(bot):
                     print(f"[edit_result] {e}")
 
                 save_result(tip, ht_h, ht_a, ft_h, ft_a)
-                firestore_mgr.update_bet_result(tip.get('firestore_id'), result)
+                firestore_mgr.update_bet_result(tip, result)
                 print(f"[{result.upper()}] {strat} | HT {ht_h}-{ht_a} FT {ft_h}-{ft_a}")
 
                 lg = tip.get('league', '')
