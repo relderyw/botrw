@@ -1289,6 +1289,15 @@ def player_stats(player_name, all_matches, last_n=5):
     draw_pct_l3    = sum(1 for m_ft, s_ft in zip(last3_ft_marc, last3_ft_sof)
                          if m_ft == s_ft) / n3
 
+    last4_ft_marc = ft_marc[:4]
+    last4_ft_sof  = ft_sof[:4]
+    n4 = len(last4_ft_marc)
+    
+    wins_l4 = sum(1 for m, s in zip(last4_ft_marc, last4_ft_sof) if m > s)
+    win_pct_l4 = wins_l4 / n4 if n4 > 0 else 0
+    avg_ft_marc_l4 = sum(last4_ft_marc) / n4 if n4 > 0 else 0
+    avg_ft_sof_l4  = sum(last4_ft_sof) / n4 if n4 > 0 else 0
+
     return {
         'avg_ht':         avg_ht,
         'avg_ft':         avg_ft,
@@ -1305,6 +1314,9 @@ def player_stats(player_name, all_matches, last_n=5):
         'pct_ht_sof_l3':  pct_ht_sof_l3,
         'btts_ft_l3':     btts_ft_l3,
         'draw_pct_l3':    draw_pct_l3,
+        'win_pct_l4':     win_pct_l4,
+        'avg_ft_marc_l4': avg_ft_marc_l4,
+        'avg_ft_sof_l4':  avg_ft_sof_l4,
     }
 
 
@@ -1398,6 +1410,9 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
                         and not _is_player_mkt)
         is_over = any(x in name for x in ['mais', 'over', 'acima', '+'])
         is_btts = any(x in mkt for x in ['ambas', 'btts', 'ambos'])
+        is_combined = any(x in mkt for x in ['&', ' v ', ' e ', 'vencer', 'resultado', 'win', 'result'])
+        if is_btts and is_combined:
+            is_btts = False
 
         if category == 'ht_total':
             if is_ht_mkt and is_total_mkt and is_over and sv_val is not None:
@@ -1780,6 +1795,36 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
                 elif hg > 0 and ag > 0:
                     skip(f"BTTS FT: {hg}x{ag} ambos já marcaram")
+            
+            # ── GOLS INDIVIDUAIS | Marcou >= X, Sofreu <= Y, Win >= 60% ──
+            for p_raw, p_st in [(home_raw, p1_st), (away_raw, p2_st)]:
+                p_win   = p_st.get('win_pct_l4', 0)
+                p_marc  = p_st.get('avg_ft_marc_l4', 0)
+                p_sof   = p_st.get('avg_ft_sof_l4', 0)
+                p_nick  = extract_nick(p_raw)
+                
+                if p_win < 0.60:
+                    continue
+                
+                # Proporções: 1.5 (2.0/0.5), 2.5 (3.0/1.0), 3.5 (4.0/1.5), 4.5 (5.0/2.0)
+                targets = [
+                    {'line': 4.5, 'min_marc': 5.0, 'max_sof': 2.0},
+                    {'line': 3.5, 'min_marc': 4.0, 'max_sof': 1.5},
+                    {'line': 2.5, 'min_marc': 3.0, 'max_sof': 1.0},
+                    {'line': 1.5, 'min_marc': 2.0, 'max_sof': 0.5},
+                ]
+                
+                for t in targets:
+                    if p_marc >= t['min_marc'] and p_sof <= t['max_sof']:
+                        odd = find_odd(open_lines, 'individual', t['line'], player_raw=p_raw, min_odd=min_odd)
+                        if odd:
+                            candidates['FT'].append({
+                                'name':  f"⚽ +{t['line']} GOLS - {p_nick}",
+                                'odd':   odd,
+                                'category': 'FT',
+                                'score': p_marc * (odd - 1),
+                            })
+                            break 
 
     # ── Debug: sem linhas HT disponíveis ─────────────────────────
     if is_ht and not candidates['HT'] and ht_gate:
@@ -2136,6 +2181,24 @@ async def check_results(bot):
             elif '+3.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 4 else 'red'
             elif '+4.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 5 else 'red'
             elif 'BTTS FT (TOTAL)'      in strat: result = 'green' if ft_h > 0 and ft_a > 0 else 'red'
+            elif 'GOLS - ' in strat:
+                home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
+                away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
+                m_h      = extract_nick(matched.get('home_player', ''))
+                strat_up = strat.upper()
+                
+                target_nick = strat.split(' - ')[-1].upper()
+                if home_n == target_nick:
+                    gols = ft_h if home_n == m_h else ft_a
+                elif away_n == target_nick:
+                    gols = ft_a if home_n == m_h else ft_h
+                else:
+                    gols = ft_h if home_n == m_h else ft_a
+                
+                m = re.search(r'\+(\d+\.\d+)', strat)
+                if m:
+                    line = float(m.group(1))
+                    result = 'green' if gols > line else 'red'
             elif '+1.5 GOLS FT' in strat or '+2.5 GOLS FT' in strat or '+3.5 GOLS FT' in strat:
                 home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
                 away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
