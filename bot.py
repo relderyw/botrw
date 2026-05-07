@@ -163,7 +163,7 @@ firestore_mgr = FirestoreManager()
 # =============================================================================
 # CONFIGURAÇÃO
 # =============================================================================
-BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
+BOT_TOKEN = "6301628496:AAGLsGSdbhJhCl64gH_hoFQbmIiSSqAFvOU"
 CHAT_ID   = -1001981134607
 MANAUS_TZ = timezone(timedelta(hours=-4))
 
@@ -586,21 +586,25 @@ def load_state():
         print(f"[load_state] {e}")
 
 
-async def send_league_status(bot, text=None):
+async def send_league_status(bot, text=None, chat_id=None):
     global last_league_status_id
+    target_id = chat_id if chat_id else CHAT_ID
+    
     if last_league_status_id:
         try:
-            await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_status_id)
+            await bot.delete_message(chat_id=target_id, message_id=last_league_status_id)
         except Exception as e:
             print(f"[send_league_status] Erro ao deletar antiga: {e}")
     
     status_text = text if text else league_manager.status()
     try:
-        obj = await bot.send_message(chat_id=CHAT_ID, text=status_text, parse_mode="HTML")
+        print(f"[DEBUG] Enviando status para {target_id}...")
+        obj = await bot.send_message(chat_id=target_id, text=status_text, parse_mode="HTML")
         last_league_status_id = obj.message_id
         save_state()
+        print(f"[✓] Status enviado com sucesso.")
     except Exception as e:
-        print(f"[send_league_status] Erro ao enviar nova (ID: {CHAT_ID}): {e}")
+        print(f"[send_league_status] Erro ao enviar nova (ID: {target_id}): {e}")
 
 
 # =============================================================================
@@ -2630,9 +2634,20 @@ async def main():
         if lg != "DEFAULT":
             league_manager.register(lg)
 
+    # DIAGNÓSTICO DE CHAT
+    print(f"[DEBUG] Testando acesso ao CHAT_ID: {CHAT_ID}...")
+    actual_id = CHAT_ID
+    try:
+        chat = await bot.get_chat(chat_id=CHAT_ID)
+        print(f"[✓] Chat encontrado: '{chat.title}' (Tipo: {chat.type}, ID: {chat.id})")
+        actual_id = chat.id
+    except Exception as e:
+        print(f"[❌] ERRO CRÍTICO: Não foi possível acessar o chat {CHAT_ID}. Verifique se o bot é administrador. Erro: {e}")
+
     try:
         await send_league_status(
             bot,
+            chat_id=actual_id,
             text=(f"🤖 <b>BOT v5.1 ONLINE</b>\n"
                   f"7 fixes aplicados — ligas resetadas\n\n"
                   f"{league_manager.status()}")
