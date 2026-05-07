@@ -490,6 +490,7 @@ sb_struct_ts    = 0
 
 PLAYER_COOLDOWN_MIN = 30
 PLAYER_RED_BLOCK    = 3
+last_league_status_id = None
 
 
 def save_state():
@@ -501,6 +502,7 @@ def save_state():
             'last_summary':    last_summary,
             'last_daily_date': last_daily_date,
             'daily_stats':     daily_stats,
+            'last_league_status_id': last_league_status_id,
         }
         with open('bot_state.json', 'w') as f:
             json.dump(state, f, indent=2)
@@ -550,6 +552,7 @@ def load_state():
             sent_keys       = set(s.get('sent_keys', []))
             last_summary    = s.get('last_summary')
             last_daily_date = s.get('last_daily_date')
+            last_league_status_id = s.get('last_league_status_id')
             if s.get('daily_stats'):
                 daily_stats.update(s['daily_stats'])
             for k, v in s.get('player_cooldown', {}).items():
@@ -579,6 +582,23 @@ def load_state():
         print(f"[load_state] {len(sent_tips)} tips pendentes, {len(sent_keys)} keys")
     except Exception as e:
         print(f"[load_state] {e}")
+
+
+async def send_league_status(bot, text=None):
+    global last_league_status_id
+    if last_league_status_id:
+        try:
+            await bot.delete_message(chat_id=CHAT_ID, message_id=last_league_status_id)
+        except Exception as e:
+            print(f"[send_league_status] Erro ao deletar antiga: {e}")
+    
+    status_text = text if text else league_manager.status()
+    try:
+        obj = await bot.send_message(chat_id=CHAT_ID, text=status_text, parse_mode="HTML")
+        last_league_status_id = obj.message_id
+        save_state()
+    except Exception as e:
+        print(f"[send_league_status] Erro ao enviar nova: {e}")
 
 
 # =============================================================================
@@ -2274,12 +2294,11 @@ async def check_results(bot):
             if summary != last_summary:
                 try:
                     await bot.send_message(chat_id=CHAT_ID, text=summary, parse_mode="HTML")
-                    await bot.send_message(chat_id=CHAT_ID, text=league_manager.status(), parse_mode="HTML")
+                    await send_league_status(bot)
                     last_summary = summary
                 except:
                     pass
 
-        global last_daily_date
         if last_daily_date and last_daily_date != today_str:
             try:
                 dates = sorted(daily_stats)[-7:]
@@ -2300,7 +2319,7 @@ async def check_results(bot):
                 tp_str = f"+{total_pnl:.2f}" if total_pnl >= 0 else f"{total_pnl:.2f}"
                 msg += f"\n💰 <b>Total: {tp_str} unidades</b>"
                 await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML")
-                await bot.send_message(chat_id=CHAT_ID, text=league_manager.status(), parse_mode="HTML")
+                await send_league_status(bot)
             except Exception as e:
                 print(f"[virada de dia] {e}")
 
@@ -2610,12 +2629,11 @@ async def main():
             league_manager.register(lg)
 
     try:
-        await bot.send_message(
-            chat_id=CHAT_ID,
+        await send_league_status(
+            bot,
             text=(f"🤖 <b>BOT v5.1 ONLINE</b>\n"
                   f"7 fixes aplicados — ligas resetadas\n\n"
-                  f"{league_manager.status()}"),
-            parse_mode="HTML"
+                  f"{league_manager.status()}")
         )
     except Exception as e:
         print(f"[INFO] Não enviou status inicial: {e}")
