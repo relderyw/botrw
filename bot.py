@@ -164,7 +164,7 @@ firestore_mgr = FirestoreManager()
 # CONFIGURAÇÃO
 # =============================================================================
 BOT_TOKEN = "6569266928:AAHm7pOJVsd3WKzJEgdVDez4ZYdCAlRoYO8"
-CHAT_ID   = "-1001981134607"
+CHAT_ID   = -1001981134607
 MANAUS_TZ = timezone(timedelta(hours=-4))
 
 ALTENAR_LIVE  = (
@@ -258,6 +258,7 @@ LEAGUE_PROFILES = {
 }
 
 def get_crit(league_key):
+    league_key = str(league_key).strip()
     prof = LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
     crit_key = prof["crit"]
     if crit_key == "12MIN": return CRIT_12MIN
@@ -265,6 +266,7 @@ def get_crit(league_key):
     return CRIT_8MIN
 
 def get_profile(league_key):
+    league_key = str(league_key).strip()
     return LEAGUE_PROFILES.get(league_key, LEAGUE_PROFILES["DEFAULT"])
 
 # =============================================================================
@@ -598,7 +600,7 @@ async def send_league_status(bot, text=None):
         last_league_status_id = obj.message_id
         save_state()
     except Exception as e:
-        print(f"[send_league_status] Erro ao enviar nova: {e}")
+        print(f"[send_league_status] Erro ao enviar nova (ID: {CHAT_ID}): {e}")
 
 
 # =============================================================================
