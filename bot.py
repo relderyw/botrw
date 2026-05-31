@@ -2634,6 +2634,35 @@ LIGAS_RESET_STARTUP = [
 ]
 
 
+# =============================================================================
+# SERVIDOR HTTP DE SAÚDE (PARA CLOUD WEB SERVICES COMO KOYEB/RENDER)
+# =============================================================================
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+
+def run_health_check_server():
+    class HealthCheckHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"OK - BOT ONLINE")
+
+        def log_message(self, format, *args):
+            return  # Silenciar logs do servidor HTTP
+
+    port = int(os.environ.get("PORT", 8080))
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        print(f"[HealthCheck] Servidor de saúde ativo na porta {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[HealthCheck] Erro ao iniciar servidor: {e}")
+
+# Inicia em thread secundária para não bloquear o loop do bot
+threading.Thread(target=run_health_check_server, daemon=True).start()
+
+
 async def main():
     print("=" * 65)
     print("🤖 RW TIPS — BOT FIFA v5.1 (7 FIXES APLICADOS)")
