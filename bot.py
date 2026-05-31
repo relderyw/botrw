@@ -481,6 +481,9 @@ league_last_tip     = {}
 LEAGUE_TIP_COOLDOWN = 8
 league_red_cooldown = {}
 LEAGUE_RED_BLOCK    = 15
+league_consecutive_reds = {}
+league_double_red_cooldown = {}
+LEAGUE_DOUBLE_RED_BLOCK = 35
 player_cooldown     = {}
 
 daily_stats     = {}
@@ -2044,7 +2047,7 @@ def get_units(league):
 
 
 async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
-    global sent_tips, sent_keys
+    global sent_tips, sent_keys, league_double_red_cooldown
 
     strategy = tip_info['name']
     odd      = tip_info['odd']
@@ -2068,6 +2071,56 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             print(f"[BLOCK RED] {league}: bloqueada por {mins_left:.0f}min após RED")
             return
 
+    double_red_until = league_double_red_cooldown.get(league)
+    if double_red_until:
+        now = datetime.now(MANAUS_TZ)
+        if isinstance(double_red_until, datetime) and double_red_until.tzinfo is None:
+            double_red_until = double_red_until.replace(tzinfo=MANAUS_TZ)
+        if now < double_red_until:
+            mins_left = (double_red_until - now).total_seconds() / 60
+            print(f"[BLOCK DOUBLE RED] {league}: bloqueada por {mins_left:.0f}min após 2 REDs")
+            return
+        else:
+            print(f"[DOUBLE RED CHECK] {league}: carência expirada. Verificando estatísticas de Over dos últimos 3 jogos...")
+            matches = fetch_history(pages=20, use_cache=True)
+            league_matches = [m for m in matches if m.get('league_name') == league]
+            if len(league_matches) < 3:
+                print(f"[BLOCK DOUBLE RED] {league}: mantida bloqueada por histórico insuficiente ({len(league_matches)}/3 jogos)")
+                return
+            
+            last_3 = league_matches[:3]
+            ht_15_ok = sum(1 for m in last_3 if (int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)) >= 2)
+            ht_25_ok = sum(1 for m in last_3 if (int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)) >= 3)
+            ft_25_ok = sum(1 for m in last_3 if (int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)) >= 3)
+            ft_35_ok = sum(1 for m in last_3 if (int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)) >= 4)
+            
+            pct_15_ht = (ht_15_ok / 3) * 100
+            pct_25_ht = (ht_25_ok / 3) * 100
+            pct_25_ft = (ft_25_ok / 3) * 100
+            pct_35_ft = (ft_35_ok / 3) * 100
+            
+            passed = True
+            reason = ""
+            if pct_15_ht < 100.0:
+                passed = False
+                reason = f"+1.5 HT = {pct_15_ht:.0f}% (precisa 100%)"
+            elif pct_25_ht < 90.0:
+                passed = False
+                reason = f"+2.5 HT = {pct_25_ht:.0f}% (precisa >= 90%)"
+            elif pct_25_ft < 100.0:
+                passed = False
+                reason = f"+2.5 FT = {pct_25_ft:.0f}% (precisa 100%)"
+            elif pct_35_ft < 90.0:
+                passed = False
+                reason = f"+3.5 FT = {pct_35_ft:.0f}% (precisa >= 90%)"
+            
+            if passed:
+                league_double_red_cooldown.pop(league, None)
+                print(f"[UNBLOCK DOUBLE RED] {league}: superou a carência e passou no teste de over (+1.5HT=100% | +2.5HT={pct_25_ht:.0f}% | +2.5FT=100% | +3.5FT={pct_35_ft:.0f}%)")
+            else:
+                print(f"[BLOCK DOUBLE RED] {league}: mantida bloqueada. Não atende critério de over: {reason}")
+                return
+
     last_tip_time = league_last_tip.get(league)
     if last_tip_time:
         ago = (datetime.now(MANAUS_TZ) - last_tip_time).total_seconds() / 60
@@ -2085,6 +2138,9 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
     away  = event.get('awayPlayer', '')
     timer = event.get('timer', {})
     units = get_units(league)
+    if units <= 0.0:
+        print(f"[SKIP] {league}: tip descartada porque unidades calculadas foram {units}u (winrate < 70%)")
+        return
 
     for attempt in range(3):
         try:
@@ -2138,7 +2194,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
 # VERIFICAÇÃO DE RESULTADOS
 # =============================================================================
 async def check_results(bot):
-    global sent_tips, daily_stats, last_summary, last_daily_date
+    global sent_tips, daily_stats, last_summary, last_daily_date, league_consecutive_reds, league_double_red_cooldown
 
     try:
         recent    = history_cache.get('matches', [])
@@ -2265,14 +2321,26 @@ async def check_results(bot):
                             await bot.send_message(chat_id=CHAT_ID, text=lm_msg, parse_mode="HTML")
                         except:
                             pass
+                    
+                    if result == 'green':
+                        league_consecutive_reds[lg] = 0
+                    elif result == 'red':
+                        league_consecutive_reds[lg] = league_consecutive_reds.get(lg, 0) + 1
 
                 for raw_key in ['homeRaw', 'awayRaw', 'home_player', 'away_player']:
                     update_cooldown(tip.get(raw_key, ''), result)
 
                 if result == 'red' and lg:
-                    block_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_RED_BLOCK)
-                    league_red_cooldown[lg] = block_until
-                    print(f"[BLOCK RED] {lg} bloqueada por {LEAGUE_RED_BLOCK}min")
+                    consec = league_consecutive_reds.get(lg, 0)
+                    if consec >= 2:
+                        block_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_DOUBLE_RED_BLOCK)
+                        league_double_red_cooldown[lg] = block_until
+                        league_consecutive_reds[lg] = 0
+                        print(f"[BLOCK DOUBLE RED] {lg} bloqueada por {LEAGUE_DOUBLE_RED_BLOCK}min (2 REDs consecutivos)")
+                    else:
+                        block_until = datetime.now(MANAUS_TZ) + timedelta(minutes=LEAGUE_RED_BLOCK)
+                        league_red_cooldown[lg] = block_until
+                        print(f"[BLOCK RED] {lg} bloqueada por {LEAGUE_RED_BLOCK}min")
 
                 dk = tip['sent_time'].strftime('%Y-%m-%d')
                 daily_stats.setdefault(dk, {'green': 0, 'red': 0, 'pnl': 0.0, 'investido': 0.0})
