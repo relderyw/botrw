@@ -23,7 +23,8 @@ logging.basicConfig(
 # CONFIGURAÇÃO FIREBASE (INTEGRAÇÃO COM GERENCIADOR DE BANCAS)
 # =============================================================================
 BOT_USER_EMAIL    = "reldery1422@gmail.com"  # <--- SEU EMAIL DA PLATAFORMA
-FIREBASE_KEY_PATH = "serviceAccountKey.json" # <--- ARQUIVO DE CREDENCIAIS NA RAIZ
+BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
+FIREBASE_KEY_PATH = os.path.join(BASE_DIR, "serviceAccountKey.json") # Caminho absoluto
 
 class FirestoreManager:
     def __init__(self):
@@ -421,6 +422,8 @@ class LeagueManager:
             return "📊 Nenhuma liga registrada."
         lines = ["📊 <b>STATUS DAS LIGAS</b>\n"]
         for lg, d in sorted(self.leagues.items()):
+            if "ESportsBattle. La Liga" in lg:
+                continue
             n = len(d['window'])
             if n >= LEAGUE_MIN_TIPS:
                 pct = sum(d['window']) / n * 100
@@ -1147,12 +1150,12 @@ def _rebuild_stats_cache(matches):
     new_leagues = {}
 
     for nick in nicks:
-        st = player_stats(nick, matches, last_n=5)
+        st = player_stats(nick, matches, last_n=3)
         if st:
             new_players[nick] = st
 
     for lg in leagues:
-        st = league_stats(lg, matches, last_n=5)
+        st = league_stats(lg, matches, last_n=3)
         if st and not st.get('estimated'):
             new_leagues[lg] = st
 
@@ -1229,7 +1232,7 @@ def get_league_stats_cached(league_name):
 # =============================================================================
 # ESTATÍSTICAS — PLAYER E LIGA
 # =============================================================================
-def player_stats(player_name, all_matches, last_n=5):
+def player_stats(player_name, all_matches, last_n=3):
     nick  = extract_nick(player_name)
     games = []
     for m in all_matches:
@@ -1318,7 +1321,7 @@ def player_stats(player_name, all_matches, last_n=5):
     }
 
 
-def league_stats(league_name, all_matches, last_n=5):
+def league_stats(league_name, all_matches, last_n=3):
     games = [m for m in all_matches if m.get('league_name') == league_name]
     if len(games) < last_n:
         for raw, mapped in HIST_MAP.items():
@@ -1436,6 +1439,15 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.65):  
                     if best is None or price > best:
                         best = price
                         best_mkt = f"{ln.get('market_name','')} | {ln.get('odd_name','')}"
+
+        elif category == 'first_goal_player' and player_raw:
+            p_nick_lo = extract_nick(player_raw).lower()
+            in_mkt  = p_nick_lo in mkt
+            in_name = p_nick_lo in name
+            is_first_goal_mkt = any(x in mkt for x in ['1º gol', '1 gol', 'primeiro gol', 'próximo gol', 'next goal', '1st goal'])
+            if is_first_goal_mkt and (in_mkt or in_name):
+                if best is None or price > best:
+                    best = price
 
         elif category == 'individual' and player_raw:
             p_nick_lo = extract_nick(player_raw).lower()
@@ -1605,6 +1617,23 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     skip(f"BTTS HT: total={total_ht} (precisa <=1)")
                 elif hg > 0 and ag > 0:
                     skip(f"BTTS HT: {hg}x{ag} ambos já marcaram")
+
+            # ── 1º GOL JOGADOR ─────────────────────────────────────
+            if hg == 0 and ag == 0:
+                for p_raw, p_st, opp_st in [(home_raw, p1_st, p2_st), (away_raw, p2_st, p1_st)]:
+                    p_marc = p_st.get('avg_ft', 0)
+                    p_sof  = p_st.get('avg_ft_sof', 0)
+                    opp_marc = opp_st.get('avg_ft', 0)
+                    if p_marc >= 2.5 and p_sof <= 0.6 and opp_marc <= 0.7:
+                        p_nick = extract_nick(p_raw)
+                        odd = find_odd(open_lines, 'first_goal_player', player_raw=p_raw, min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  f'⚽ 1º GOL - {p_nick}',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p_marc - p_sof) * (odd - 1) * 10,
+                            })
 
     # ══════════════════════════════════════════════════════════════
     # APOSTAS FT — só no 2ºT
@@ -2214,6 +2243,27 @@ async def check_results(bot):
             elif '+3.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 4 else 'red'
             elif '+4.5 GOLS FT (TOTAL)' in strat: result = 'green' if ft_tot >= 5 else 'red'
             elif 'BTTS FT (TOTAL)'      in strat: result = 'green' if ft_h > 0 and ft_a > 0 else 'red'
+            elif '1º GOL - ' in strat:
+                home_n = extract_nick(matched.get('home_player', ''))
+                away_n = extract_nick(matched.get('away_player', ''))
+                target_nick = strat.split(' - ')[-1].upper()
+                is_home = (target_nick == home_n)
+                if is_home:
+                    if ht_h > 0 and ht_a == 0: result = 'green'
+                    elif ht_a > 0 and ht_h == 0: result = 'red'
+                    elif ht_h > 0 and ht_a > 0: result = 'green' if ft_h > ft_a else 'red'
+                    elif ft_h > 0 and ft_a == 0: result = 'green'
+                    elif ft_a > 0 and ft_h == 0: result = 'red'
+                    elif ft_h > 0 and ft_a > 0: result = 'green' if ft_h > ft_a else 'red'
+                    else: result = 'red'
+                else:
+                    if ht_a > 0 and ht_h == 0: result = 'green'
+                    elif ht_h > 0 and ht_a == 0: result = 'red'
+                    elif ht_h > 0 and ht_a > 0: result = 'green' if ft_a > ft_h else 'red'
+                    elif ft_a > 0 and ft_h == 0: result = 'green'
+                    elif ft_h > 0 and ft_a == 0: result = 'red'
+                    elif ft_h > 0 and ft_a > 0: result = 'green' if ft_a > ft_h else 'red'
+                    else: result = 'red'
             elif 'GOLS - ' in strat:
                 home_n   = extract_nick(tip.get('homeRaw') or tip.get('home_player', ''))
                 away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
@@ -2471,9 +2521,9 @@ async def main_loop(bot):
                     hist_now = history_cache.get('matches', [])
                     if hist_now:
                         if not p1_s:
-                            p1_s = player_stats(home_p, hist_now, last_n=5)
+                            p1_s = player_stats(home_p, hist_now, last_n=3)
                         if not p2_s:
-                            p2_s = player_stats(away_p, hist_now, last_n=5)
+                            p2_s = player_stats(away_p, hist_now, last_n=3)
 
                 if not p1_s or not p2_s:
                     hist_now = history_cache.get('matches', [])
