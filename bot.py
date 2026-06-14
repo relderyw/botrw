@@ -1,15 +1,3 @@
-"""
-BOT FIFA v5.1 — FIXES APLICADOS
-================================
-FIX 1: Gate HT GT LEAGUE 12 MIN corrigido (2.0 → 1.6)
-FIX 2: Critérios FT +2.5 relaxados (btts_ft_l3 >= 0.67, draw_pct_l3 <= 0.34)
-FIX 3: HT +3.5 e HT +4.5 removidos do arsenal (edge negativo confirmado)
-FIX 4: Lookup fuzzy robusto no cache (resolve cache miss de nick)
-FIX 5: LeagueManager — janela maior, thresholds mais estáveis
-FIX 6: Reset de todas as ligas no startup (janelas podres dos critérios antigos)
-FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
-"""
-
 import os, time, re, json, asyncio, logging, concurrent.futures
 import requests
 import sys, io
@@ -80,7 +68,6 @@ class FirestoreManager:
             if docs:
                 self.bankroll_id = docs[0].id
                 data = docs[0].to_dict()
-                # Tenta pegar unitValue, se não existir ou for 0, usa 100
                 val = data.get('unitValue')
                 if val is not None and float(val) > 0:
                     self.unit_value = float(val)
@@ -96,7 +83,6 @@ class FirestoreManager:
         if not self.db or not self.bankroll_id:
             return None
         try:
-            # Garante unit_value válido (Padrão R$ 20)
             uv = self.unit_value if self.unit_value > 0 else 20
             units = float(tip.get('units', 0.5))
             stake = units * uv
@@ -194,54 +180,48 @@ HISTORY_URL = "https://rwtips-k8j2.onrender.com/api/history"
 
 # =============================================================================
 # CRITÉRIOS POR TIPO DE LIGA
-# FIX 1: ht_gate_league CRIT_12MIN corrigido de 2.0 → 1.6
-# FIX 3: ht_35 e ht_45 removidos de CRIT_8MIN e CRIT_12MIN
+# v5.2: GATES RELAXADOS -10% | PERCENTUAIS 60%→55%
 # =============================================================================
 CRIT_8MIN = {
-    "ht_gate_league": 1.7,
-    "ht_gate_p":      1.8,
-    "ft_gate_league": 3.7,
-    "ft_gate_p":      2.1,
+    "ht_gate_league": 1.5,   # v5.2: era 1.7
+    "ht_gate_p":      1.6,   # v5.2: era 1.8
+    "ft_gate_league": 3.4,   # v5.2: era 3.7
+    "ft_gate_p":      1.9,   # v5.2: era 2.1
 
     "ht_05":   {"p1_marc": 1.5, "p2_marc": 1.5},
-    "ht_15":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ht1": 0.60},
-    "ht_25":   {"p1_marc": 2.3, "p2_marc": 2.3},
-    # FIX 3: ht_35 e ht_45 REMOVIDOS — edge negativo confirmado pelos dados
+    "ht_15":   {"p1_marc": 2.2, "p2_marc": 2.2, "pct_ht1": 0.55},  # v5.2: relaxado
+    "ht_25":   {"p1_marc": 2.2, "p2_marc": 2.2},  # v5.2: era 2.3
     "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},
 
-    "ft_15":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},
-    # FIX 2: ft_25 com critérios relaxados — aplicados em evaluate_strategies
-    "ft_25":   {"p1_marc": 2.0, "p2_marc": 2.0, "pct_ft2": 0.60},
-    "ft_35":   {"p1_marc": 2.5, "p2_marc": 2.5, "pct_ft3": 0.60},
-    "ft_45":   {"p1_marc": 3.0, "p2_marc": 3.0, "pct_ft3": 0.80},
-    "ft_btts": {"p1_marc": 1.2, "p1_sof": 1.2, "p2_marc": 1.2, "p2_sof": 1.2, "pct_ft2": 0.60},
+    "ft_15":   {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_25":   {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_35":   {"p1_marc": 2.4, "p2_marc": 2.4, "pct_ft3": 0.55},  # v5.2: relaxado
+    "ft_45":   {"p1_marc": 2.8, "p2_marc": 2.8, "pct_ft3": 0.75},  # v5.2: relaxado
+    "ft_btts": {"p1_marc": 1.1, "p1_sof": 1.1, "p2_marc": 1.1, "p2_sof": 1.1, "pct_ft2": 0.55},  # v5.2: relaxado
 
-    "min_odd": 1.70,
+    "min_odd": 1.65,  # v5.2: era 1.70
 }
 
 CRIT_6MIN = CRIT_8MIN
 
-# FIX 1: ht_gate_league corrigido de 2.0 → 1.6 (avg real confirmado nos logs = 1.8)
 CRIT_12MIN = {
-    "ht_gate_league": 1.6,   # FIX 1: era 2.0 — logs mostram avg real = 1.8
-    "ht_gate_p":      1.4,
-    "ft_gate_league": 4.1,
-    "ft_gate_p":      2.4,
+    "ht_gate_league": 1.4,   # v5.2: era 1.6
+    "ht_gate_p":      1.2,   # v5.2: era 1.4
+    "ft_gate_league": 3.8,   # v5.2: era 4.1
+    "ft_gate_p":      2.2,   # v5.2: era 2.4
 
     "ht_05": {"p1_marc": 1.5, "p2_marc": 1.5},
-    "ht_15": {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ht1": 0.60},
-    "ht_25": {"p1_marc": 2.2, "p2_marc": 2.2},
-    # FIX 3: ht_35 e ht_45 REMOVIDOS — edge negativo confirmado
-    "ht_btts": {"p1_marc": 1.6, "p1_sof": 1.0, "p2_marc": 1.6, "p2_sof": 1.0},
+    "ht_15": {"p1_marc": 1.8, "p2_marc": 1.8, "pct_ht1": 0.55},  # v5.2: relaxado
+    "ht_25": {"p1_marc": 2.1, "p2_marc": 2.1},  # v5.2: era 2.2
+    "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},  # v5.2: era 1.6
 
-    "ft_15":   {"p1_marc": 2.2, "p2_marc": 2.2, "pct_ft2": 0.60},
-    # FIX 2: ft_25 com critérios relaxados — aplicados em evaluate_strategies
-    "ft_25":   {"p1_marc": 2.5, "p2_marc": 2.5, "pct_ft2": 0.60},
-    "ft_35":   {"p1_marc": 3.0, "p2_marc": 3.0, "pct_ft3": 0.60},
-    "ft_45":   {"p1_marc": 3.5, "p2_marc": 3.5, "pct_ft3": 0.80},
-    "ft_btts": {"p1_marc": 2.0, "p1_sof": 1.5, "p2_marc": 2.0, "p2_sof": 1.5, "pct_ft2": 0.60},
+    "ft_15":   {"p1_marc": 2.1, "p2_marc": 2.1, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_25":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_35":   {"p1_marc": 2.8, "p2_marc": 2.8, "pct_ft3": 0.55},  # v5.2: relaxado
+    "ft_45":   {"p1_marc": 3.2, "p2_marc": 3.2, "pct_ft3": 0.75},  # v5.2: relaxado
+    "ft_btts": {"p1_marc": 1.9, "p1_sof": 1.4, "p2_marc": 1.9, "p2_sof": 1.4, "pct_ft2": 0.55},  # v5.2: relaxado
 
-    "min_odd": 1.70,
+    "min_odd": 1.65,  # v5.2: era 1.70
 }
 
 LEAGUE_PROFILES = {
@@ -296,9 +276,6 @@ LIVE_MAP = {
     "Champions Cyber League": "CLA 10 MIN", "Cyber League": "CLA 10 MIN",
     "Champions League B 2\u00d76": "GT LEAGUE 12 MIN",
     "Champions League B 2x6":   "GT LEAGUE 12 MIN",
-    "ESportsBattle. Club World Cup (2x4 mins)":  "BATTLE 8 MIN",
-    "ESportsBattle. Premier League (2x4 mins)":  "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)":    "VOLTA 6 MIN",
 }
 HIST_MAP = {
     "Battle 6m": "VOLTA 6 MIN", "Battle 8m": "BATTLE 8 MIN",
@@ -320,8 +297,6 @@ HIST_MAP = {
     "Premier League": "BATTLE 8 MIN",
     "World Cup A": "BATTLE 8 MIN",
     "European Conference": "GT LEAGUE 12 MIN",
-    "ESportsBattle. Club World Cup (2x4 mins)": "BATTLE 8 MIN",
-    "Volta International III 4x4 (2x3 mins)":   "VOLTA 6 MIN",
     "GT LEAGUES":                               "GT LEAGUE 12 MIN",
     "GT Leagues":                               "GT LEAGUE 12 MIN",
     "VOLTA - 6 MIN":                            "VOLTA 6 MIN",
@@ -362,13 +337,13 @@ def map_league(name):
 
 # =============================================================================
 # LEAGUE MANAGER
-# FIX 5: LEAGUE_MIN_TIPS=5, LEAGUE_WINDOW=15, LEAGUE_RELOCK=50
+# v5.2: MIN_TIPS=20 | WINDOW=30 | RELOCK=45% | UNLOCK=60%
 # =============================================================================
 LEAGUE_INITIAL  = {lg: True for lg in LEAGUE_PROFILES if lg != "DEFAULT"}
-LEAGUE_RELOCK   = 50   # FIX 5: era 55 — menos sensível a 1-2 REDs
-LEAGUE_UNLOCK   = 68
-LEAGUE_WINDOW   = 15   # FIX 5: era 10 — janela maior = menos volatilidade
-LEAGUE_MIN_TIPS = 5    # FIX 5: era 3 — 3 tips é ruído puro
+LEAGUE_RELOCK   = 45   # v5.2: era 50 — permite recuperação
+LEAGUE_UNLOCK   = 60   # v5.2: era 68 — desbloqueia com 60%
+LEAGUE_WINDOW   = 30   # v5.2: era 15 — janela maior = menos volatilidade
+LEAGUE_MIN_TIPS = 20   # v5.2: era 5 — 20 tips = sample respeitável
 
 
 class LeagueManager:
@@ -483,7 +458,7 @@ league_red_cooldown = {}
 LEAGUE_RED_BLOCK    = 15
 league_consecutive_reds = {}
 league_double_red_cooldown = {}
-LEAGUE_DOUBLE_RED_BLOCK = 35
+LEAGUE_DOUBLE_RED_BLOCK = 15  # v5.2: era 35 → reduzido para 15
 player_cooldown     = {}
 
 daily_stats     = {}
@@ -1181,7 +1156,6 @@ def _rebuild_stats_cache(matches):
         if st and not st.get('estimated'):
             new_leagues[lg] = st
 
-    # Adicionar chaves alternativas (primeiro token)
     for nick, st in list(new_players.items()):
         first = nick.split()[0] if ' ' in nick else None
         if first and first not in new_players:
@@ -1197,7 +1171,6 @@ def _rebuild_stats_cache(matches):
     print(f"[stats_cache] ligas com dados: {known}")
 
 
-# FIX 4: Lookup fuzzy robusto — resolve cache miss por diferença de formato de nick
 def get_player_stats_cached(player_name):
     nick = extract_nick(player_name)
     if not nick:
@@ -1210,23 +1183,19 @@ def get_player_stats_cached(player_name):
 
     players = stats_cache['players']
 
-    # Tentativa 1: match exato do nick extraído (ex: "KEVIN")
     st = players.get(nick)
     if st:
         return st
 
-    # Tentativa 2: nome completo uppercase
     name_up = player_name.strip().upper()
     st = players.get(name_up)
     if st:
         return st
 
-    # Tentativa 3: nick contido em chave do cache OU chave contida no nick
     for key, val in players.items():
         if nick in key or key in nick:
             return val
 
-    # Tentativa 4: qualquer token do nome (>= 3 chars) bate com chave do cache
     tokens = [t.upper() for t in player_name.replace('(', ' ').replace(')', ' ').split()
               if len(t) >= 3]
     for token in tokens:
@@ -1396,7 +1365,7 @@ def league_stats(league_name, all_matches, last_n=5):
 # =============================================================================
 # BUSCA DE ODD NO MERCADO
 # =============================================================================
-def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
+def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.65):  # v5.2: min_odd = 1.65
     best = None
     best_mkt = ''
     for ln in open_lines:
@@ -1483,9 +1452,7 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.70):
 
 # =============================================================================
 # AVALIAÇÃO DAS ESTRATÉGIAS
-# FIX 2: FT +2.5 relaxado (btts_ft_l3 >= 0.67, draw_pct_l3 <= 0.34)
-# FIX 3: HT +3.5 e HT +4.5 removidos
-# FIX 7: Filtro de timing — não enviar no último minuto do HT
+# v5.2: FIX 7 REMOVIDO (timing HT filtering)
 # =============================================================================
 def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     candidates = {'HT': [], 'FT': []}
@@ -1512,13 +1479,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
     elapsed_sec = minute * 60 + second
     is_ht       = elapsed_sec < ht_dur * 60
     is_ft       = elapsed_sec >= ht_dur * 60
-
-    # FIX 7: Filtro de timing HT — não enviar no último minuto do 1ºT
-    # Odds já incorporaram o placar atual e não há tempo de execução
-    ht_time_remaining = ht_dur * 60 - elapsed_sec
-    if is_ht and ht_time_remaining < 60:
-        print(f"    [SKIP] HT timing: {ht_time_remaining:.0f}s restantes no HT (mín 60s)")
-        is_ht = False
 
     p1_ht_marc  = p1_st.get('avg_ht', 0)
     p1_ht_sof   = p1_st.get('avg_ht_sof', 0)
@@ -1554,7 +1514,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
 
     # ══════════════════════════════════════════════════════════════
     # APOSTAS HT — só no 1ºT
-    # FIX 3: +3.5 HT e +4.5 HT REMOVIDOS
     # ══════════════════════════════════════════════════════════════
     if is_ht:
         if not ht_gate:
@@ -1612,8 +1571,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             else:
                 skip(f"+2.5 HT: total={total_ht} (precisa 1-2)")
 
-            # FIX 3: +3.5 HT e +4.5 HT REMOVIDOS — edge negativo confirmado
-
             # ── BTTS HT | Critérios estritos últimos 3 jogos ──────
             c = crit['ht_btts']
             if total_ht <= 1 and not (hg > 0 and ag > 0):
@@ -1651,7 +1608,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
 
     # ══════════════════════════════════════════════════════════════
     # APOSTAS FT — só no 2ºT
-    # FIX 2: FT +2.5 relaxado
     # ══════════════════════════════════════════════════════════════
     if is_ft:
         ht_was_zero = (hg + ag == 0)
@@ -1706,10 +1662,8 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 skip(f"+1.5 FT: total={total_ft} (precisa 0 gols)")
 
             # ── +2.5 FT | Placar: < 2 gols ─────────────────────────
-            # FIX 2: btts_ft_l3 >= 0.67 (2/3), draw_pct_l3 <= 0.34 (1/3)
             c = crit['ft_25']
             if total_ft < 2:
-                # FIX 2: critérios relaxados de 100%/0% para 67%/34%
                 btts_ft_ok = (p1_st.get('btts_ft_l3', 0) >= 0.67
                               and p2_st.get('btts_ft_l3', 0) >= 0.67)
                 draw_ok    = (p1_st.get('draw_pct_l3', 1.0) <= 0.34
@@ -1835,7 +1789,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 if p_win < 0.60:
                     continue
                 
-                # Proporções: 1.5 (2.0/0.5), 2.5 (3.0/1.0), 3.5 (4.0/1.5), 4.5 (5.0/2.0)
                 targets = [
                     {'line': 4.5, 'min_marc': 5.0, 'max_sof': 2.0},
                     {'line': 3.5, 'min_marc': 4.0, 'max_sof': 1.5},
@@ -1855,7 +1808,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                             })
                             break 
 
-    # ── Debug: sem linhas HT disponíveis ─────────────────────────
     if is_ht and not candidates['HT'] and ht_gate:
         mkt_names = list(set(ln.get('market_name', '') for ln in open_lines))
         has_ht_mkt = any(any(x in m.lower() for x in ['1º', '1ª', '1st', 'half', 'primeiro'])
@@ -1863,7 +1815,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
         if not has_ht_mkt:
             skip(f"HT: nenhum mercado de 1ºT disponível | mercados: {mkt_names[:5]}")
 
-    # ── Seleção: melhor HT + melhor FT ─────────────────────────
     chosen = []
     for cat in ('HT', 'FT'):
         if candidates[cat]:
@@ -2514,7 +2465,6 @@ async def main_loop(bot):
                 if not lines:
                     continue
 
-                # FIX 4: lookup fuzzy no cache
                 p1_s = get_player_stats_cached(home_p)
                 p2_s = get_player_stats_cached(away_p)
                 if not p1_s or not p2_s:
@@ -2597,14 +2547,10 @@ async def results_checker(bot):
 
 # =============================================================================
 # INICIALIZAÇÃO
-# FIX 6: Reset de TODAS as ligas no startup — limpa janelas com critérios antigos
 # =============================================================================
 def reset_league_window(leagues_to_reset):
     """
     Reseta a janela de performance de ligas específicas.
-    Todas as ligas são resetadas no startup v5.1 porque os critérios
-    antigos eram mais frouxos e as janelas estão envenenadas com REDs
-    que não aconteceriam com os critérios corrigidos.
     """
     import collections as _col
     for lg in leagues_to_reset:
@@ -2620,7 +2566,6 @@ def reset_league_window(leagues_to_reset):
     league_manager.save()
 
 
-# FIX 6: Resetar TODAS as ligas — critérios v5.0 eram diferentes dos v5.1
 LIGAS_RESET_STARTUP = [
     "BATTLE 8 MIN",
     "BATTLE 12 MIN",
@@ -2633,9 +2578,8 @@ LIGAS_RESET_STARTUP = [
     "VOLTA 6 MIN",
 ]
 
-
 # =============================================================================
-# SERVIDOR HTTP DE SAÚDE (PARA CLOUD WEB SERVICES COMO KOYEB/RENDER)
+# SERVIDOR HTTP DE SAÚDE
 # =============================================================================
 import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
@@ -2649,7 +2593,7 @@ def run_health_check_server():
             self.wfile.write(b"OK - BOT ONLINE")
 
         def log_message(self, format, *args):
-            return  # Silenciar logs do servidor HTTP
+            return
 
     port = int(os.environ.get("PORT", 8080))
     try:
@@ -2659,39 +2603,37 @@ def run_health_check_server():
     except Exception as e:
         print(f"[HealthCheck] Erro ao iniciar servidor: {e}")
 
-# Inicia em thread secundária para não bloquear o loop do bot
 threading.Thread(target=run_health_check_server, daemon=True).start()
 
 
 async def main():
     print("=" * 65)
-    print("🤖 RW TIPS — BOT FIFA v5.1 (7 FIXES APLICADOS)")
+    print("🤖 RW TIPS — BOT FIFA v5.2 (RECOVERY MODE)")
     print("=" * 65)
     print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
     print()
-    print("FIXES v5.1:")
-    print("  FIX 1: GT LEAGUE gate HT 2.0 → 1.6 (calibrado por logs reais)")
-    print("  FIX 2: FT +2.5 relaxado (btts_l3>=67%, draw<=34%)")
-    print("  FIX 3: HT +3.5 e +4.5 REMOVIDOS (edge negativo)")
-    print("  FIX 4: Lookup fuzzy robusto no cache (resolve cache miss)")
-    print("  FIX 5: LeagueManager janela=15, min_tips=5, relock=50%")
-    print("  FIX 6: Reset de todas as ligas no startup")
-    print("  FIX 7: Filtro timing HT (não enviar no último min)")
+    print("MUDANÇAS v5.2 (RECOVERY):")
+    print("  • LEAGUE_MIN_TIPS: 5 → 20 (confiabilidade)")
+    print("  • LEAGUE_WINDOW: 15 → 30 (suavização)")
+    print("  • LEAGUE_RELOCK: 50% → 45% (recuperação)")
+    print("  • LEAGUE_UNLOCK: 68% → 60% (desbloqueio)")
+    print("  • Gates relaxados -10% em média")
+    print("  • FIX 7 REMOVIDO (timing HT)")
+    print("  • ESportsBattle La Liga REMOVIDA (problemas)")
     print()
     c8  = CRIT_8MIN
     c12 = CRIT_12MIN
     print("=== CRITÉRIOS 6/8 MIN (Battle, H2H, Valkyrie, Volta) ===")
     print(f"  Gate HT: liga>={c8['ht_gate_league']} | p>={c8['ht_gate_p']}")
     print(f"  Gate FT: liga>={c8['ft_gate_league']} | p>={c8['ft_gate_p']}")
-    print(f"  HT: +0.5 | +1.5 | +2.5 | BTTS  [FIX 3: +3.5/+4.5 removidos]")
-    print(f"  FT +2.5: btts_l3>=67% draw<=34%  [FIX 2: era 100%/0%]")
+    print(f"  Min Odd: {c8['min_odd']}")
     print()
     print("=== CRITÉRIOS 10/12 MIN (GT, Valhalla, Battle 12, CLA, Adriatic) ===")
-    print(f"  Gate HT: liga>={c12['ht_gate_league']} | p>={c12['ht_gate_p']}  [FIX 1: era 2.0]")
+    print(f"  Gate HT: liga>={c12['ht_gate_league']} | p>={c12['ht_gate_p']}")
     print(f"  Gate FT: liga>={c12['ft_gate_league']} | p>={c12['ft_gate_p']}")
-    print(f"  HT: +0.5 | +1.5 | +2.5 | BTTS  [FIX 3: +3.5/+4.5 removidos]")
+    print(f"  Min Odd: {c12['min_odd']}")
     print()
-    print(f"LeagueManager: janela={LEAGUE_WINDOW} min_tips={LEAGUE_MIN_TIPS} relock={LEAGUE_RELOCK}%")
+    print(f"LeagueManager: janela={LEAGUE_WINDOW} min_tips={LEAGUE_MIN_TIPS} relock={LEAGUE_RELOCK}% unlock={LEAGUE_UNLOCK}%")
     print("=" * 65)
 
     bot = Bot(
@@ -2724,14 +2666,12 @@ async def main():
     print("[INFO] Pré-carregando histórico...")
     fetch_history(pages=15)
 
-    # FIX 6: Resetar todas as ligas — janelas envenenadas com critérios antigos
     reset_league_window(LIGAS_RESET_STARTUP)
 
     for lg in LEAGUE_PROFILES:
         if lg != "DEFAULT":
             league_manager.register(lg)
 
-    # DIAGNÓSTICO DE CHAT
     print(f"[DEBUG] Testando acesso ao CHAT_ID: {CHAT_ID}...")
     actual_id = CHAT_ID
     try:
@@ -2745,8 +2685,9 @@ async def main():
         await send_league_status(
             bot,
             chat_id=actual_id,
-            text=(f"🤖 <b>BOT v5.1 ONLINE</b>\n"
-                  f"7 fixes aplicados — ligas resetadas\n\n"
+            text=(f"🤖 <b>BOT v5.2 ONLINE (RECOVERY)</b>\n"
+                  f"Mudanças: MIN_TIPS=20, WINDOW=30, RELOCK=45%\n"
+                  f"Gates relaxados | FIX 7 removido | ESportsBattle removida\n\n"
                   f"{league_manager.status()}")
         )
     except Exception as e:
