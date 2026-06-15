@@ -81,7 +81,11 @@ class FirestoreManager:
             print(f"[Firestore] Erro ao buscar banca: {e}")
 
     def save_bet(self, tip):
-        if not self.db or not self.bankroll_id:
+        if not self.db:
+            print("[Firestore] Erro ao salvar bet: self.db não está inicializado.")
+            return None
+        if not self.bankroll_id:
+            print(f"[Firestore] Erro ao salvar bet: bankroll_id não encontrado para {BOT_USER_EMAIL}.")
             return None
         try:
             uv = self.unit_value if self.unit_value > 0 else 20
@@ -105,9 +109,12 @@ class FirestoreManager:
                 'bot_event_id': tip.get('event_id', '')
             }
             _, doc_ref = self.db.collection('apostas').add(bet_data)
+            print(f"[Firestore] Tip salva com sucesso. ID: {doc_ref.id}")
             return doc_ref.id
         except Exception as e:
+            import traceback
             print(f"[Firestore] Erro ao salvar bet: {e}")
+            traceback.print_exc()
             return None
 
     def update_bet_result(self, tip, result):
