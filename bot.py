@@ -50,15 +50,23 @@ class FirestoreManager:
                 
                 if not cred:
                     print(f"[Firestore] AVISO: Credenciais não encontradas (nem env var válida, nem {FIREBASE_KEY_PATH}). Integração desativada.")
+                    with open("firestore_debug.log", "a") as f:
+                        f.write(f"[{datetime.now()}] AVISO: Credenciais não encontradas. FIREBASE_KEY_PATH: {FIREBASE_KEY_PATH}\n")
                     return
                 
                 firebase_admin.initialize_app(cred)
             
             self.db = firestore.client()
             print("[Firestore] Conectado com sucesso")
+            with open("firestore_debug.log", "a") as f:
+                f.write(f"[{datetime.now()}] Conectado com sucesso. db={self.db}\n")
             self._find_bot_bankroll()
         except Exception as e:
+            import traceback
             print(f"[Firestore] Erro geral ao inicializar: {e}")
+            traceback.print_exc()
+            with open("firestore_debug.log", "a") as f:
+                f.write(f"[{datetime.now()}] Erro geral ao inicializar: {e}\n{traceback.format_exc()}\n")
 
     def _find_bot_bankroll(self):
         try:
