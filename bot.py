@@ -452,6 +452,21 @@ class LeagueManager:
             lines.append(f"{e} <b>{lg}</b>: {st} | {d['total']} total")
         return "\n".join(lines)
 
+    def reset_all_leagues(self):
+        """
+        Reseta todas as ligas (limpa a janela, reseta a contagem total de tips e as ativa).
+        """
+        import collections as _col
+        for lg in list(self.leagues.keys()):
+            self.leagues[lg] = {
+                'active': True,
+                'window': _col.deque(maxlen=LEAGUE_WINDOW),
+                'total': 0
+            }
+        self.save()
+        print("[LM] Todas as estatísticas das ligas foram zeradas para o novo dia.")
+
+
 
 league_manager = LeagueManager()
 
@@ -2390,6 +2405,12 @@ async def check_results(bot):
                     pass
 
         if last_daily_date and last_daily_date != today_str:
+            try:
+                print(f"[RESET DIÁRIO] Virada de dia detectada ({last_daily_date} -> {today_str}). Zerando estatísticas de ligas...")
+                league_manager.reset_all_leagues()
+            except Exception as lm_err:
+                print(f"[RESET DIÁRIO] Erro ao zerar ligas: {lm_err}")
+
             try:
                 dates = sorted(daily_stats)[-7:]
                 msg   = "🚨 <b>Resumo Geral:</b>\n\n"
