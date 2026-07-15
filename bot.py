@@ -44,18 +44,18 @@ class FirestoreManager:
                         cred = credentials.Certificate(cred_dict)
                     except Exception as json_err:
                         print(f"[Firestore] Erro ao ler env var FIREBASE_CREDENTIALS: {json_err}. Tentando arquivo físico...")
-                
+
                 if not cred and os.path.exists(FIREBASE_KEY_PATH):
                     cred = credentials.Certificate(FIREBASE_KEY_PATH)
-                
+
                 if not cred:
                     print(f"[Firestore] AVISO: Credenciais não encontradas (nem env var válida, nem {FIREBASE_KEY_PATH}). Integração desativada.")
                     with open("firestore_debug.log", "a") as f:
                         f.write(f"[{datetime.now()}] AVISO: Credenciais não encontradas. FIREBASE_KEY_PATH: {FIREBASE_KEY_PATH}\n")
                     return
-                
+
                 firebase_admin.initialize_app(cred)
-            
+
             self.db = firestore.client()
             print("[Firestore] Conectado com sucesso")
             with open("firestore_debug.log", "a") as f:
@@ -73,7 +73,7 @@ class FirestoreManager:
             docs = self.db.collection('bankrolls')\
                 .where('userEmail', '==', BOT_USER_EMAIL)\
                 .where('name', '==', 'BOT').get()
-            
+
             if docs:
                 self.bankroll_id = docs[0].id
                 data = docs[0].to_dict()
@@ -99,7 +99,7 @@ class FirestoreManager:
             uv = self.unit_value if self.unit_value > 0 else 20
             units = float(tip.get('units', 0.5))
             stake = units * uv
-            
+
             bet_data = {
                 'bankrollId': self.bankroll_id,
                 'userEmail':  BOT_USER_EMAIL,
@@ -133,7 +133,7 @@ class FirestoreManager:
             uv = self.unit_value if self.unit_value > 0 else 20
             stake = float(tip.get('units', 0.5)) * uv
             odds = float(tip.get('sent_odd', 0))
-            
+
             lucro = 0
             if result == 'green':
                 lucro = stake * (odds - 1)
@@ -143,7 +143,7 @@ class FirestoreManager:
                 lucro = (stake / 2) * (odds - 1)
             elif result == 'meio-red':
                 lucro = -stake / 2
-            
+
             valor_retorno = stake + lucro if result != 'red' else 0
             if result == 'reembolso':
                 lucro = 0
@@ -154,7 +154,7 @@ class FirestoreManager:
                 'lucro': lucro,
                 'valorRetorno': valor_retorno
             }
-            
+
             self.db.collection('apostas').document(firestore_id).update(update_data)
             print(f"[Firestore] Bet {firestore_id} atualizada: {result} (Lucro: {lucro:.2f})")
         except Exception as e:
@@ -468,7 +468,124 @@ class LeagueManager:
 
 
 
+# =============================================================================
+# v5.3: STRATEGY PERFORMANCE MANAGER
+# Gate granular por (liga, estratégia_base, faixa_de_odd). Não mata nenhuma
+# estratégia: cada combo tem sua própria janela e pode "entrar no giro"
+# (reativar) sozinho assim que a performance real melhorar, exatamente como
+# já acontece hoje no nível de liga — só que numa granularidade que enxerga
+# BTTS HT, gols individuais etc. separadamente, em vez de misturar tudo.
+# =============================================================================
+STRATEGY_WINDOW   = 20   # tamanho da janela móvel por combo
+STRATEGY_MIN_TIPS = 15   # amostra mínima antes de decidir pausar/liberar
+STRATEGY_RELOCK   = 42   # win% abaixo disso -> pausa o combo
+STRATEGY_UNLOCK   = 55   # win% acima disso -> reativa o combo pausado
+
+
+class StrategyPerformanceManager:
+    def __init__(self, fn='strategy_performance.json'):
+        self.fn = fn
+        self.combos = {}
+        self._load()
+
+    def _key(self, league, strategy, odd):
+        strat_base = normalize_strategy(strategy)
+        bucket = odd_bucket(odd)
+        return f"{league}|{strat_base}|{bucket}"
+
+    def _load(self):
+        if os.path.exists(self.fn):
+            try:
+                with open(self.fn) as f:
+                    raw = json.load(f)
+                for key, d in raw.items():
+                    self.combos[key] = {
+                        'active': d.get('active', True),
+                        'window': deque(d.get('window', []), maxlen=STRATEGY_WINDOW),
+                        'total':  d.get('total', 0),
+                    }
+            except Exception as e:
+                print(f"[SPM] load error: {e}")
+
+    def save(self):
+        try:
+            with open(self.fn, 'w') as f:
+                json.dump(
+                    {k: {'active': v['active'], 'window': list(v['window']), 'total': v['total']}
+                     for k, v in self.combos.items()},
+                    f, indent=2
+                )
+        except Exception as e:
+            print(f"[SPM] save error: {e}")
+
+    def _ensure(self, key):
+        if key not in self.combos:
+            self.combos[key] = {
+                'active': True,
+                'window': deque(maxlen=STRATEGY_WINDOW),
+                'total': 0,
+            }
+        return self.combos[key]
+
+    def is_active(self, league, strategy, odd):
+        key = self._key(league, strategy, odd)
+        d = self._ensure(key)
+        n = len(d['window'])
+        if n < STRATEGY_MIN_TIPS:
+            return d['active'], f"coletando ({n}/{STRATEGY_MIN_TIPS})"
+        pct = sum(d['window']) / n * 100
+        return d['active'], f"{pct:.0f}% | {n} tips"
+
+    def record(self, league, strategy, odd, green):
+        key = self._key(league, strategy, odd)
+        d = self._ensure(key)
+        d['window'].append(1 if green else 0)
+        d['total'] += 1
+        n = len(d['window'])
+        if n < STRATEGY_MIN_TIPS:
+            self.save()
+            return False, None
+        pct = sum(d['window']) / n * 100
+        changed, msg = False, None
+        strat_base = normalize_strategy(strategy)
+        bucket = odd_bucket(odd)
+        if not d['active'] and pct >= STRATEGY_UNLOCK:
+            d['active'] = True; changed = True
+            msg = (f"🟢 <b>COMBO ATIVO:</b> {league} · {strat_base} · odd {bucket}\n"
+                   f"{pct:.0f}% nas últimas {n} tips — entrou no giro")
+        elif d['active'] and pct < STRATEGY_RELOCK:
+            d['active'] = False; changed = True
+            msg = (f"🔴 <b>COMBO PAUSADO:</b> {league} · {strat_base} · odd {bucket}\n"
+                   f"{pct:.0f}% nas últimas {n} tips — segue coletando dados p/ religar sozinho")
+        self.save()
+        return changed, msg
+
+    def win_rate(self, league, strategy, odd):
+        """Retorna (win_prob, n_amostras) do combo, ou (None, 0) se não houver dado suficiente."""
+        key = self._key(league, strategy, odd)
+        d = self.combos.get(key)
+        if not d:
+            return None, 0
+        n = len(d['window'])
+        if n < STRATEGY_MIN_TIPS:
+            return None, n
+        return sum(d['window']) / n, n
+
+    def report_snapshot(self, min_tips=STRATEGY_MIN_TIPS):
+        """Lista combos com amostra suficiente, ordenados por PNL implícito (pior primeiro)."""
+        rows = []
+        for key, d in self.combos.items():
+            n = len(d['window'])
+            if n < min_tips:
+                continue
+            pct = sum(d['window']) / n * 100
+            rows.append((key, pct, n, d['active']))
+        rows.sort(key=lambda r: r[1])
+        return rows
+
+
 league_manager = LeagueManager()
+strategy_manager = StrategyPerformanceManager()
 
 # =============================================================================
 # ESTADO GLOBAL
@@ -484,7 +601,7 @@ stats_cache = {
 STATS_TTL = 120
 
 sent_tips           = []
-sent_keys           = set()
+sent_keys            = set()
 league_last_tip     = {}
 LEAGUE_TIP_COOLDOWN = 8
 league_red_cooldown = {}
@@ -600,13 +717,13 @@ def load_state():
 async def send_league_status(bot, text=None, chat_id=None):
     global last_league_status_id
     target_id = chat_id if chat_id else CHAT_ID
-    
+
     if last_league_status_id:
         try:
             await bot.delete_message(chat_id=target_id, message_id=last_league_status_id)
         except Exception as e:
             print(f"[send_league_status] Erro ao deletar antiga: {e}")
-    
+
     status_text = text if text else league_manager.status()
     try:
         print(f"[DEBUG] Enviando status para {target_id}...")
@@ -640,6 +757,47 @@ def extract_nick(raw):
 def normalize_nick(raw):
     nick = extract_nick(raw)
     return nick.capitalize() if nick else raw.strip()
+
+
+# =============================================================================
+# v5.3: NORMALIZAÇÃO DE ESTRATÉGIA E FAIXA DE ODD
+# Usadas pelo StrategyPerformanceManager para agrupar tips em combos
+# (liga, estratégia_base, faixa_de_odd) sem depender do nick do jogador.
+# =============================================================================
+def normalize_strategy(strategy_name):
+    """
+    Colapsa apostas de jogador individual (que carregam o nick no nome,
+    ex: '⚽ +4.5 GOLS - MQRKKKKKK') na sua linha base (ex: 'INDIVIDUAL +4.5'),
+    para que o histórico de todos os jogadores dessa linha seja agregado.
+    Estratégias de time (ex: '⚽ +2.5 GOLS HT') permanecem como estão.
+    """
+    s = strategy_name or ''
+    if 'GOLS - ' in s:
+        m = re.search(r'\+(\d+\.\d+)', s)
+        line = m.group(1) if m else '?'
+        return f"INDIVIDUAL +{line}"
+    if '1º GOL - ' in s:
+        return "1º GOL JOGADOR"
+    return s.replace('⚽ ', '').strip()
+
+
+def odd_bucket(odd):
+    """
+    Agrupa odds em faixas. O backtest mostrou que o mesmo mercado tem EV
+    completamente diferente dependendo da faixa de odd (odds 2.50+ tiveram
+    27.7% de acerto vs ~57% nas faixas 1.65-1.99), então o gate de ativação
+    precisa considerar a faixa, não só liga+estratégia.
+    """
+    try:
+        o = float(odd)
+    except (TypeError, ValueError):
+        return "?"
+    if o < 1.70:  return "1.65-1.69"
+    if o < 1.80:  return "1.70-1.79"
+    if o < 1.90:  return "1.80-1.89"
+    if o < 2.00:  return "1.90-1.99"
+    if o < 2.50:  return "2.00-2.49"
+    return "2.50+"
 
 
 def is_player_blocked(player_raw):
@@ -1323,7 +1481,7 @@ def player_stats(player_name, all_matches, last_n=3):
     last4_ft_marc = ft_marc[:4]
     last4_ft_sof  = ft_sof[:4]
     n4 = len(last4_ft_marc)
-    
+
     wins_l4 = sum(1 for m, s in zip(last4_ft_marc, last4_ft_sof) if m > s)
     win_pct_l4 = wins_l4 / n4 if n4 > 0 else 0
     avg_ft_marc_l4 = sum(last4_ft_marc) / n4 if n4 > 0 else 0
@@ -1837,24 +1995,24 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
                 elif hg > 0 and ag > 0:
                     skip(f"BTTS FT: {hg}x{ag} ambos já marcaram")
-            
+
             # ── GOLS INDIVIDUAIS | Marcou >= X, Sofreu <= Y, Win >= 60% ──
             for p_raw, p_st in [(home_raw, p1_st), (away_raw, p2_st)]:
                 p_win   = p_st.get('win_pct_l4', 0)
                 p_marc  = p_st.get('avg_ft_marc_l4', 0)
                 p_sof   = p_st.get('avg_ft_sof_l4', 0)
                 p_nick  = extract_nick(p_raw)
-                
+
                 if p_win < 0.60:
                     continue
-                
+
                 targets = [
                     {'line': 4.5, 'min_marc': 5.0, 'max_sof': 2.0},
                     {'line': 3.5, 'min_marc': 4.0, 'max_sof': 1.5},
                     {'line': 2.5, 'min_marc': 3.0, 'max_sof': 1.0},
                     {'line': 1.5, 'min_marc': 2.0, 'max_sof': 0.5},
                 ]
-                
+
                 for t in targets:
                     if p_marc >= t['min_marc'] and p_sof <= t['max_sof']:
                         odd = find_odd(open_lines, 'individual', t['line'], player_raw=p_raw, min_odd=min_odd)
@@ -1865,7 +2023,7 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                                 'category': 'FT',
                                 'score': p_marc * (odd - 1),
                             })
-                            break 
+                            break
 
     if is_ht and not candidates['HT'] and ht_gate:
         mkt_names = list(set(ln.get('market_name', '') for ln in open_lines))
@@ -2043,12 +2201,68 @@ def find_result_match(tip, recent):
 # =============================================================================
 # ENVIO DE TIP
 # =============================================================================
-def get_units(league):
+# =============================================================================
+# v5.3: STAKE POR KELLY FRACIONÁRIO
+# Antes: tabela fixa de unidades baseada só no winrate da liga, ignorando a
+# odd. Duas tips com "70% de winrate histórico" a 1.65 e a 2.20 têm edges
+# bem diferentes — o Kelly captura isso automaticamente.
+# =============================================================================
+KELLY_FRACTION = 0.25   # fração do Kelly cheio (proteção de banca)
+KELLY_MIN_UNITS = 0.5
+KELLY_MAX_UNITS = 2.0
+
+
+def kelly_units(win_prob, odd, kelly_fraction=KELLY_FRACTION,
+                 min_units=KELLY_MIN_UNITS, max_units=KELLY_MAX_UNITS):
+    """
+    Kelly fracionário: f* = (p*b - q) / b, com b = odd - 1.
+    Se o edge for <= 0 (odd não compensa o win_prob estimado), retorna 0
+    (não aposta). Resultado é escalado para a faixa de unidades do bot e
+    arredondado para múltiplos de 0.5u.
+    """
+    if not odd or odd <= 1.0 or win_prob is None:
+        return 0.0
+    b = odd - 1.0
+    q = 1.0 - win_prob
+    edge = win_prob * odd - 1.0
+    if edge <= 0:
+        return 0.0
+    full_kelly = (win_prob * b - q) / b
+    if full_kelly <= 0:
+        return 0.0
+    # escala full_kelly (fração de banca, tipicamente pequena) para a faixa de unidades
+    raw_units = full_kelly * kelly_fraction * 10
+    units = max(min_units, min(max_units, raw_units))
+    return round(units * 2) / 2  # arredonda para múltiplos de 0.5
+
+
+def get_units(league, strategy=None, odd=None):
+    """
+    Prioridade de sinal:
+      1) win% do combo granular (liga+estratégia+faixa de odd), se já tiver
+         amostra suficiente — é o edge mais específico disponível.
+      2) win% da liga inteira, via Kelly, como fallback.
+      3) 0.5u fixo enquanto os dois ainda estão "coletando" (cold start).
+    Nunca aumenta stake sem dado — combos/ligas sem amostra suficiente
+    sempre caem no piso de 0.5u, igual ao comportamento anterior.
+    """
+    strat_prob, strat_n = (None, 0)
+    if strategy is not None and odd:
+        strat_prob, strat_n = strategy_manager.win_rate(league, strategy, odd)
+
+    if strat_prob is not None and odd:
+        return kelly_units(strat_prob, odd)
+
     d = league_manager._ensure(league)
     n = len(d['window'])
     if n < LEAGUE_MIN_TIPS:
         return 0.5
-    pct = sum(d['window']) / n * 100
+    league_prob = sum(d['window']) / n
+    if odd:
+        return kelly_units(league_prob, odd)
+
+    # fallback final (sem odd disponível): mantém a lógica antiga por tabela
+    pct = league_prob * 100
     if pct >= 96: return 2.0
     if pct >= 91: return 1.5
     if pct >= 76: return 1.0
@@ -2097,18 +2311,18 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             if len(league_matches) < 3:
                 print(f"[BLOCK DOUBLE RED] {league}: mantida bloqueada por histórico insuficiente ({len(league_matches)}/3 jogos)")
                 return
-            
+
             last_3 = league_matches[:3]
             ht_15_ok = sum(1 for m in last_3 if (int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)) >= 2)
             ht_25_ok = sum(1 for m in last_3 if (int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)) >= 3)
             ft_25_ok = sum(1 for m in last_3 if (int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)) >= 3)
             ft_35_ok = sum(1 for m in last_3 if (int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)) >= 4)
-            
+
             pct_15_ht = (ht_15_ok / 3) * 100
             pct_25_ht = (ht_25_ok / 3) * 100
             pct_25_ft = (ft_25_ok / 3) * 100
             pct_35_ft = (ft_35_ok / 3) * 100
-            
+
             passed = True
             reason = ""
             if pct_15_ht < 100.0:
@@ -2123,7 +2337,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             elif pct_35_ft < 90.0:
                 passed = False
                 reason = f"+3.5 FT = {pct_35_ft:.0f}% (precisa >= 90%)"
-            
+
             if passed:
                 league_double_red_cooldown.pop(league, None)
                 print(f"[UNBLOCK DOUBLE RED] {league}: superou a carência e passou no teste de over (+1.5HT=100% | +2.5HT={pct_25_ht:.0f}% | +2.5FT=100% | +3.5FT={pct_35_ft:.0f}%)")
@@ -2147,7 +2361,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
     home  = event.get('homePlayer', '')
     away  = event.get('awayPlayer', '')
     timer = event.get('timer', {})
-    units = get_units(league)
+    units = get_units(league, strategy, odd)
     if units <= 0.0:
         print(f"[SKIP] {league}: tip descartada porque unidades calculadas foram {units}u (winrate < 70%)")
         return
@@ -2161,7 +2375,7 @@ async def send_tip(bot, event, tip_info, p1_st, p2_st, lg_st):
             )
             sent_keys.add(key)
             league_last_tip[event.get('mappedLeague', '')] = datetime.now(MANAUS_TZ)
-            units = get_units(event.get('mappedLeague', ''))
+            units = get_units(event.get('mappedLeague', ''), strategy, odd)
             firestore_id = firestore_mgr.save_bet({
                 'units': units,
                 'sent_odd': odd,
@@ -2299,7 +2513,7 @@ async def check_results(bot):
                 away_n   = extract_nick(tip.get('awayRaw') or tip.get('away_player', ''))
                 m_h      = extract_nick(matched.get('home_player', ''))
                 strat_up = strat.upper()
-                
+
                 target_nick = strat.split(' - ')[-1].upper()
                 if home_n == target_nick:
                     gols = ft_h if home_n == m_h else ft_a
@@ -2307,7 +2521,7 @@ async def check_results(bot):
                     gols = ft_a if home_n == m_h else ft_h
                 else:
                     gols = ft_h if home_n == m_h else ft_a
-                
+
                 m = re.search(r'\+(\d+\.\d+)', strat)
                 if m:
                     line = float(m.group(1))
@@ -2352,7 +2566,17 @@ async def check_results(bot):
                             await bot.send_message(chat_id=CHAT_ID, text=lm_msg, parse_mode="HTML")
                         except:
                             pass
-                    
+
+                    # v5.3: registra também no gerenciador granular (liga+estrategia+faixa de odd)
+                    strat_changed, strat_msg = strategy_manager.record(
+                        lg, tip.get('strategy', ''), float(tip.get('sent_odd', 0) or 0), result == 'green'
+                    )
+                    if strat_changed and strat_msg:
+                        try:
+                            await bot.send_message(chat_id=CHAT_ID, text=strat_msg, parse_mode="HTML")
+                        except:
+                            pass
+
                     if result == 'green':
                         league_consecutive_reds[lg] = 0
                     elif result == 'red':
@@ -2471,6 +2695,53 @@ async def history_refresher():
         except Exception as e:
             print(f"[history_refresher] {e}")
         await asyncio.sleep(10)
+
+# =============================================================================
+# v5.3: JOB DE RECALIBRAÇÃO PERIÓDICA
+# Roda a cada RECALIBRATION_INTERVAL_SEC (padrão 1h — 10min não acumula tips
+# suficientes pra ter significância estatística, já que o bot gera ~2
+# tips/hora). Varre os combos (liga+estratégia+odd) com amostra suficiente,
+# reaplica os thresholds de ativação, e manda um resumo no Telegram sempre
+# que algo mudou de estado — é o "cenário das ligas" que você pediu, só que
+# na granularidade de estratégia dentro de cada liga.
+# =============================================================================
+RECALIBRATION_INTERVAL_SEC = 3600  # 1h
+
+
+def _format_calibration_report():
+    rows = strategy_manager.report_snapshot(min_tips=STRATEGY_MIN_TIPS)
+    if not rows:
+        return None
+    lines = ["📊 <b>RECALIBRAÇÃO — COMBOS (liga · estratégia · odd)</b>\n"]
+    for key, pct, n, active in rows:
+        try:
+            league, strat, bucket = key.split('|')
+        except ValueError:
+            league, strat, bucket = key, '', ''
+        emoji = "🟢" if active else "🔴"
+        lines.append(f"{emoji} {league} · {strat} · {bucket} → {pct:.0f}% ({n} tips)")
+    return "\n".join(lines)
+
+
+async def recalibration_job(bot):
+    print("[RECAL] Iniciando job de recalibração periódica...")
+    await asyncio.sleep(120)  # deixa o bot coletar tips antes do primeiro relatório
+    while True:
+        try:
+            report = _format_calibration_report()
+            if report:
+                try:
+                    await bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="HTML")
+                    print("[RECAL] Relatório de recalibração enviado.")
+                except Exception as e:
+                    print(f"[RECAL] Erro ao enviar relatório: {e}")
+            else:
+                print("[RECAL] Nenhum combo com amostra suficiente ainda.")
+            strategy_manager.save()
+        except Exception as e:
+            print(f"[recalibration_job] {e}")
+        await asyncio.sleep(RECALIBRATION_INTERVAL_SEC)
+
 
 # =============================================================================
 # LOOP PRINCIPAL
@@ -2608,6 +2879,16 @@ async def main_loop(bot):
                         continue
                     if cat == 'FT' and ft_done:
                         continue
+
+                    # v5.3: gate granular por (liga, estrategia, faixa de odd)
+                    strat_active, strat_reason = strategy_manager.is_active(
+                        mapped, tip_info['name'], tip_info['odd']
+                    )
+                    if not strat_active:
+                        print(f"  [SKIP estrategia] {mapped}/{tip_info['name']}"
+                              f"@{odd_bucket(tip_info['odd'])}: {strat_reason}")
+                        continue
+
                     await send_tip(bot, event, tip_info, p1_s, p2_s, lg_s)
                     await asyncio.sleep(0.5)
 
@@ -2694,18 +2975,15 @@ threading.Thread(target=run_health_check_server, daemon=True).start()
 
 async def main():
     print("=" * 65)
-    print("🤖 RW TIPS — BOT FIFA v5.2 (RECOVERY MODE)")
+    print("🤖 RW TIPS — BOT FIFA v5.3 (GRANULAR + RECALIBRAÇÃO)")
     print("=" * 65)
     print(f"Horário: {datetime.now(MANAUS_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Manaus)")
     print()
-    print("MUDANÇAS v5.2 (RECOVERY):")
-    print("  • LEAGUE_MIN_TIPS: 5 → 20 (confiabilidade)")
-    print("  • LEAGUE_WINDOW: 15 → 30 (suavização)")
-    print("  • LEAGUE_RELOCK: 50% → 45% (recuperação)")
-    print("  • LEAGUE_UNLOCK: 68% → 60% (desbloqueio)")
-    print("  • Gates relaxados -10% em média")
-    print("  • FIX 7 REMOVIDO (timing HT)")
-    print("  • ESportsBattle La Liga REMOVIDA (problemas)")
+    print("MUDANÇAS v5.3:")
+    print("  • StrategyPerformanceManager: gate por (liga, estratégia, faixa de odd)")
+    print("  • Nenhuma estratégia é removida — todas podem 'entrar no giro' sozinhas")
+    print("  • Job de recalibração horária com relatório no Telegram")
+    print("  • get_units() agora usa Kelly fracionário (edge real) em vez de tabela fixa")
     print()
     c8  = CRIT_8MIN
     c12 = CRIT_12MIN
@@ -2720,6 +2998,7 @@ async def main():
     print(f"  Min Odd: {c12['min_odd']}")
     print()
     print(f"LeagueManager: janela={LEAGUE_WINDOW} min_tips={LEAGUE_MIN_TIPS} relock={LEAGUE_RELOCK}% unlock={LEAGUE_UNLOCK}%")
+    print(f"StrategyManager: janela={STRATEGY_WINDOW} min_tips={STRATEGY_MIN_TIPS} relock={STRATEGY_RELOCK}% unlock={STRATEGY_UNLOCK}%")
     print("=" * 65)
 
     bot = Bot(
@@ -2771,9 +3050,9 @@ async def main():
         await send_league_status(
             bot,
             chat_id=actual_id,
-            text=(f"🤖 <b>BOT v5.2 ONLINE (RECOVERY)</b>\n"
-                  f"Mudanças: MIN_TIPS=20, WINDOW=30, RELOCK=45%\n"
-                  f"Gates relaxados | FIX 7 removido | ESportsBattle removida\n\n"
+            text=(f"🤖 <b>BOT v5.3 ONLINE (GRANULAR)</b>\n"
+                  f"Novo: gate por liga+estratégia+odd, sem matar estratégias\n"
+                  f"Recalibração automática a cada {RECALIBRATION_INTERVAL_SEC//60}min\n\n"
                   f"{league_manager.status()}")
         )
     except Exception as e:
@@ -2783,6 +3062,7 @@ async def main():
         main_loop(bot),
         results_checker(bot),
         history_refresher(),
+        recalibration_job(bot),
     )
 
 
