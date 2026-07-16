@@ -1554,6 +1554,173 @@ def league_stats(league_name, all_matches, last_n=3):
     }
 
 # =============================================================================
+# v5.4: TERMÔMETRO DE MERCADOS
+# Sinal RÁPIDO e complementar aos gates de média (que usam poucos jogos por
+# JOGADOR). O termômetro mede a taxa de "over" da LIGA como um todo nos
+# últimos THERMOMETRO_WINDOW jogos, alimentado por todo jogo que termina
+# (via history_refresher, a cada ~2min) — não depende do bot ter apostado.
+# É um filtro ADITIVO: uma tip só sai se passar nos gates de média E no
+# termômetro do mercado correspondente.
+#
+# AVISO MATEMÁTICO: com janela pequena (ex: 5 jogos), só existem frações de
+# 1/5 = 20% em 20%. Um limiar de 88% ou 90%, por exemplo, nunca é atingido
+# exatamente — na prática vira "exige 5 de 5" (100%), já que 4 de 5 = 80% já
+# fica abaixo. Os limiares abaixo foram escolhidos cientes disso; ajuste
+# THERMOMETRO_THRESHOLDS livremente, mas lembre-se do arredondamento.
+# =============================================================================
+THERMOMETRO_WINDOW = 5
+
+THERMOMETRO_THRESHOLDS = {
+    'ht_05':   1.00,   # exige 5/5 (mercados muito básicos, tolerância zero)
+    'ht_15':   1.00,   # exige 5/5
+    'ht_25':   0.90,   # na prática vira 5/5 com janela=5 (4/5=80% não basta)
+    'ht_btts': 0.88,   # na prática vira 5/5 com janela=5
+    'ft_25':   0.96,   # na prática vira 5/5 com janela=5
+    'ft_35':   0.91,   # na prática vira 5/5 com janela=5
+    'ft_45':   0.84,   # na prática vira 5/5 com janela=5 (4/5=80% fica abaixo)
+    'ft_btts': 0.88,   # na prática vira 5/5 com janela=5
+}
+
+thermometer_cache = {}   # {league: {market_key: pct_0_a_1, ..., 'games': n, 'ts': time}}
+THERMOMETER_TTL = 300    # 5min
+
+
+def _pct_over(values, line, n):
+    if n == 0:
+        return 0.0
+    return sum(1 for v in values if v > line) / n
+
+
+def compute_league_thermometer(league_name, all_matches, window=THERMOMETRO_WINDOW):
+    """
+    Calcula, para os últimos `window` jogos da liga, o % de jogos que
+    bateram cada linha de gols (HT e FT) e o % de BTTS. Reaproveita a mesma
+    lógica de agregação de league_stats() (incluindo fallback por HIST_MAP),
+    só que numa janela menor e devolvendo percentuais por linha em vez de
+    médias.
+    """
+    games = [m for m in all_matches if m.get('league_name') == league_name]
+    if len(games) < window:
+        for raw, mapped in HIST_MAP.items():
+            if mapped == league_name:
+                extras = [m for m in all_matches if m.get('league_name') == raw]
+                games.extend(extras)
+        seen = set()
+        uniq = []
+        for g in games:
+            gid = g.get('id', id(g))
+            if gid not in seen:
+                seen.add(gid)
+                uniq.append(g)
+        games = uniq
+    games = games[:window]
+    n = len(games)
+    if n == 0:
+        return None
+
+    ht_totals = [int(m.get('home_score_ht', 0) or 0) + int(m.get('away_score_ht', 0) or 0)
+                 for m in games]
+    ft_totals = [int(m.get('home_score_ft', 0) or 0) + int(m.get('away_score_ft', 0) or 0)
+                 for m in games]
+    btts_ht = sum(1 for m in games
+                  if int(m.get('home_score_ht', 0) or 0) > 0
+                  and int(m.get('away_score_ht', 0) or 0) > 0) / n
+    btts_ft = sum(1 for m in games
+                  if int(m.get('home_score_ft', 0) or 0) > 0
+                  and int(m.get('away_score_ft', 0) or 0) > 0) / n
+
+    return {
+        'ht_05':   _pct_over(ht_totals, 0.5, n),
+        'ht_15':   _pct_over(ht_totals, 1.5, n),
+        'ht_25':   _pct_over(ht_totals, 2.5, n),
+        'ht_btts': btts_ht,
+        'ft_25':   _pct_over(ft_totals, 2.5, n),
+        'ft_35':   _pct_over(ft_totals, 3.5, n),
+        'ft_45':   _pct_over(ft_totals, 4.5, n),
+        'ft_btts': btts_ft,
+        'games':   n,
+        'ts':      time.time(),
+    }
+
+
+def refresh_thermometer_cache():
+    """Recalcula o termômetro de todas as ligas conhecidas a partir do history_cache atual."""
+    global thermometer_cache
+    matches = history_cache.get('matches', [])
+    if not matches:
+        return
+    new_cache = {}
+    for lg in LEAGUE_PROFILES:
+        if lg == "DEFAULT":
+            continue
+        th = compute_league_thermometer(lg, matches)
+        if th:
+            new_cache[lg] = th
+    thermometer_cache = new_cache
+
+
+def thermometer_allows(league, market_key):
+    """
+    Gate booleano: True se o mercado passa no termômetro (ou se ainda não
+    há dado suficiente — nesse caso não bloqueia, só deixa os gates de
+    média decidirem, pra não travar o bot logo na largada por falta de
+    histórico).
+    """
+    th = thermometer_cache.get(league)
+    if not th or th.get('games', 0) < THERMOMETRO_WINDOW:
+        return True
+    pct = th.get(market_key)
+    if pct is None:
+        return True
+    threshold = THERMOMETRO_THRESHOLDS.get(market_key, 0.85)
+    return pct >= threshold
+
+
+def _format_thermometer_report():
+    if not thermometer_cache:
+        return None
+    lines = [f"🌡 <b>TERMÔMETRO DE MERCADOS</b> (últimos {THERMOMETRO_WINDOW} jogos/liga)\n"]
+    for lg in sorted(thermometer_cache.keys()):
+        th = thermometer_cache[lg]
+        if th.get('games', 0) < THERMOMETRO_WINDOW:
+            continue
+        lines.append(f"🏆 <b>{lg}</b>")
+        lines.append(
+            f"Over HT: +0.5→{th['ht_05']*100:.0f}%  +1.5→{th['ht_15']*100:.0f}%  "
+            f"+2.5→{th['ht_25']*100:.0f}%  BTTS→{th['ht_btts']*100:.0f}%"
+        )
+        lines.append(
+            f"Over FT: +2.5→{th['ft_25']*100:.0f}%  +3.5→{th['ft_35']*100:.0f}%  "
+            f"+4.5→{th['ft_45']*100:.0f}%  BTTS→{th['ft_btts']*100:.0f}%\n"
+        )
+    if len(lines) <= 1:
+        return None
+    return "\n".join(lines)
+
+
+THERMOMETER_INTERVAL_SEC = 1800  # 30min, como pedido
+
+
+async def thermometer_job(bot):
+    print("[TERMO] Iniciando job do termômetro de mercados...")
+    await asyncio.sleep(60)  # espera o primeiro history_refresher rodar
+    while True:
+        try:
+            refresh_thermometer_cache()
+            report = _format_thermometer_report()
+            if report:
+                try:
+                    await bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="HTML")
+                    print("[TERMO] Relatório enviado.")
+                except Exception as e:
+                    print(f"[TERMO] Erro ao enviar relatório: {e}")
+            else:
+                print("[TERMO] Sem dado suficiente ainda para nenhuma liga.")
+        except Exception as e:
+            print(f"[thermometer_job] {e}")
+        await asyncio.sleep(THERMOMETER_INTERVAL_SEC)
+
+# =============================================================================
 # BUSCA DE ODD NO MERCADO
 # =============================================================================
 def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.65):  # v5.2: min_odd = 1.65
@@ -1724,14 +1891,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             c = crit['ht_05']
             if hg == 0 and ag == 0:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name':  '⚽ +0.5 GOL HT',
-                            'odd':   odd,
-                            'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ht_05'):
+                        skip(f"+0.5 HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_05']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ +0.5 GOL HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            })
             else:
                 skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
 
@@ -1741,14 +1912,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 pct_ht_ok = (p1_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0)
                              and p2_st.get('pct_over_ht1', 1.0) >= c.get('pct_ht1', 0))
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc'] and pct_ht_ok:
-                    odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name':  '⚽ +1.5 GOLS HT',
-                            'odd':   odd,
-                            'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ht_15'):
+                        skip(f"+1.5 HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_15']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ht_total', 1.5, min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ +1.5 GOLS HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            })
                 elif not pct_ht_ok:
                     skip(f"+1.5 HT: consistência insuficiente "
                          f"p1={p1_st.get('pct_over_ht1',0):.0%} p2={p2_st.get('pct_over_ht1',0):.0%} "
@@ -1760,14 +1935,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
             c = crit['ht_25']
             if 1 <= total_ht <= 2:
                 if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                    odd = find_odd(open_lines, 'ht_total', 2.5, min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name':  '⚽ +2.5 GOLS HT',
-                            'odd':   odd,
-                            'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ht_25'):
+                        skip(f"+2.5 HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_25']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ht_total', 2.5, min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ +2.5 GOLS HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            })
             else:
                 skip(f"+2.5 HT: total={total_ht} (precisa 1-2)")
 
@@ -1788,14 +1967,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                     lg_btts_l3 >= 88
                 )
                 if btts_ok:
-                    odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
-                    if odd:
-                        candidates['HT'].append({
-                            'name':  '⚽ BTTS HT',
-                            'odd':   odd,
-                            'category': 'HT',
-                            'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ht_btts'):
+                        skip(f"BTTS HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_btts']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ BTTS HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
+                            })
                 else:
                     skip(f"BTTS HT: p1_marc_l3={p1_marc_l3:.0%} p1_sof_l3={p1_sof_l3:.0%} "
                          f"p2_marc_l3={p2_marc_l3:.0%} p2_sof_l3={p2_sof_l3:.0%} "
@@ -1891,14 +2074,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 ht_ok      = (total_ht >= 1) or (total_ht == 0 and btts_ft_ok and draw_ok)
                 if (p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc']
                         and ht_ok and btts_ft_ok and draw_ok and liga_ok and proj_ok):
-                    odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
-                    if odd:
-                        candidates['FT'].append({
-                            'name':  '⚽ +2.5 GOLS FT (TOTAL)',
-                            'odd':   odd,
-                            'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ft_25'):
+                        skip(f"+2.5 FT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ft_25']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ft_total', 2.5, min_odd=min_odd)
+                        if odd:
+                            candidates['FT'].append({
+                                'name':  '⚽ +2.5 GOLS FT (TOTAL)',
+                                'odd':   odd,
+                                'category': 'FT',
+                                'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            })
                 elif not liga_ok:
                     skip(f"+2.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=2.5)")
                 elif not ht_ok:
@@ -1922,14 +2109,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 projecao = total_ft + p1_ft2_marc + p2_ft2_marc
                 proj_ok  = projecao >= 3.5
                 if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and ht_ritmo_ok and liga_ok and proj_ok:
-                    odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
-                    if odd:
-                        candidates['FT'].append({
-                            'name':  '⚽ +3.5 GOLS FT (TOTAL)',
-                            'odd':   odd,
-                            'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ft_35'):
+                        skip(f"+3.5 FT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ft_35']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ft_total', 3.5, min_odd=min_odd)
+                        if odd:
+                            candidates['FT'].append({
+                                'name':  '⚽ +3.5 GOLS FT (TOTAL)',
+                                'odd':   odd,
+                                'category': 'FT',
+                                'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            })
                 elif not liga_ok:
                     skip(f"+3.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=3.5)")
                 elif not ht_ritmo_ok:
@@ -1953,14 +2144,18 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 proj_ok     = projecao >= 4.5
                 if (avg_ft_ok and ht_exato_ok and liga_l3_ok and liga_ok
                         and pct_ok and proj_ok):
-                    odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
-                    if odd:
-                        candidates['FT'].append({
-                            'name':  '⚽ +4.5 GOLS FT (TOTAL)',
-                            'odd':   odd,
-                            'category': 'FT',
-                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
-                        })
+                    if not thermometer_allows(league_key, 'ft_45'):
+                        skip(f"+4.5 FT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ft_45']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ft_total', 4.5, min_odd=min_odd)
+                        if odd:
+                            candidates['FT'].append({
+                                'name':  '⚽ +4.5 GOLS FT (TOTAL)',
+                                'odd':   odd,
+                                'category': 'FT',
+                                'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                            })
                 elif not avg_ft_ok:
                     skip(f"+4.5 FT: avg_ft p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f} (precisa >=2.8)")
                 elif not ht_exato_ok:
@@ -1979,17 +2174,21 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                           and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
                 if (p1_ft_marc >= c['p1_marc'] and p1_ft_sof >= c['p1_sof'] and
                         p2_ft_marc >= c['p2_marc'] and p2_ft_sof >= c['p2_sof'] and pct_ok):
-                    odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
-                    if odd:
-                        if odd > 4.5:
-                            skip(f"BTTS FT: odd={odd} muito alta (>4.5 indica domínio)")
-                        else:
-                            candidates['FT'].append({
-                                'name':  '⚽ BTTS FT (TOTAL)',
-                                'odd':   odd,
-                                'category': 'FT',
-                                'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
-                            })
+                    if not thermometer_allows(league_key, 'ft_btts'):
+                        skip(f"BTTS FT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ft_btts']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ft_btts', min_odd=min_odd)
+                        if odd:
+                            if odd > 4.5:
+                                skip(f"BTTS FT: odd={odd} muito alta (>4.5 indica domínio)")
+                            else:
+                                candidates['FT'].append({
+                                    'name':  '⚽ BTTS FT (TOTAL)',
+                                    'odd':   odd,
+                                    'category': 'FT',
+                                    'score': (p1_ft_marc + p2_ft_marc) / 2 * (odd - 1),
+                                })
             else:
                 if total_ft > 1:
                     skip(f"BTTS FT: total={total_ft} (precisa <=1)")
@@ -2688,6 +2887,7 @@ async def history_refresher():
                     lambda: fetch_history(pages=30, use_cache=False)
                 )
                 _last_history_refresh = time.time()
+                refresh_thermometer_cache()  # v5.4: mantém o termômetro fresco a cada refresh de histórico
                 age = datetime.now(MANAUS_TZ).strftime('%H:%M:%S')
                 print(f"[REFRESH] Histórico atualizado às {age} "
                       f"({len(history_cache.get('matches', []))} partidas, "
@@ -3030,6 +3230,8 @@ async def main():
 
     print("[INFO] Pré-carregando histórico...")
     fetch_history(pages=15)
+    refresh_thermometer_cache()
+    print(f"[TERMO] Cache inicial calculado para {len(thermometer_cache)} ligas")
 
     reset_league_window(LIGAS_RESET_STARTUP)
 
@@ -3063,6 +3265,7 @@ async def main():
         results_checker(bot),
         history_refresher(),
         recalibration_job(bot),
+        thermometer_job(bot),
     )
 
 
