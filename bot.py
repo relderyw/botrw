@@ -1676,32 +1676,65 @@ def thermometer_allows(league, market_key):
     return pct >= threshold
 
 
+def _pct_bar(pct_float):
+    """Gera uma mini barra visual de 5 blocos com base no percentual (0.0–1.0)."""
+    filled = round(pct_float * 5)
+    return '🟩' * filled + '⬜' * (5 - filled)
+
+
+def _pct_label(pct_float):
+    """Colore o percentual: 🔥 quente (>=80%), ✅ ok (>=60%), ❄️ frio (<60%)."""
+    p = pct_float * 100
+    if p >= 80:
+        icon = '🔥'
+    elif p >= 60:
+        icon = '✅'
+    else:
+        icon = '❄️'
+    return f"{icon} <b>{p:.0f}%</b>"
+
+
 def _format_thermometer_report():
     if not thermometer_cache:
         return None
-    lines = [f"🌡 <b>TERMÔMETRO DE MERCADOS</b> (últimos {THERMOMETRO_WINDOW} jogos/liga)\n"]
+
+    now_str = datetime.now(MANAUS_TZ).strftime('%H:%M')
+    sections = []
     for lg in sorted(thermometer_cache.keys()):
         th = thermometer_cache[lg]
         if th.get('games', 0) < THERMOMETRO_WINDOW:
             continue
-        lines.append(f"🏆 <b>{lg}</b>")
-        lines.append(
-            f"Over HT: +0.5→{th['ht_05']*100:.0f}%  +1.5→{th['ht_15']*100:.0f}%  "
-            f"+2.5→{th['ht_25']*100:.0f}%  BTTS→{th['ht_btts']*100:.0f}%"
+
+        n = th['games']
+        block = (
+            f"🏆 <b>{lg}</b>  <i>({n} jogos)</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>⏱ 1º TEMPO</b>\n"
+            f"  +0.5  {_pct_bar(th['ht_05'])} {_pct_label(th['ht_05'])}\n"
+            f"  +1.5  {_pct_bar(th['ht_15'])} {_pct_label(th['ht_15'])}\n"
+            f"  +2.5  {_pct_bar(th['ht_25'])} {_pct_label(th['ht_25'])}\n"
+            f"  BTTS  {_pct_bar(th['ht_btts'])} {_pct_label(th['ht_btts'])}\n"
+            f"<b>⚽ JOGO COMPLETO</b>\n"
+            f"  +2.5  {_pct_bar(th['ft_25'])} {_pct_label(th['ft_25'])}\n"
+            f"  +3.5  {_pct_bar(th['ft_35'])} {_pct_label(th['ft_35'])}\n"
+            f"  +4.5  {_pct_bar(th['ft_45'])} {_pct_label(th['ft_45'])}\n"
+            f"  BTTS  {_pct_bar(th['ft_btts'])} {_pct_label(th['ft_btts'])}"
         )
-        lines.append(
-            f"Over FT: +2.5→{th['ft_25']*100:.0f}%  +3.5→{th['ft_35']*100:.0f}%  "
-            f"+4.5→{th['ft_45']*100:.0f}%  BTTS→{th['ft_btts']*100:.0f}%\n"
-        )
-    if len(lines) <= 1:
+        sections.append(block)
+
+    if not sections:
         return None
-    return "\n".join(lines)
+
+    header = f"🌡 <b>TERMÔMETRO DE MERCADOS</b>  |  🕐 {now_str}\n<i>Últimos {THERMOMETRO_WINDOW} jogos por liga</i>\n"
+    return header + "\n\n".join(sections)
 
 
 THERMOMETER_INTERVAL_SEC = 1800  # 30min, como pedido
+last_thermometer_msg_id = None   # ID da última mensagem do termômetro
 
 
 async def thermometer_job(bot):
+    global last_thermometer_msg_id
     print("[TERMO] Iniciando job do termômetro de mercados...")
     await asyncio.sleep(60)  # espera o primeiro history_refresher rodar
     while True:
@@ -1709,9 +1742,17 @@ async def thermometer_job(bot):
             refresh_thermometer_cache()
             report = _format_thermometer_report()
             if report:
+                # Apaga a mensagem anterior antes de enviar a nova
+                if last_thermometer_msg_id:
+                    try:
+                        await bot.delete_message(chat_id=CHAT_ID, message_id=last_thermometer_msg_id)
+                    except Exception as del_err:
+                        print(f"[TERMO] Não foi possível apagar mensagem anterior: {del_err}")
+                    last_thermometer_msg_id = None
                 try:
-                    await bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="HTML")
-                    print("[TERMO] Relatório enviado.")
+                    msg = await bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="HTML")
+                    last_thermometer_msg_id = msg.message_id
+                    print(f"[TERMO] Relatório enviado (msg_id={msg.message_id}).")
                 except Exception as e:
                     print(f"[TERMO] Erro ao enviar relatório: {e}")
             else:
