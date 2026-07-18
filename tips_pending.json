@@ -1,22 +1,22 @@
 [
   {
-    "event_id": "sb-12977407",
-    "strategy": "\u26bd +2.5 GOLS FT (TOTAL)",
+    "event_id": "sb-14111037",
+    "strategy": "\u26bd +4.5 GOLS FT (TOTAL)",
     "category": "FT",
-    "sent_time": "2026-05-03T14:22:39.347511-04:00",
+    "sent_time": "2026-07-18T18:12:48.095387-04:00",
     "status": "pending",
-    "message_id": 73394,
-    "home_player": "Profik",
-    "away_player": "Stasyan",
-    "homeRaw": "Borussia Dortmund (Profik)",
-    "awayRaw": "Bayern Munich (Stasyan)",
-    "league": "VOLTA 6 MIN",
-    "sent_minute": 5,
-    "sent_odd": 2.6,
+    "message_id": 81068,
+    "home_player": "Zero",
+    "away_player": "Xellark",
+    "homeRaw": "Argentina (Zero)",
+    "awayRaw": "Arg\u00e9lia (Xellark)",
+    "league": "CLA 10 MIN",
+    "sent_minute": 6,
+    "sent_odd": 1.8,
     "units": 0.5,
-    "scoreboard": "0-1",
-    "startDateRaw": "2026-05-03T18:17:00Z",
-    "liveTimeRaw": "5",
-    "firestore_id": "jvlTVdJXOGTvqmuJ3og1"
+    "scoreboard": "1-1",
+    "startDateRaw": "2026-07-18T22:06:00Z",
+    "liveTimeRaw": "6",
+    "firestore_id": "wtDvG5VHZoG8Aqxabtlf"
   }
 ]

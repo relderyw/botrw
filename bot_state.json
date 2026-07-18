@@ -1,10 +1,11 @@
 {
   "sent_keys": [
+    "sb-14111037_FT",
     "sb-12977407_FT"
   ],
   "player_cooldown": {},
   "last_summary": null,
-  "last_daily_date": null,
+  "last_daily_date": "2026-07-18",
   "daily_stats": {
     "2026-06-14": {
       "green": 4,
@@ -111,5 +112,5 @@
       "red": 27
     }
   },
-  "last_league_status_id": 74007
+  "last_league_status_id": 81064
 }

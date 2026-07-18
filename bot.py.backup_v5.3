@@ -199,24 +199,46 @@ HISTORY_URL = "https://rwtips-k8j2.onrender.com/api/history"
 # v5.2: GATES RELAXADOS -10% | PERCENTUAIS 60%→55%
 # =============================================================================
 CRIT_8MIN = {
-    "ht_gate_league": 2.05,   # ↑ de 1.5
-    "ht_gate_p":      2.15,   # ↑ 
-    "ft_gate_league": 3.9,    # ↑ 
-    "ft_gate_p":      2.35,   # ↑ 
+    "ht_gate_league": 1.5,   # v5.2: era 1.7
+    "ht_gate_p":      1.6,   # v5.2: era 1.8
+    "ft_gate_league": 3.4,   # v5.2: era 3.7
+    "ft_gate_p":      1.9,   # v5.2: era 2.1
 
-    "ht_15":   {"p1_marc": 2.1, "p2_marc": 2.1, "pct_ht1": 0.60},
-    "ht_25":   {"p1_marc": 2.5, "p2_marc": 2.5},
-    "ft_25":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ft2": 0.60},
-    "ft_35":   {"p1_marc": 2.7, "p2_marc": 2.7, "pct_ft3": 0.62},
-    "ft_45":   {"p1_marc": 3.1, "p2_marc": 3.1, "pct_ft3": 0.80},
-    "ft_btts": {"p1_marc": 1.4, "p2_marc": 1.4, "pct_ft2": 0.62},
+    "ht_05":   {"p1_marc": 1.5, "p2_marc": 1.5},
+    "ht_15":   {"p1_marc": 2.2, "p2_marc": 2.2, "pct_ht1": 0.55},  # v5.2: relaxado
+    "ht_25":   {"p1_marc": 2.2, "p2_marc": 2.2},  # v5.2: era 2.3
+    "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},
 
-    "min_odd": 1.72,
-    "min_player_games": 9,     # novo
+    "ft_15":   {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_25":   {"p1_marc": 1.9, "p2_marc": 1.9, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_35":   {"p1_marc": 2.4, "p2_marc": 2.4, "pct_ft3": 0.55},  # v5.2: relaxado
+    "ft_45":   {"p1_marc": 2.8, "p2_marc": 2.8, "pct_ft3": 0.75},  # v5.2: relaxado
+    "ft_btts": {"p1_marc": 1.1, "p1_sof": 1.1, "p2_marc": 1.1, "p2_sof": 1.1, "pct_ft2": 0.55},  # v5.2: relaxado
+
+    "min_odd": 1.65,  # v5.2: era 1.70
 }
 
-CRIT_12MIN = {**CRIT_8MIN, "ht_gate_league": 1.85, "ft_gate_league": 4.1, "ft_gate_p": 2.45}
 CRIT_6MIN = CRIT_8MIN
+
+CRIT_12MIN = {
+    "ht_gate_league": 1.4,   # v5.2: era 1.6
+    "ht_gate_p":      1.2,   # v5.2: era 1.4
+    "ft_gate_league": 3.8,   # v5.2: era 4.1
+    "ft_gate_p":      2.2,   # v5.2: era 2.4
+
+    "ht_05": {"p1_marc": 1.5, "p2_marc": 1.5},
+    "ht_15": {"p1_marc": 1.8, "p2_marc": 1.8, "pct_ht1": 0.55},  # v5.2: relaxado
+    "ht_25": {"p1_marc": 2.1, "p2_marc": 2.1},  # v5.2: era 2.2
+    "ht_btts": {"p1_marc": 1.5, "p1_sof": 1.0, "p2_marc": 1.5, "p2_sof": 1.0},  # v5.2: era 1.6
+
+    "ft_15":   {"p1_marc": 2.1, "p2_marc": 2.1, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_25":   {"p1_marc": 2.3, "p2_marc": 2.3, "pct_ft2": 0.55},  # v5.2: relaxado
+    "ft_35":   {"p1_marc": 2.8, "p2_marc": 2.8, "pct_ft3": 0.55},  # v5.2: relaxado
+    "ft_45":   {"p1_marc": 3.2, "p2_marc": 3.2, "pct_ft3": 0.75},  # v5.2: relaxado
+    "ft_btts": {"p1_marc": 1.9, "p1_sof": 1.4, "p2_marc": 1.9, "p2_sof": 1.4, "pct_ft2": 0.55},  # v5.2: relaxado
+
+    "min_odd": 1.65,  # v5.2: era 1.70
+}
 
 LEAGUE_PROFILES = {
     "BATTLE 8 MIN":    {"crit": "8MIN",  "duration": 8,  "ht_dur": 4},
@@ -1836,31 +1858,6 @@ def find_odd(open_lines, category, value=None, player_raw=None, min_odd=1.65):  
         print(f"[find_odd] BTTS match: '{best_mkt}' @ {best}")
     return best
 
-def get_recent_form(nick, history, last_n=5):
-    matches = []
-    # history está ordenado do mais recente para o mais antigo (reverse=True)
-    # history[:50] pega os 50 jogos mais recentes do histórico
-    for m in history[:50]:
-        if extract_nick(m.get('home_player','')) == nick or extract_nick(m.get('away_player','')) == nick:
-            gols = (m.get('home_score_ft',0) or 0) + (m.get('away_score_ft',0) or 0)
-            matches.append(gols)
-            if len(matches) >= last_n: break
-    return matches[::-1]  # mais recente no final
-
-def is_hot_player(nick, history):
-    recent = get_recent_form(nick, history, 5)
-    return len(recent) >= 3 and sum(recent[-3:]) >= 11
-
-def h2h_avg_goals(p1, p2, history):
-    total = 0
-    count = 0
-    for m in history:
-        if {extract_nick(m.get('home_player','')), extract_nick(m.get('away_player',''))} == {p1, p2}:
-            total += (m.get('home_score_ft',0) or 0) + (m.get('away_score_ft',0) or 0)
-            count += 1
-    return total / count if count >= 2 else None
-
-
 # =============================================================================
 # AVALIAÇÃO DAS ESTRATÉGIAS
 # v5.2: FIX 7 REMOVIDO (timing HT filtering)
@@ -1886,18 +1883,6 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
 
     home_raw = event.get('homeRaw', event.get('homePlayer', ''))
     away_raw = event.get('awayRaw', event.get('awayPlayer', ''))
-
-    home_n = extract_nick(home_raw)
-    away_n = extract_nick(away_raw)
-
-    history = history_cache.get('matches', [])
-    min_games = crit.get('min_player_games', 0)
-    if min_games > 0:
-        p1_games = sum(1 for m in history if extract_nick(m.get('home_player','')) == home_n or extract_nick(m.get('away_player','')) == home_n)
-        p2_games = sum(1 for m in history if extract_nick(m.get('home_player','')) == away_n or extract_nick(m.get('away_player','')) == away_n)
-        if p1_games < min_games or p2_games < min_games:
-            print(f"    [SKIP min_games] p1={p1_games}j, p2={p2_games}j (min {min_games})")
-            return []
 
     elapsed_sec = minute * 60 + second
     is_ht       = elapsed_sec < ht_dur * 60
@@ -1944,24 +1929,23 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                  f"p1={p1_ht_marc:.1f} p2={p2_ht_marc:.1f}(min {crit['ht_gate_p']})")
         else:
             # ── +0.5 HT | Placar: 0x0 ──────────────────────────────
-            if 'ht_05' in crit:
-                c = crit['ht_05']
-                if hg == 0 and ag == 0:
-                    if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
-                        if not thermometer_allows(league_key, 'ht_05'):
-                            skip(f"+0.5 HT: termômetro da liga abaixo do limiar "
-                                 f"({THERMOMETRO_THRESHOLDS['ht_05']:.0%})")
-                        else:
-                            odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
-                            if odd:
-                                candidates['HT'].append({
-                                    'name':  '⚽ +0.5 GOL HT',
-                                    'odd':   odd,
-                                    'category': 'HT',
-                                    'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
-                                })
-                else:
-                    skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
+            c = crit['ht_05']
+            if hg == 0 and ag == 0:
+                if p1_ht_marc >= c['p1_marc'] and p2_ht_marc >= c['p2_marc']:
+                    if not thermometer_allows(league_key, 'ht_05'):
+                        skip(f"+0.5 HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_05']:.0%})")
+                    else:
+                        odd = find_odd(open_lines, 'ht_total', 0.5, min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ +0.5 GOL HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) * (odd - 1),
+                            })
+            else:
+                skip(f"+0.5 HT: placar {hg}x{ag} (precisa 0x0)")
 
             # ── +1.5 HT | Placar: ≤1 gol ──────────────────────────
             c = crit['ht_15']
@@ -2008,44 +1992,43 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                 skip(f"+2.5 HT: total={total_ht} (precisa 1-2)")
 
             # ── BTTS HT | Critérios estritos últimos 3 jogos ──────
-            if 'ht_btts' in crit:
-                c = crit['ht_btts']
-                if total_ht <= 1 and not (hg > 0 and ag > 0):
-                    p1_marc_l3 = p1_st.get('pct_ht_marc_l3', 0)
-                    p1_sof_l3  = p1_st.get('pct_ht_sof_l3',  0)
-                    p2_marc_l3 = p2_st.get('pct_ht_marc_l3', 0)
-                    p2_sof_l3  = p2_st.get('pct_ht_sof_l3',  0)
-                    lg_btts_l3 = lg_st.get('btts_ht_pct_l3', 0)
+            c = crit['ht_btts']
+            if total_ht <= 1 and not (hg > 0 and ag > 0):
+                p1_marc_l3 = p1_st.get('pct_ht_marc_l3', 0)
+                p1_sof_l3  = p1_st.get('pct_ht_sof_l3',  0)
+                p2_marc_l3 = p2_st.get('pct_ht_marc_l3', 0)
+                p2_sof_l3  = p2_st.get('pct_ht_sof_l3',  0)
+                lg_btts_l3 = lg_st.get('btts_ht_pct_l3', 0)
 
-                    btts_ok = (
-                        p1_marc_l3 >= 1.0 and
-                        p1_sof_l3  >= 1.0 and
-                        p2_marc_l3 >= 1.0 and
-                        p2_sof_l3  >= 1.0 and
-                        lg_btts_l3 >= 88
-                    )
-                    if btts_ok:
-                        if not thermometer_allows(league_key, 'ht_btts'):
-                            skip(f"BTTS HT: termômetro da liga abaixo do limiar "
-                                 f"({THERMOMETRO_THRESHOLDS['ht_btts']:.0%})")
-                        else:
-                            odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
-                            if odd:
-                                candidates['HT'].append({
-                                    'name':  '⚽ BTTS HT',
-                                    'odd':   odd,
-                                    'category': 'HT',
-                                    'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
-                                })
+                btts_ok = (
+                    p1_marc_l3 >= 1.0 and
+                    p1_sof_l3  >= 1.0 and
+                    p2_marc_l3 >= 1.0 and
+                    p2_sof_l3  >= 1.0 and
+                    lg_btts_l3 >= 88
+                )
+                if btts_ok:
+                    if not thermometer_allows(league_key, 'ht_btts'):
+                        skip(f"BTTS HT: termômetro da liga abaixo do limiar "
+                             f"({THERMOMETRO_THRESHOLDS['ht_btts']:.0%})")
                     else:
-                        skip(f"BTTS HT: p1_marc_l3={p1_marc_l3:.0%} p1_sof_l3={p1_sof_l3:.0%} "
-                             f"p2_marc_l3={p2_marc_l3:.0%} p2_sof_l3={p2_sof_l3:.0%} "
-                             f"liga_btts_l3={lg_btts_l3:.0f}%")
+                        odd = find_odd(open_lines, 'ht_btts', min_odd=min_odd)
+                        if odd:
+                            candidates['HT'].append({
+                                'name':  '⚽ BTTS HT',
+                                'odd':   odd,
+                                'category': 'HT',
+                                'score': (p1_ht_marc + p2_ht_marc) / 2 * (odd - 1),
+                            })
                 else:
-                    if total_ht > 1:
-                        skip(f"BTTS HT: total={total_ht} (precisa <=1)")
-                    elif hg > 0 and ag > 0:
-                        skip(f"BTTS HT: {hg}x{ag} ambos já marcaram")
+                    skip(f"BTTS HT: p1_marc_l3={p1_marc_l3:.0%} p1_sof_l3={p1_sof_l3:.0%} "
+                         f"p2_marc_l3={p2_marc_l3:.0%} p2_sof_l3={p2_sof_l3:.0%} "
+                         f"liga_btts_l3={lg_btts_l3:.0f}%")
+            else:
+                if total_ht > 1:
+                    skip(f"BTTS HT: total={total_ht} (precisa <=1)")
+                elif hg > 0 and ag > 0:
+                    skip(f"BTTS HT: {hg}x{ag} ambos já marcaram")
 
             # ── 1º GOL JOGADOR ─────────────────────────────────────
             if hg == 0 and ag == 0:
@@ -2096,29 +2079,28 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
                  f"p1={p1_ft_marc:.1f} p2={p2_ft_marc:.1f}(min {crit['ft_gate_p']})")
         else:
             # ── +1.5 FT | Placar: 0 gols ────────────────────────────
-            if 'ft_15' in crit:
-                c = crit['ft_15']
-                if total_ft == 0:
-                    pct_ok   = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
-                                and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
-                    liga_ok  = lg_avg_ft >= 1.5
-                    projecao = total_ft + p1_ft2_marc + p2_ft2_marc
-                    proj_ok  = projecao >= 1.5
-                    if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and liga_ok and proj_ok:
-                        odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
-                        if odd:
-                            candidates['FT'].append({
-                                'name':  '⚽ +1.5 GOLS FT (TOTAL)',
-                                'odd':   odd,
-                                'category': 'FT',
-                                'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
-                            })
-                    elif not liga_ok:
-                        skip(f"+1.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=1.5)")
-                    elif not pct_ok:
-                        skip(f"+1.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%}")
-                else:
-                    skip(f"+1.5 FT: total={total_ft} (precisa 0 gols)")
+            c = crit['ft_15']
+            if total_ft == 0:
+                pct_ok   = (p1_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0)
+                            and p2_st.get('pct_over_ft2', 1.0) >= c.get('pct_ft2', 0))
+                liga_ok  = lg_avg_ft >= 1.5
+                projecao = total_ft + p1_ft2_marc + p2_ft2_marc
+                proj_ok  = projecao >= 1.5
+                if p1_ft_marc >= c['p1_marc'] and p2_ft_marc >= c['p2_marc'] and pct_ok and liga_ok and proj_ok:
+                    odd = find_odd(open_lines, 'ft_total', 1.5, min_odd=min_odd)
+                    if odd:
+                        candidates['FT'].append({
+                            'name':  '⚽ +1.5 GOLS FT (TOTAL)',
+                            'odd':   odd,
+                            'category': 'FT',
+                            'score': (p1_ft_marc + p2_ft_marc) * (odd - 1),
+                        })
+                elif not liga_ok:
+                    skip(f"+1.5 FT: liga_avg_ft={lg_avg_ft:.1f} (precisa >=1.5)")
+                elif not pct_ok:
+                    skip(f"+1.5 FT: inconsistência p1={p1_st.get('pct_over_ft2',0):.0%} p2={p2_st.get('pct_over_ft2',0):.0%}")
+            else:
+                skip(f"+1.5 FT: total={total_ft} (precisa 0 gols)")
 
             # ── +2.5 FT | Placar: < 2 gols ─────────────────────────
             c = crit['ft_25']
@@ -2290,38 +2272,14 @@ def evaluate_strategies(event, p1_st, p2_st, lg_st, open_lines):
         if not has_ht_mkt:
             skip(f"HT: nenhum mercado de 1ºT disponível | mercados: {mkt_names[:5]}")
 
-    lines = candidates['HT'] + candidates['FT']
-    tips = []
-
-    h2h = h2h_avg_goals(home_n, away_n, history)
-    p1_hot = is_hot_player(home_n, history)
-    p2_hot = is_hot_player(away_n, history)
-
-    for line in lines:
-        name = line['name']
-        odd = line['odd']
-        if odd < crit['min_odd']: 
-            continue
-
-        score = line['score']
-
-        # Filtro forte de produção recente
-        if 'GOLS - ' in name:
-            target = name.split(' - ')[-1].upper()
-            if target == home_n and p1_st.get('avg_ft',0) < 2.2 and not p1_hot:
-                continue
-            if target == away_n and p2_st.get('avg_ft',0) < 2.2 and not p2_hot:
-                continue
-
-        # Gates + H2H
-        if h2h and h2h < 3.8 and '+4.5' in name:
-            score -= 0.5
-
-        if score >= 2.15:   # threshold mais alto
-            tips.append({'name': name, 'odd': odd, 'score': score, 'category': line.get('category','FT')})
-
-    tips.sort(key=lambda x: x['score'], reverse=True)
-    return tips[:3]
+    chosen = []
+    for cat in ('HT', 'FT'):
+        if candidates[cat]:
+            candidates[cat].sort(key=lambda x: x['score'], reverse=True)
+            chosen.append(candidates[cat][0])
+            if len(candidates[cat]) > 1:
+                print(f"    [{cat} descartados] {[c['name'] for c in candidates[cat][1:]]}")
+    return chosen
 
 
 # =============================================================================
@@ -2504,11 +2462,11 @@ def kelly_units(win_prob, odd, kelly_fraction=KELLY_FRACTION,
     """
     if not odd or odd <= 1.0 or win_prob is None:
         return 0.0
-    edge = win_prob * odd - 1.0
-    if edge < 0.09:          # novo filtro mínimo de edge
-        return 0.0
     b = odd - 1.0
     q = 1.0 - win_prob
+    edge = win_prob * odd - 1.0
+    if edge <= 0:
+        return 0.0
     full_kelly = (win_prob * b - q) / b
     if full_kelly <= 0:
         return 0.0
